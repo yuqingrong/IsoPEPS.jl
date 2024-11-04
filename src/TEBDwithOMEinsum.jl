@@ -33,4 +33,3 @@ for p in iter
     end
 end
 EG=ein""(mps,mps0)
-println("基态虚时间演化完成。")
