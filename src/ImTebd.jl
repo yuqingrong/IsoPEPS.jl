@@ -5,17 +5,12 @@ using LinearAlgebra
 using Test
 
 function transverse_ising(nbit::Int; J, h, periodic::Bool=true)
-    # ZZ interaction terms between neighboring qubits
-    ising_term = map(1:(periodic ? nbit : nbit - 1)) do i
-        j = (i % nbit) + 1  # Neighboring qubit, wraps around if periodic
-        J * repeat(nbit, Z, (i, j))  # Apply ZZ interaction with coupling constant J
+    ising_term = map(1:(periodic ? nbit : nbit - 1)) do i #ZZ
+        j = (i % nbit) + 1  
+        J * repeat(nbit, Z, (i, j))  
     end |> sum
-
-    # Transverse field terms on each qubit (X direction)
-    transverse_field = sum(map(i -> h * put(nbit, i => X), 1:nbit))
-
-    # Combine the interaction and transverse field terms to form the full Hamiltonian
-    ising_term + transverse_field
+    transverse_field = sum(map(i -> h * put(nbit, i => X), 1:nbit))#X
+    return (ising_term + transverse_field)
 end
 
 itime_groundstate!(H::AbstractBlock; t::Int64=t, p::Float64=p) = reg -> itime_groundstate!(reg, H; t=t,p=p)

@@ -6,4 +6,3 @@ using Test
     include("lorenz.jl")
 end
     # Write your tests here.
-
