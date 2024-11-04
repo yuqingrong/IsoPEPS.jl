@@ -10,7 +10,7 @@ function transverse_ising(nbit::Int; J, h, periodic::Bool=true)
         J * repeat(nbit, Z, (i, j))  
     end |> sum
     transverse_field = sum(map(i -> h * put(nbit, i => X), 1:nbit))#X
-    return (ising_term + transverse_field)
+    ising_term + transverse_field
 end
 
 itime_groundstate!(H::AbstractBlock; t::Int64=t, p::Float64=p) = reg -> itime_groundstate!(reg, H; t=t,p=p)

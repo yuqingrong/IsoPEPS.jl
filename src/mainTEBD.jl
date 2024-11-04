@@ -18,7 +18,7 @@ span = LinRange(0.01,1.0, 20)
 y = []
 
 #exact result from Lanczos
-H_L = Lanczos(nsites;J,h)
+H_L = Lanczos(nsites,J,h)
 ground_state_energy, ground_state_vector = eigs(H_L, nev=1, which=:SR)
 E_L = ground_state_energy[1]/nsites
 println("Ground state energy: ", E_L)
@@ -26,7 +26,7 @@ println("Ground state energy: ", E_L)
 for p in span
     reg = rand_state(nqubits(H))
     reg |> itime_groundstate!(H; t,p)
-    EG = expect(H, reg)/nsites
+    EG = real(expect(H, reg)/nsites)
     deltaE = sqrt((EG-E_L)^2)
     push!(y,deltaE)
     println(EG)
