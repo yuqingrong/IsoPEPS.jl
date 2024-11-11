@@ -1,7 +1,3 @@
-using LinearAlgebra
-using SparseArrays
-using Arpack
-
 function Lanczos(nsites::Int64, J::Float64, h::Float64)
     H = spzeros(2^nsites, 2^nsites)
     

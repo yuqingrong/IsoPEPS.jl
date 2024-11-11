@@ -8,3 +8,7 @@ end
 @testset "LanczosAlgorithm" begin
     include("LanczosAlgorithm.jl")
 end
+
+@testset "ImTebd" begin
+    include("ImTebd.jl")
+end
