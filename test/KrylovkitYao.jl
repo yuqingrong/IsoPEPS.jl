@@ -1,4 +1,4 @@
-using Test, isoPEPS
+using Test, isoPEPS, Arpack
 
 @testset "KrylovkitYao" begin
     nsites=10
@@ -8,13 +8,21 @@ using Test, isoPEPS
     H_L = Lanczos(nsites,J,h)
     ground_state_energy, ground_state_vector = eigs(H_L, nev=1, which=:SR)
     E_L = ground_state_energy[1]/nsites
-    println("Ground state energy: ", E_L)
+    @test isapprox(E_L, -0.9120354170186685, atol=1e-4)
+end
 
-
+@testset "KrylovkitYao" begin
+    nsites=10
+    J=1.0
+    h=0.2
 
     hami = ising_hamiltonian(nsites,J,h)
-    ed_groundstate(hami)
+    E, V = ed_groundstate(hami)
+    @test isapprox(E/10, -0.9120354170186685, atol=1e-4)
+end
 
+@testset "VariationalCircuit" begin
+    nsites=10
     c = variational_circuit(nsites)
     dispatch!(c, :random)
     params = parameters(c)
@@ -33,7 +41,6 @@ using Test, isoPEPS
             push!(x,i)
             push!(y,deltaE)
             println(EG)
-
         end
     end
 end

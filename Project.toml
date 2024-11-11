@@ -4,12 +4,14 @@ authors = ["yuqingrong"]
 version = "1.0.0-DEV"
 
 [deps]
+Arpack = "7d9fca2a-8960-54d3-9f78-7d1dccf2cb97"
 KrylovKit = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 Yao = "5872b779-8223-5990-8dd0-5abbb0748c8c"
 
 [compat]
+Arpack = "0.5.4"
 KrylovKit = "0.8.2"
 SparseArrays = "1.11.0"
 Yao = "0.9.0"

@@ -8,7 +8,6 @@ using CairoMakie
 include("ImTebd.jl")
 include("LanczosAlgorithm.jl")
 
-
 nsites = 10
 J=1.0
 h=0.2

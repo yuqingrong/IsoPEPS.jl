@@ -8,9 +8,10 @@ using SparseArrays
 using Yao
 using Yao.EasyBuild
 using LinearAlgebra
+using Arpack
 
 export ising_hamiltonian, ed_groundstate
-export itime_groundstate!
+export itime_groundstate!, Lanczos
 
 include("LanczosAlgorithm.jl")
 include("KrylovkitYao.jl")

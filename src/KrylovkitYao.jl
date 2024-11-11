@@ -8,7 +8,9 @@ function ising_hamiltonian(nbit::Int, J::Float64, h::Float64)
     end * (-h)
 end
 
+# TODO: study why the default initial state is sparse vector.
 function ed_groundstate(h::AbstractBlock)
-    E, V = eigsolve(h |> mat, 1, :SR, ishermitian=true)
+    x0 = statevec(rand_state(nqubits(h)))
+    E, V = eigsolve(h |> mat, x0, 1, :SR, ishermitian=true)
     E[1], V[1]
 end
