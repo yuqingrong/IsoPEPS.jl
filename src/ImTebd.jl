@@ -1,9 +1,3 @@
-export itime_groundstate!
-using Yao
-using Yao.EasyBuild
-using LinearAlgebra
-using Test
-
 function transverse_ising(nbit::Int; J, h, periodic::Bool=true)
     ising_term = map(1:(periodic ? nbit : nbit - 1)) do i #ZZ
         j = (i % nbit) + 1  
@@ -24,15 +18,3 @@ function itime_groundstate!(reg, H; t,p)
     end
     reg
 end
-
-
-#@test ishermitian(h)
-
-
-# using imaginary time Evolution
-
-#@test isapprox(EG, -0.4564, atol=1e-4)
-#include("Lanczos.jl")
-#### Compare with exact results (computed from free fermions)
-
-

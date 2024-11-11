@@ -1,10 +1,4 @@
-using LinearAlgebra
-using SparseArrays
-using Arpack
-nsites = 10
-J=1.0
-h=0.2
-
+# TODO: change a name of the function
 function Lanczos(nsites::Int64, J::Float64, h::Float64)
     H = spzeros(2^nsites, 2^nsites)
     
