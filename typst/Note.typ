@@ -69,7 +69,7 @@ $<psi|O^l|psi> = <Lambda|O^l|Lambda>$ (A...B...are isometry)
 
 == 2D
 #figure(
-  image("isoTNS.png", width: 80%),
+  image("images/isoTNS.png", width: 80%),
   caption: [isoTNS],
 ) 
 the red tensor = orthogonality center (OC) 
@@ -80,12 +80,12 @@ red and the blue tensors with light red background = the orthogonality hypersurf
 
 very close to the optimal variational result; fast.
 #figure(
-  image("MM.jpg", width: 100%),
+  image("images/MM.jpg", width: 100%),
   caption: [Moses Move detail],
 ) 
 Repeat the steps above, the orthogonal center moves upward,so we get FIGURE 3:
 #figure(
-  image("MM.png", width: 80%),
+  image("images/MM.png", width: 80%),
   caption: [Moses Move],
 ) 
 Then $Lambda$ and $B^(l+1)$ are tied together to form new $Lambda$,
@@ -102,7 +102,7 @@ $vu(U)$(dt)=$product_(r,i) e^(-i d t H_i^r) product_(c,j) e^(-i d t H_j^c) $
 (3)Utilize the SVD and MM to move around the orthogonality center and orthogonality hypersurface.
 
 #figure(
-  image("TEBD.png", width: 80%),
+  image("images/TEBD.png", width: 80%),
   caption: [TEBD],
 ) 
 (i)After 1 round, the isometries rotate $90 degree$ counterclockwise, apply 
@@ -125,7 +125,7 @@ $E_g=min_(<psi|psi> =1) <psi|vu(H)|psi>$ = $min_(<psi|psi> =1) sum_(i,j)<psi|vu(
 
 eg: update the 2nd tensor(other tensor can be seen as fixed tensors), the effective Hamiltonian $H_(e f f)$:
 #figure(
-  image("EH.jpg", width: 100%),
+  image("images/EH.jpg", width: 100%),
   caption: [effective Hamiltonian],
 ) 
 Because all tensors are isometric and canonical transformation, we can move the orthogonality center to the 2nd tensor. Then the problem become
@@ -134,7 +134,7 @@ Because all tensors are isometric and canonical transformation, we can move the 
 $min_(<A^((2))|A^(2)^*> =1) <A^((2))|vu(h_2)|A^(2)^*>$
 
 #figure(
-  image("FP.jpg", width: 50%),
+  image("images/FP.jpg", width: 50%),
   caption: [contract other tensors],
 ) 
 
@@ -156,7 +156,7 @@ summary:
 
 The operations are similar to 1D, except with the addition of a dimension:
 #figure(
-  image("2D_DMRG.png", width: 80%),
+  image("images/2D_DMRG.png", width: 80%),
   caption: [2D DMRG],
 ) 
 
@@ -227,7 +227,7 @@ $U(4)=S U(4)(theta) times e^(-i Phi)$, $e^(-i Phi)$ is a global phase.
 == Encoding matrix product state into single-layer quantum circuit
 
 #figure(
-  image("qc.jpg", width: 90%),
+  image("images/qc.jpg", width: 90%),
   caption: [MPS $->$ MPD $->$ QC],
 ) 
 
@@ -270,7 +270,7 @@ cost function?
 == Deep quantum circuit 
 
 #figure(
-  image("dqc.png", width: 80%),
+  image("images/dqc.png", width: 80%),
   caption: [D=2 layers quantum circuit],
 ) 
 
@@ -282,7 +282,7 @@ $quad F_D =-(ln|<psi|vu(U)_D^+...vu(U)_2^+ vu(U)_1^+|0>|)/N$
 == PEPS
 
 #figure(
-  image("PEPS.png", width: 60%),
+  image("images/PEPS.png", width: 60%),
   caption: [PEPS],
 ) 
 
@@ -309,7 +309,7 @@ $M>floor((1+1/N)N_B+1/N) $ or $N_B<floor((N times M -1)/(N+1))$
 == more output than input, add additional input 
 
 #figure(
-  image("indices.png", width: 60%),
+  image("images/indices.png", width: 60%),
   caption: [PEPS],
 ) 
 
@@ -319,14 +319,14 @@ tensor 1 has 3 output and 0 input, so we add 3 input and fix them |0>
 
 1. zig-zag pattern
 #figure(
-  image("pattern.jpg", width: 60%),
+  image("images/pattern.jpg", width: 60%),
   caption: [zig-zag pattern of $4 times 5$],
 ) 
 
 2. map to quantum circuit
 
 #figure(
-  image("circuit.jpg", width: 120%),
+  image("images/circuit.jpg", width: 120%),
   caption: [6-qubits circuit of $4 times 4$],
 )
 the qubits needed only rely on N
