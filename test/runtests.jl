@@ -1,8 +1,10 @@
 using isoPEPS
 using Test
 
-
-@testset "lorenz" begin
-    include("lorenz.jl")
+@testset "KrylovkitYao" begin
+    include("KrylovkitYao.jl")
 end
-    # Write your tests here.
+
+@testset "LanczosAlgorithm" begin
+    include("LanczosAlgorithm.jl")
+end

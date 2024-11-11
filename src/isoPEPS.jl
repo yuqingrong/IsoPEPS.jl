@@ -1,13 +1,14 @@
+# TODO: isoPEPS is not a valid module name, capitalize it
 module isoPEPS
-# import packages
+
+using Yao, Yao.EasyBuild
+using KrylovKit: eigsolve
 using LinearAlgebra
+using CairoMakie
 
-# export interfaces
-export Lorenz, integrate_step
-export Point, Point2D, Point3D
-export RungeKutta, Euclidean
+export ising_hamiltonian, ed_groundstate
 
-# `include` other source files into this module
-include("lorenz.jl")
+include("LanczosAlgorithm.jl")
+include("KrylovkitYao.jl")
 
 end
