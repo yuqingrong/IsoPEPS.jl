@@ -13,16 +13,19 @@ using OMEinsum
 import Yao: mat
 using Optim
 import Optim: optimize
+using FDM,FiniteDiff
 
 export ising_hamiltonian, ed_groundstate
 export itime_groundstate!, lanczos
 export transverse_ising,itime_groundstate!
 #export dagger_mps,inner_product
-export MPS,generate_mps,code_dot,vec2mps,code_mps2vec
-export PEPS,generate_peps,contract_2peps,overlap_peps
+export MPS,generate_mps,code_dot,vec2mps,code_mps2vec,mps_variation
+export PEPS,generate_peps,contract_2peps,overlap_peps,local_sandwich
+export local_h,peps_variation
 export MPO,transverse_ising_mpo,mat2mpo,local_X
 export truncated_svd,mps_dot_mpo,code_sandwich
 export ishermitian
+
 
 include("LanczosAlgorithm.jl")
 include("KrylovkitYao.jl")

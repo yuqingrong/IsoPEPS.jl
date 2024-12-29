@@ -28,6 +28,35 @@ function mps_dot_mpo(mps::MPS,mpo::MPO)
     return new_mps  
 end
   
-
+function code_sandwich(bra::MPS, op::MPO, ket::MPS; optimizer=GreedyMethod())
+    store = IndexStore()
+    ixs_bra = Vector{Int}[]
+    ixs_op = Vector{Int}[]
+    ixs_ket = Vector{Int}[]
+    firstidx_bra = newindex!(store)
+    previdx_bra = firstidx_bra
+    firstidx_op = newindex!(store)
+    previdx_op = firstidx_op
+    firstidx_ket = newindex!(store)
+    previdx_ket = firstidx_ket
+    nsite=length(bra.tensors)
+    for k = 1:nsite
+        physical_bra = newindex!(store)
+        physical_ket = newindex!(store)
+        nextidx_bra = k == nsite ? firstidx_bra : newindex!(store)
+        nextidx_op = k == nsite ? firstidx_op : newindex!(store)
+        nextidx_ket = k == nsite ? firstidx_ket : newindex!(store)
+        push!(ixs_bra, [previdx_bra, physical_bra, nextidx_bra])
+        push!(ixs_op, [previdx_op, physical_bra, physical_ket, nextidx_op])
+        push!(ixs_ket, [previdx_ket, physical_ket, nextidx_ket])
+        previdx_bra = nextidx_bra
+        previdx_op = nextidx_op
+        previdx_ket = nextidx_ket
+    end
+    ixs = [ixs_bra..., ixs_op..., ixs_ket...]
+    size_dict = OMEinsum.get_size_dict(ixs, [bra.tensors..., op.tensors..., ket.tensors...])
+    code=optimize_code(DynamicEinCode(ixs, Int[]), size_dict, optimizer)
+    return code,code(conj.(bra.tensors)..., op.tensors..., ket.tensors...)[]
+end
 
 

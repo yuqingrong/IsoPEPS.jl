@@ -49,8 +49,6 @@ function contract_2peps(bra::PEPS,ket::PEPS)
     for y in 1:Ly
         bra_ket[y] = Vector{AbstractArray{Float64, 4}}(undef, Lx)
     end
-    Ly=length(bra.tensors)
-    Lx=length(bra.tensors[1])
     for y in 1:Ly
         bra_row=bra.tensors[y]
         ket_row=ket.tensors[y]
@@ -109,6 +107,144 @@ function overlap_peps(bra_ket,dmax::Int)
     return nested_ein(bmps..., bra_ket[end]...)[1]
 end
 
-function Pauli_strings(peps::PEPS)
 
+
+
+
+function local_sandwich(bra::PEPS,ket::PEPS,op,y::Vector,x::Vector)
+    nsites=Ly*Lx
+    store = IndexStore()
+    ixs_bra = Vector{Int}[]
+    ixs_op = Vector{Int}[]
+    ixs_ket = Vector{Int}[]
+
+    for i in 1:Ly
+        leftidx_bra = newindex!(store)
+        firstleftbra=leftidx_bra
+        leftidx_ket = newindex!(store)
+        firstleftket=leftidx_ket
+        for j in 1:Lx
+            rightidix_bra = j==Lx ? firstleftbra : newindex!(store)    
+            rightidix_ket = j==Lx ? firstleftket : newindex!(store)   
+            push!(ixs_bra,[leftidx_bra,rightidix_bra])
+            push!(ixs_ket,[leftidx_ket,rightidix_ket])
+            leftidx_bra=rightidx_bra
+            leftidx_ket=rightidx_ket
+        end
+    end
+
+    for k in 1:Lx
+        upidx_bra=newindex!(store)
+        firstupbra=upidx_bra
+        upidx_ket=newindex!(store)
+        firstupket=upidx_ket
+        for l in 1:Ly
+            downidix_bra = l==Ly ? firstupbra : newindex!(store)    
+            downidix_ket = l==Ly ? firstupket : newindex!(store) 
+            splice!(ixs_bra[Lx+3*(Ly-1)],2,[upidx_bra,downidix_bra])
+            splice!(ixs_ket[Lx+3*(Ly-1)],2,[upidx_ket,downidix_ket])
+            upidx_bra=downidx_bra
+            upidx_ket=downidx_ket
+        end
+    end 
+
+    for m in 1:Ly
+        for n in 1:Lx
+            physidx1=newindex!(store)
+            push!(ixs_bra[n+3*(m-1)],physidx1)
+            for i in length(y)
+                physidx2=(m==y[i] && n==x[i]) ? newindex!(store) : physidx1
+                push!(ixs_ket[n+3*(m-1)],physidx2)
+                push!(ixs_op,[physidx1,physidx2])
+        end
+    end
+    ixs=[ixs_bra...,ixs_op...,ixs_ket...]
+    size_dict=OMEinsum.get_size_dict(ixs,[bra.tensors...,op,ket.tensors...])
+    code=optimize_code(DynamicEinCode(ixs,Int[]),size_dict,optimizer)
+    return code,code(conj.(bra.tensors)...,op, ket.tensors...)[]
+end
+
+function local_h(Lx,Ly)
+    mg1_sum=zeros(1,nsites) 
+    energy=0
+    for y in 1:Ly
+        for x in 1:Lx
+            y=[y]
+            x=[x]
+            h=Matrix(X)
+            code1,energy1=local_sandwich(psi,psi,h,y,x)
+            energy+=energy1
+            cost1, mg1 = IsoPEPS.OMEinsum.cost_and_gradient(code1, (conj.(psi.tensors)..., h, psi.tensors...))
+            mg1_sum+=mg1[nsites+2:end]
+            
+        end
+    end
+
+    for y in 1:Ly
+        for x in 1:(Lx-1)
+            y=[y,y]
+            x=[x,x+1]
+            h=reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)
+            code1,energy1=local_sandwich(psi,psi,h,y,x)
+            energy+=energy1
+            cost1, mg1 = IsoPEPS.OMEinsum.cost_and_gradient(code2, (conj.(psi.tensors)..., h, psi.tensors...))
+            mg1_sum+=mg1[nsites+2:end]
+        end
+    end
+
+    for x in 1:Lx
+        for y in 1:(Ly-1)
+            x=[x,x]
+            y=[y,y+1]
+            h=reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)
+            code1,energy1=local_sandwich(psi,psi,h,y,x)
+            energy+=energy1
+            cost1, mg1 = IsoPEPS.OMEinsum.cost_and_gradient(code2, (conj.(psi.tensors)..., h, psi.tensors...))
+            mg1_sum+=mg1[nsites+2:end]
+        end
+    end
+    
+    mg1_sum = vcat(map(vec, mg1_sum)...) 
+    code2,norm=local_sandwich(psi,psi,Matrix(I),y,x)
+    cost2,mg2=IsoPEPS.OMEinsum.cost_and_gradient(code1, (conj.(psi.tensors)..., Matrix(I), psi.tensors...))
+    mg2=vcat(map(vec,mg2[nsites+1:end]))
+    gradient_E=(mg1*cost2[]-mg2*energy)/cost2[]^2 
+
+    energy/=norm
+    return energy,gradient_E
+end
+
+
+function peps_variation(Ly::Int,Lx::Int,bond_dim::Int,h::Float64)
+    psi=generate_peps(bond_dim,Ly,Lx)
+    params=Float64[]
+    for i in 1:Ly 
+        append!(params,map(vec, psi.tensors[i])...)
+    end
+    @show size(params)
+    function update_peps_from_params!(psi, params)
+        idx = 1
+        for i in 1:length(psi.tensors)
+            for j in 1:length(psi.tensors[i])
+                size_tensor = size(psi.tensors[i][j])  
+                n_elements = prod(size_tensor)         
+                psi.tensors[i][j] .= reshape(params[idx:idx + n_elements - 1], size_tensor)
+                idx += n_elements  
+            end
+        end
+    end
+
+    update_peps_from_params!(psi, params)
+    energy,gradient_E=local_h(Lx,Ly)
+
+    function f(params)
+        return energy
+    end
+    
+    function g!(G, params)
+        G .= gradient_E
+    end
+    
+    result = IsoPEPS.optimize(f,g!,params,IsoPEPS.LBFGS())
+    return result
 end

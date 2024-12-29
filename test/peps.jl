@@ -50,3 +50,13 @@ end
     @show result
     @test  isless(0.0,result)
 end 
+
+@testset "peps_variation" begin
+    Ly=4
+    Lx=4
+    nsites=Ly*Lx
+    bond_dim=2
+    h=0.2
+    result,f,g! = peps_variation(Ly,Lx,bond_dim,h)
+    @test isapprox(result.minimum, -9.120354170186685, atol=1e-4)
+end
