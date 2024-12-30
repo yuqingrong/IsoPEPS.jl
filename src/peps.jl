@@ -28,7 +28,7 @@ function generate_peps(::Type{T},bond_dim::Int,Ly::Int,Lx::Int;d::Int=2) where T
     return PEPS(tensors)
 end
 
-generate_peps(bond_dim::Int,Ly::Int,Lx::Int; d::Int=2) = generate_peps(Float64, bond_dim,Ly,Lx;d)
+generate_peps(bond_dim::Int,Ly::Int,Lx::Int; d::Int=2) = generate_peps(ComplexF64, bond_dim,Ly,Lx;d)
 
 function truncated_bmps(bmps,dmax::Int)
     for i in 1:(length(bmps)-1)        
@@ -109,25 +109,36 @@ end
 
 
 
+function get_tensors(psi::PEPS)
+    psi_tensors=Vector{Any}()
+    Ly=length(psi.tensors)
+    Lx=length(psi.tensors[1])
+    for i in 1:Ly
+        for j in 1:Lx
+            push!(psi_tensors,psi.tensors[i][j])
+        end
+    end
+    return psi_tensors
+end
 
-
-function local_sandwich(bra::PEPS,ket::PEPS,op,y::Vector,x::Vector)
-    nsites=Ly*Lx
+function local_sandwich(bra::PEPS,ket::PEPS,op,y::Vector,x::Vector;optimizer=GreedyMethod())
     store = IndexStore()
     ixs_bra = Vector{Int}[]
     ixs_op = Vector{Int}[]
     ixs_ket = Vector{Int}[]
-
+    Ly=length(bra.tensors)
+    Lx=length(bra.tensors[1])
     for i in 1:Ly
         leftidx_bra = newindex!(store)
         firstleftbra=leftidx_bra
         leftidx_ket = newindex!(store)
         firstleftket=leftidx_ket
         for j in 1:Lx
-            rightidix_bra = j==Lx ? firstleftbra : newindex!(store)    
-            rightidix_ket = j==Lx ? firstleftket : newindex!(store)   
-            push!(ixs_bra,[leftidx_bra,rightidix_bra])
-            push!(ixs_ket,[leftidx_ket,rightidix_ket])
+            rightidx_bra = j==Lx ? firstleftbra : newindex!(store)    
+            rightidx_ket = j==Lx ? firstleftket : newindex!(store)   
+            push!(ixs_bra,[leftidx_bra,rightidx_bra])
+            push!(ixs_ket,[leftidx_ket,rightidx_ket])
+            #@show size(ixs_bra[j+3*(i-1)])
             leftidx_bra=rightidx_bra
             leftidx_ket=rightidx_ket
         end
@@ -139,10 +150,10 @@ function local_sandwich(bra::PEPS,ket::PEPS,op,y::Vector,x::Vector)
         upidx_ket=newindex!(store)
         firstupket=upidx_ket
         for l in 1:Ly
-            downidix_bra = l==Ly ? firstupbra : newindex!(store)    
-            downidix_ket = l==Ly ? firstupket : newindex!(store) 
-            splice!(ixs_bra[Lx+3*(Ly-1)],2,[upidx_bra,downidix_bra])
-            splice!(ixs_ket[Lx+3*(Ly-1)],2,[upidx_ket,downidix_ket])
+            downidx_bra = l==Ly ? firstupbra : newindex!(store)    
+            downidx_ket = l==Ly ? firstupket : newindex!(store) 
+            ixs_bra[k+Lx*(l-1)]=vcat(ixs_bra[k+Lx*(l-1)][1],[upidx_bra,downidx_bra],ixs_bra[k+Lx*(l-1)][2])
+            ixs_ket[k+Lx*(l-1)]=vcat(ixs_ket[k+Lx*(l-1)][1],[upidx_ket,downidx_ket],ixs_ket[k+Lx*(l-1)][2])
             upidx_bra=downidx_bra
             upidx_ket=downidx_ket
         end
@@ -151,73 +162,86 @@ function local_sandwich(bra::PEPS,ket::PEPS,op,y::Vector,x::Vector)
     for m in 1:Ly
         for n in 1:Lx
             physidx1=newindex!(store)
-            push!(ixs_bra[n+3*(m-1)],physidx1)
-            for i in length(y)
-                physidx2=(m==y[i] && n==x[i]) ? newindex!(store) : physidx1
-                push!(ixs_ket[n+3*(m-1)],physidx2)
-                push!(ixs_op,[physidx1,physidx2])
+            push!(ixs_bra[n+Lx*(m-1)],physidx1)
+            physidx2 = physidx1
+            for i in 1:length(y)
+                if m==y[i] && n==x[i]
+                    physidx2=newindex!(store)
+                    push!(ixs_op,[physidx1,physidx2])
+                end
+            end
+            push!(ixs_ket[n+Lx*(m-1)],physidx2)
         end
     end
-    ixs=[ixs_bra...,ixs_op...,ixs_ket...]
-    size_dict=OMEinsum.get_size_dict(ixs,[bra.tensors...,op,ket.tensors...])
+    ixs_op=vcat(ixs_op...)
+    ixs=[ixs_bra...,ixs_op,ixs_ket...]
+    size_dict=OMEinsum.get_size_dict(ixs,[get_tensors(bra)...,op,get_tensors(ket)...])
     code=optimize_code(DynamicEinCode(ixs,Int[]),size_dict,optimizer)
-    return code,code(conj.(bra.tensors)...,op, ket.tensors...)[]
+    return code,code(conj.(get_tensors(bra))...,op, get_tensors(ket)...)[]
 end
 
-function local_h(Lx,Ly)
-    mg1_sum=zeros(1,nsites) 
+
+
+function local_h(Lx::Int,Ly::Int,bra::PEPS,ket::PEPS)
+    nsites=Ly*Lx
+    mg1_sum=get_tensors(bra)
+    mg1_sum = [zeros(size(mg1_sum[i])) for i in 1:nsites]
+    @show typeof(mg1_sum)
     energy=0
     for y in 1:Ly
+        y=[y]
         for x in 1:Lx
-            y=[y]
             x=[x]
             h=Matrix(X)
-            code1,energy1=local_sandwich(psi,psi,h,y,x)
+            code1,energy1=local_sandwich(bra,ket,h,y,x)
             energy+=energy1
-            cost1, mg1 = IsoPEPS.OMEinsum.cost_and_gradient(code1, (conj.(psi.tensors)..., h, psi.tensors...))
+            cost1, mg1 = IsoPEPS.OMEinsum.cost_and_gradient(code1, (conj.(get_tensors(bra))..., h, get_tensors(ket)...))
+           
             mg1_sum+=mg1[nsites+2:end]
-            
         end
     end
+    @show typeof(mg1_sum)
 
     for y in 1:Ly
+        y=[y,y]
         for x in 1:(Lx-1)
-            y=[y,y]
             x=[x,x+1]
             h=reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)
-            code1,energy1=local_sandwich(psi,psi,h,y,x)
+            code1,energy1=local_sandwich(bra,ket,h,y,x)
             energy+=energy1
-            cost1, mg1 = IsoPEPS.OMEinsum.cost_and_gradient(code2, (conj.(psi.tensors)..., h, psi.tensors...))
+            cost1, mg1 = IsoPEPS.OMEinsum.cost_and_gradient(code1, (conj.(get_tensors(bra))..., h, get_tensors(ket)...))
             mg1_sum+=mg1[nsites+2:end]
         end
     end
 
     for x in 1:Lx
+        x=[x,x]
         for y in 1:(Ly-1)
-            x=[x,x]
             y=[y,y+1]
             h=reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)
-            code1,energy1=local_sandwich(psi,psi,h,y,x)
+            code1,energy1=local_sandwich(bra,ket,h,y,x)
             energy+=energy1
-            cost1, mg1 = IsoPEPS.OMEinsum.cost_and_gradient(code2, (conj.(psi.tensors)..., h, psi.tensors...))
+            cost1, mg1 = IsoPEPS.OMEinsum.cost_and_gradient(code1, (conj.(get_tensors(bra))..., h, get_tensors(ket)...))
             mg1_sum+=mg1[nsites+2:end]
         end
     end
     
     mg1_sum = vcat(map(vec, mg1_sum)...) 
-    code2,norm=local_sandwich(psi,psi,Matrix(I),y,x)
-    cost2,mg2=IsoPEPS.OMEinsum.cost_and_gradient(code1, (conj.(psi.tensors)..., Matrix(I), psi.tensors...))
-    mg2=vcat(map(vec,mg2[nsites+1:end]))
-    gradient_E=(mg1*cost2[]-mg2*energy)/cost2[]^2 
+    code2,norm=local_sandwich(bra,ket,Matrix(I2),[1],[1])
+    cost2,mg2=IsoPEPS.OMEinsum.cost_and_gradient(code2, (conj.(get_tensors(bra))..., Matrix(I2), get_tensors(ket)...))
+    mg2=vcat(map(vec,mg2[nsites+2:end])...)
+    @show size(mg1_sum),size(mg2)
+    gradient_E=(mg1_sum*cost2[]-mg2*energy)/cost2[]^2 
 
     energy/=norm
+    @show energy
     return energy,gradient_E
 end
 
 
 function peps_variation(Ly::Int,Lx::Int,bond_dim::Int,h::Float64)
     psi=generate_peps(bond_dim,Ly,Lx)
-    params=Float64[]
+    params=ComplexF64[]
     for i in 1:Ly 
         append!(params,map(vec, psi.tensors[i])...)
     end
@@ -234,17 +258,19 @@ function peps_variation(Ly::Int,Lx::Int,bond_dim::Int,h::Float64)
         end
     end
 
-    update_peps_from_params!(psi, params)
-    energy,gradient_E=local_h(Lx,Ly)
-
     function f(params)
-        return energy
+        update_peps_from_params!(psi, params)
+        energy,gradient_E=local_h(Lx,Ly,psi,psi)
+        return real(energy)
     end
     
     function g!(G, params)
+        update_peps_from_params!(psi, params)
+        energy,gradient_E=local_h(Lx,Ly,psi,psi)
         G .= gradient_E
     end
-    
+
     result = IsoPEPS.optimize(f,g!,params,IsoPEPS.LBFGS())
-    return result
+    @show result
+    return result.minimum
 end

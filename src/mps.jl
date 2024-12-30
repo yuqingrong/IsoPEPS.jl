@@ -20,7 +20,7 @@ function generate_mps(::Type{T},bond_dim::Int,nsites::Int;d::Int=2) where T
     return MPS(tensors)
 end
 
-generate_mps(bond_dim::Int,nsites::Int; d::Int=2) = generate_mps(Float64, bond_dim,nsites;d)
+generate_mps(bond_dim::Int,nsites::Int; d::Int=2) = generate_mps(ComplexF64, bond_dim,nsites;d)
 
 
 function code_dot(bra::MPS,ket::MPS;optimizer=GreedyMethod())

@@ -56,7 +56,7 @@ end
     Lx=4
     nsites=Ly*Lx
     bond_dim=2
-    h=0.2
-    result,f,g! = peps_variation(Ly,Lx,bond_dim,h)
-    @test isapprox(result.minimum, -9.120354170186685, atol=1e-4)
+    h=0.5
+    result= peps_variation(Ly,Lx,bond_dim,h)
+    @test isapprox(result, -9.120354170186685, atol=1e-4)
 end
