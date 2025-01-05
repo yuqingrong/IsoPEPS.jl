@@ -186,13 +186,13 @@ function local_h(Lx::Int,Ly::Int,bra::PEPS,ket::PEPS)
     nsites=Ly*Lx
     mg1_sum=get_tensors(bra)
     mg1_sum = [zeros(size(mg1_sum[i])) for i in 1:nsites]
-    @show typeof(mg1_sum)
+
     energy=0
     for y in 1:Ly
         y=[y]
         for x in 1:Lx
             x=[x]
-            h=Matrix(X)
+            h=-0.2*Matrix(X)
             code1,energy1=local_sandwich(bra,ket,h,y,x)
             energy+=energy1
             cost1, mg1 = IsoPEPS.OMEinsum.cost_and_gradient(code1, (conj.(get_tensors(bra))..., h, get_tensors(ket)...))
@@ -200,13 +200,13 @@ function local_h(Lx::Int,Ly::Int,bra::PEPS,ket::PEPS)
             mg1_sum+=mg1[nsites+2:end]
         end
     end
-    @show typeof(mg1_sum)
+   
 
     for y in 1:Ly
         y=[y,y]
         for x in 1:(Lx-1)
             x=[x,x+1]
-            h=reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)
+            h=-reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)
             code1,energy1=local_sandwich(bra,ket,h,y,x)
             energy+=energy1
             cost1, mg1 = IsoPEPS.OMEinsum.cost_and_gradient(code1, (conj.(get_tensors(bra))..., h, get_tensors(ket)...))
@@ -218,7 +218,7 @@ function local_h(Lx::Int,Ly::Int,bra::PEPS,ket::PEPS)
         x=[x,x]
         for y in 1:(Ly-1)
             y=[y,y+1]
-            h=reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)
+            h=-reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)
             code1,energy1=local_sandwich(bra,ket,h,y,x)
             energy+=energy1
             cost1, mg1 = IsoPEPS.OMEinsum.cost_and_gradient(code1, (conj.(get_tensors(bra))..., h, get_tensors(ket)...))
@@ -229,15 +229,27 @@ function local_h(Lx::Int,Ly::Int,bra::PEPS,ket::PEPS)
     mg1_sum = vcat(map(vec, mg1_sum)...) 
     code2,norm=local_sandwich(bra,ket,Matrix(I2),[1],[1])
     cost2,mg2=IsoPEPS.OMEinsum.cost_and_gradient(code2, (conj.(get_tensors(bra))..., Matrix(I2), get_tensors(ket)...))
+    
     mg2=vcat(map(vec,mg2[nsites+2:end])...)
     @show size(mg1_sum),size(mg2)
     gradient_E=(mg1_sum*cost2[]-mg2*energy)/cost2[]^2 
 
-    energy/=norm
+    energy=energy/norm
     @show energy
     return energy,gradient_E
 end
 
+function update_peps_from_params!(psi, params)
+    idx = 1
+    for i in 1:length(psi.tensors)
+        for j in 1:length(psi.tensors[i])
+            size_tensor = size(psi.tensors[i][j])  
+            n_elements = prod(size_tensor)         
+            psi.tensors[i][j] .= reshape(params[idx:idx + n_elements - 1], size_tensor)
+            idx += n_elements  
+        end
+    end
+end
 
 function peps_variation(Ly::Int,Lx::Int,bond_dim::Int,h::Float64)
     psi=generate_peps(bond_dim,Ly,Lx)
@@ -246,18 +258,7 @@ function peps_variation(Ly::Int,Lx::Int,bond_dim::Int,h::Float64)
         append!(params,map(vec, psi.tensors[i])...)
     end
     @show size(params)
-    function update_peps_from_params!(psi, params)
-        idx = 1
-        for i in 1:length(psi.tensors)
-            for j in 1:length(psi.tensors[i])
-                size_tensor = size(psi.tensors[i][j])  
-                n_elements = prod(size_tensor)         
-                psi.tensors[i][j] .= reshape(params[idx:idx + n_elements - 1], size_tensor)
-                idx += n_elements  
-            end
-        end
-    end
-
+    
     function f(params)
         update_peps_from_params!(psi, params)
         energy,gradient_E=local_h(Lx,Ly,psi,psi)

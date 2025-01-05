@@ -52,11 +52,38 @@ end
 end 
 
 @testset "peps_variation" begin
-    Ly=4
-    Lx=4
+    Ly=3
+    Lx=3
     nsites=Ly*Lx
     bond_dim=2
-    h=0.5
+    h=0.2
     result= peps_variation(Ly,Lx,bond_dim,h)
-    @test isapprox(result, -9.120354170186685, atol=1e-4)
+    @test isapprox(result, -24.11337869627553, atol=1e-4)
+end
+
+# test <Z_i Z_j>
+@testset "peps expect single operator" begin
+    Ly=1
+    Lx=2
+    nsites=Ly*Lx
+    bond_dim=2
+    result= peps_variation(Ly,Lx,bond_dim,0.2)
+    h = ising_hamiltonian_2d(1,2, 1.0, 0.2)
+    eigenval,eigenvec = IsoPEPS.eigsolve(IsoPEPS.mat(h), 1, :SR; ishermitian=true)
+    
+    @test isapprox(result, eigenval[1], atol=1e-4)
+end
+
+@testset "hamiltonian expectation value" begin
+    h = ising_hamiltonian_2d(1,2, 1.0, 0.2)
+    eigenval,eigenvec = IsoPEPS.eigsolve(IsoPEPS.mat(h), 1, :SR; ishermitian=true)
+    @test eigenval[1]≈ -24.11337869627553
+end
+
+@testset "gradient of hamiltonian with FiniteDifference" begin
+    
+end
+
+@testset "optimization" begin
+    
 end

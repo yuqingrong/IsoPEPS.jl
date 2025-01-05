@@ -1,4 +1,4 @@
-using Test, IsoPEPS
+using Test, IsoPEPS, LinearAlgebra
 import Optimisers
 @testset "KrylovkitYao" begin
     nsites=10
@@ -32,3 +32,12 @@ end
 end
 
 
+@testset "Hamiltonian 2D" begin
+    h = IsoPEPS.ising_hamiltonian_2d(5, 5, 1.0, 0.2)
+    @test length(h[1].content) == 40
+    @test length(h[2].content) == 25
+
+    h = IsoPEPS.ising_hamiltonian_2d(2, 2, 1.0, 0.2)
+    evals = eigen(Matrix(h)).values
+    @test minimum(evals) ≈ -4.040593699203863
+end

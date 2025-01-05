@@ -114,7 +114,7 @@ function mps_variation(nsites::Int,bond_dim::Int,h::Float64)
         code1, energy = code_sandwich(psi, H, psi)
       
         code2,norm_factor = code_dot(psi, psi)
-        cost = energy / norm_factor
+        cost = real(energy / norm_factor)
         return cost
     end
     
@@ -136,5 +136,6 @@ function mps_variation(nsites::Int,bond_dim::Int,h::Float64)
         params,
         IsoPEPS.LBFGS()
     )
+    @show result
     return result,f,g!
 end
