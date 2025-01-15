@@ -1,6 +1,79 @@
 using IsoPEPS
 using Test
 
+@testset "zero_peps and inner_product" begin
+    g = SimpleGraph(4)
+    for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
+        add_edge!(g, i, j)
+    end
+    peps = zero_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
+    @test peps.physical_labels == [1,2,3,4]
+    @test peps.virtual_labels == [5,6,7,8]
+    @test peps.vertex_tensors[2][2] == 0 && peps.vertex_tensors[2][3]==0
+    @test real(inner_product(peps,peps)[]) == 1.0
+end
+
+@testset "rand_peps and inner_product" begin
+    g = SimpleGraph(4)
+    for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
+        add_edge!(g, i, j)
+    end
+    peps1 = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
+    peps2 = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
+    @test peps1.physical_labels == [1,2,3,4]
+    @test peps1.virtual_labels == [5,6,7,8]
+    @test inner_product(peps1, peps1)[] ≈ statevec(peps1)' * statevec(peps1)
+    @test inner_product(peps1, peps2)[] ≈ statevec(peps1)' * statevec(peps2)
+end
+
+@testset "apply_onsite" begin
+    g = SimpleGraph(4)
+    for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
+        add_edge!(g, i, j)
+    end
+    peps = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
+    reg = Yao.ArrayReg(vec(peps))
+    m = Matrix(X)
+    apply_onsite!(peps, 1, m)
+    reg |> put(4, (1,)=>matblock(m))
+    @test vec(peps) ≈ statevec(reg)
+end
+
+@testset "single_sandwich" begin
+    g = SimpleGraph(4)
+    for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
+        add_edge!(g, i, j)
+    end
+    peps = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
+    
+    h = put(4,(1,)=>X)
+    @show mat
+    expect = single_sandwich(peps, peps, 1, Matrix(X), TreeSA(), MergeGreedy())
+    exact = (statevec(peps)' * mat(h) * statevec(peps))[1]
+    @show expect
+    @test expect ≈ exact
+end
+
+@testset "two_sandwich" begin
+    g = SimpleGraph(4)
+    for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
+        add_edge!(g, i, j)
+    end
+    peps = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
+
+    h = put(4,(1,2)=>kron(Z,Z))
+    expect = two_sandwich(peps, peps, 1, 2, reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2), TreeSA(), MergeGreedy())
+    exact = (statevec(peps)' * mat(h) * statevec(peps))[1]
+    @test expect ≈ exact
+end
+
+
+
+
+
+
+
+
 
 @testset "truncate1" begin #product + noise
     mps=generate_mps(8,10; d=2)
@@ -39,7 +112,6 @@ end
 end
 
 @testset "peps" begin
-    peps=generate_peps(4,3,3)
     bra_ket=IsoPEPS.contract_2peps(peps,peps)
     @show size(bra_ket[1][1])
     @show size(bra_ket[2][1])
@@ -52,36 +124,33 @@ end
 end 
 
 @testset "peps_variation" begin
-    Ly=3
-    Lx=3
-    nsites=Ly*Lx
-    bond_dim=2
-    h=0.2
-    result= peps_variation(Ly,Lx,bond_dim,h)
-    @test isapprox(result, -24.11337869627553, atol=1e-4)
-end
-
-# test <Z_i Z_j>
-@testset "peps expect single operator" begin
-    Ly=1
+    Ly=2
     Lx=2
     nsites=Ly*Lx
     bond_dim=2
-    result= peps_variation(Ly,Lx,bond_dim,0.2)
-    h = ising_hamiltonian_2d(1,2, 1.0, 0.2)
-    eigenval,eigenvec = IsoPEPS.eigsolve(IsoPEPS.mat(h), 1, :SR; ishermitian=true)
-    
-    @test isapprox(result, eigenval[1], atol=1e-4)
+    #h=0.2
+    result= peps_variation(Ly,Lx,bond_dim)
+    @test isapprox(result, -4.040593699203846, atol=1e-4)
 end
 
+
+
+
 @testset "hamiltonian expectation value" begin
-    h = ising_hamiltonian_2d(1,2, 1.0, 0.2)
+    h = ising_hamiltonian_2d(2,2, 1.0, 0.2)
     eigenval,eigenvec = IsoPEPS.eigsolve(IsoPEPS.mat(h), 1, :SR; ishermitian=true)
-    @test eigenval[1]≈ -24.11337869627553
+    @test eigenval[1]≈  -4.040593699203846
 end
 
 @testset "gradient of hamiltonian with FiniteDifference" begin
-    
+    Ly=2
+    Lx=2
+    nsites=Ly*Lx
+    bond_dim=2
+    #h=0.2
+    #result,f,g!= peps_variation(Ly,Lx,bond_dim)
+    a=IsoPEPS.grad(central_fdm(5, 1), f, params)[1] - g!(params)
+    @test a==0.0
 end
 
 @testset "optimization" begin
