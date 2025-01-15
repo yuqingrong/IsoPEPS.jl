@@ -222,7 +222,7 @@ $S U(4)_(i j) (theta)=U(2)(theta)_i(theta_(1:3)) times U(2)(theta)_j(theta_(4:6)
 
 $U(4)=S U(4)(theta) times e^(-i Phi)$, $e^(-i Phi)$ is a global phase.
 
-= Encoding of Matrix Product States into Quantum Circuits of One- and Two-Qubit Gates @Ran_2020
+= Encoding of Matrix Product States into Quantum Circuits of One- and Two-Qubit Gates 
 
 == Encoding matrix product state into single-layer quantum circuit
 
@@ -277,7 +277,7 @@ cost function?
 D layers: $|psi^~ > = vu(U)_D^+...vu(U)_2^+ vu(U)_1^+|0>$
 $quad F_D =-(ln|<psi|vu(U)_D^+...vu(U)_2^+ vu(U)_1^+|0>|)/N$
 
-= Simulating Large PEPs Tensor Networks on Small Quantum Devices @maccormack2021simulatinglargepepstensor
+= Simulating Large PEPs Tensor Networks on Small Quantum Devices 
 
 == PEPS
 
@@ -385,7 +385,91 @@ $beta_k=||r_k||=>q_(k+1)=r_k/(||r_k||)$
 
 $q_0=0, beta_0=1$, $r_0=q_1$ is randomly chosen
 
-= OMEinsum
+= TEBD+MPS
+
+MPS, N sites
+
+1. Trotter decomposition
+
+$H=sum_i h_i$, 
+$h_i=S_i^x S_(i+1)^x+S_i^y S_(i+1)^y+S_i^z S_(i+1)^z$
+
+discretize time as $t=N tau(N-> infinity, tau->0)$, $tau$ is time step.
+
+- one-order Trotter decomposition: 
+ $e^(-i H tau)=e^(-i h_1 tau)e^(-i h_2 tau)...e^(-i h_(N-1) tau)+O(tau^2)$
+
+Since $[h_i,h_(i+1)]!=0$, $[h_i,h_(i+2)]=0$, we decompose it as
+
+$e^(-i H tau)=e^(-i H_(o d d) tau)e^(-i H_(e v e n) tau)$
+
+- second-order Trotter decomposition:
+
+$e^(-i H tau)=e^(-i H_(o d d) tau/2)e^(-i H_(e v e n) tau)e^(-i H_(o d d) tau/2)+O(tau^3)$
+
+2. operate on MPS
+#figure(
+  image("images/TEBD1.png", width: 60%),
+  caption: [Thin and Fat lines correspond to dimension 1 and > 1 on MPO bonds.],
+) 
+
+= Tensor decompositions
+
+*using LinearAlgebra*
+== SVD
+
+(1)F=svd(A) 
+
+F.U 
+
+F.S is a vector, need to be: diagm(0 => F.S) to form a matrix
+
+F.Vt return $V^+$
+
+(2)can be used to generate unitary and isometric tensors
+- unitary: U = svd(rand(d1,d1)).U
+- isometric: W = svd(rand(d1,d2)).U
+
+== spectral decomposition
+
+for  Hermitian matrices or tensors, very useful for calculating eigen
+
+H=0.5(A+A')
+
+F=eigen(H)
+
+F.vectors: return eigenvector
+
+F.values: return eigenvalue(vector form,  need to be: diagm(0 => F.S) to form a matrix)
+
+F.vectors': transpose eigenvector
+
+== QR decomposition
+
+$A=r a n d(d_1,d_2)$ 
+
+F=qr(A)
+
+F.Q: a $d_1 times d_2$ isometric matrix
+
+F.R: a $d_2 times d_2$ upper-triangular matrix
+
+
+= Frobenius norm for tensors
+
+== norm for matrix
+
+$||A||=sqrt(sum_(i j)|A_(i j)|^2)=tr(A^+ A)$
+
+$A_(i j)$ is elements of A
+
+== norm for tensor
+
+$||A||=T t r(A^+ A)$ equal to contraction of A and $A^+$
+
+== relationship of norm and svd
+
+svd(A)=$U S V^+$, then $||A||=sqrt(sum_k|s_k|^2)$ ($s_k$: elements of S)
 
 
 
