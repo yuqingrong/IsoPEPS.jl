@@ -1,2 +1,6 @@
 [deps]
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+IsoPEPS = "ba2a9c53-054a-4f79-8e7e-3842f08de153"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+OMEinsum = "ebe7aa44-baf0-506c-a96f-8464559b3922"
+TensorOperations = "6aa20fa7-93e2-5fca-9bc0-fbd0db3c71a2"

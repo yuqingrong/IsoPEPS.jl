@@ -1,16 +1,20 @@
 function ising_hamiltonian(nbit::Int, J::Float64, h::Float64)
-    sz = i->put(nbit, i=>Z)
-    sx = i->put(nbit, i=>X)
-    sum(1:(nbit-1)) do i
-        sz(i)*sz(i+1)
-    end * (-J) + sum(1:nbit) do i
-        sx(i)
-    end * (-h)
+    -J * sum([kron(nbit, i=>Z, i+1=>Z) for i=1:nbit-1]) -
+        h * sum([kron(nbit, i=>X) for i=1:nbit])
 end
 
-# TODO: study why the default initial state is sparse vector.
+function ising_hamiltonian_2d(m::Int, n::Int, J::Float64, h::Float64)
+    lis = LinearIndices((m, n))  # CartesianIndices
+    -J * sum([[kron(m * n, lis[i, j]=>Z, lis[i+1,j]=>Z) for i=1:m-1, j=1:n]..., 
+              [kron(m * n, lis[i, j]=>Z, lis[i, j+1]=>Z) for i=1:m, j=1:n-1]...]) -
+        h * sum(vec([kron(m * n, lis[i, j]=>X) for i=1:m, j=1:n]))
+end
+
+
 function ed_groundstate(h::AbstractBlock)
     x0 = statevec(rand_state(nqubits(h)))
     E, V = eigsolve(h |> mat, x0, 1, :SR, ishermitian=true)
     E[1], V[1]
 end
+
+
