@@ -48,9 +48,8 @@ end
     
     h = put(4,(1,)=>X)
     @show mat
-    expect = single_sandwich(peps, peps, 1, Matrix(X), TreeSA(), MergeGreedy())
+    expect, gradient = single_sandwich(peps, peps, 1, Matrix(X), TreeSA(), MergeGreedy())
     exact = (statevec(peps)' * mat(h) * statevec(peps))[1]
-    @show expect
     @test expect ≈ exact
 end
 
@@ -62,14 +61,60 @@ end
     peps = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
 
     h = put(4,(1,2)=>kron(Z,Z))
-    expect = two_sandwich(peps, peps, 1, 2, reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2), TreeSA(), MergeGreedy())
+    expect, _ = two_sandwich(peps, peps, 1, 2, reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2), TreeSA(), MergeGreedy())
     exact = (statevec(peps)' * mat(h) * statevec(peps))[1]
     @test expect ≈ exact
 end
 
+@testset "single variational optimization" begin
+    g = SimpleGraph(4)
+    for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
+        add_edge!(g, i, j)
+    end
+    peps = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
+    result = peps_optimize1(peps, 1, Matrix(X), TreeSA(), MergeGreedy())
+    h = put(4,(1,)=>X)
+    eigenval,eigenvec = IsoPEPS.eigsolve(IsoPEPS.mat(h), 1, :SR; ishermitian=true)
+    @test isapprox(result , eigenval[1], rtol=1e-2)
+end
+#TODO: test gradient
+#TODO: draw energy vs. iteration step
+@testset "ZZ variational optimization" begin
+    g = SimpleGraph(4)
+    for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
+        add_edge!(g, i, j)
+    end
+    peps = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
+    result = peps_optimize2(peps, 1, 2, reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2), TreeSA(), MergeGreedy())
+    h = kron(4, 1=>Z, 2=>Z)
+    eigenval,eigenvec = IsoPEPS.eigsolve(IsoPEPS.mat(h), 1, :SR; ishermitian=true)
+    @test isapprox(result , eigenval[1], rtol=1e-2)
+end
 
+@testset "ising variational optimization" begin
+    g = SimpleGraph(4)
+    for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
+        add_edge!(g, i, j)
+    end
+    J, h = 1.0, 0.2
+    peps = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
+    result = peps_optimize_ising(peps, g, J, h, TreeSA(), MergeGreedy())
+    hami = ising_hamiltonian_2d(2,2,J,h)
+    eigenval,eigenvec = IsoPEPS.eigsolve(IsoPEPS.mat(hami), 1, :SR; ishermitian=true)
+    @test isapprox(result , eigenval[1], rtol=1e-2)
+end
 
-
+@testset "expect using Yao" begin
+    h1 = put(4,(1,)=>X)
+    eigenval1,eigenvec1 = IsoPEPS.eigsolve(IsoPEPS.mat(h1), 1, :SR; ishermitian=true)
+    @test eigenval1[1] ≈ -1.0
+    h2 = kron(4, 1=>Z, 2=>Z)
+    eigenval2,eigenvec2 = IsoPEPS.eigsolve(IsoPEPS.mat(h2), 1, :SR; ishermitian=true)
+    @test eigenval2[1] ≈ -1.0
+    h3 = ising_hamiltonian_2d(2,2,1.0,0.2)
+    eigenval2,eigenvec2 = IsoPEPS.eigsolve(IsoPEPS.mat(h3), 1, :SR; ishermitian=true)
+    @test eigenval2[1] ≈ -4.040593699203847
+end
 
 
 
@@ -132,9 +177,6 @@ end
     result= peps_variation(Ly,Lx,bond_dim)
     @test isapprox(result, -4.040593699203846, atol=1e-4)
 end
-
-
-
 
 @testset "hamiltonian expectation value" begin
     h = ising_hamiltonian_2d(2,2, 1.0, 0.2)
