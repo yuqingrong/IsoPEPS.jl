@@ -182,20 +182,21 @@ function f1(peps::PEPS, variables, i, mat::AbstractArray, optimizer::CodeOptimiz
     return real(energy/norm[])
 end
 
-function g1!(G, peps::PEPS, variables, i, mat::AbstractArray, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
+function g1!(G1, peps::PEPS, variables, i, mat::AbstractArray, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
     load_variables!(peps, variables)
     energy, gradientA = single_sandwich(peps, peps, i, mat, optimizer, simplifier)
-    flatten_gradientA = vcat(reshape.(gradientA, :)...)[end-31:end]  #TODO: use the parameters in peps
+    flatten_gradientA = 2*vcat(reshape.(gradientA, :)...)[Int(end/2+3):end]  
     norm, gradientB = OMEinsum.cost_and_gradient(peps.code_inner_product, (peps.vertex_tensors..., peps.vertex_tensors...))
-    flatten_gradientB = vcat(reshape.(gradientB, :)...)[end-31:end]
-    G .= (flatten_gradientA*norm[]-flatten_gradientB*energy)/norm[]^2
+    flatten_gradientB = 2*vcat(reshape.(gradientB, :)...)[Int(end/2+1):end]
+    G1 .=(flatten_gradientA*norm[]-flatten_gradientB*energy)/norm[]^2
+    return G1
 end
 
 
 function peps_optimize1(peps::PEPS, i, mat::AbstractArray, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
     params = variables(peps)
     f_closure1(params) =  f1(peps, params, i, mat, optimizer, simplifier)
-    g_closure1!(G, params) = g1!(G, peps, params, i, mat, optimizer, simplifier)
+    g_closure1!(G1, params) = g1!(G1, peps, params, i, mat, optimizer, simplifier)
     result = IsoPEPS.optimize(f_closure1, g_closure1!, params, IsoPEPS.LBFGS(), Optim.Options(f_tol = 1e-6))
     return result.minimum
 end
@@ -207,41 +208,46 @@ function f2(peps::PEPS, variables, i, j, mat::AbstractArray, optimizer::CodeOpti
     return real(energy/norm[])
 end
 
-function g2!(G, peps::PEPS, variables, i, j, mat::AbstractArray, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
+function g2!(G2, peps::PEPS, variables, i, j, mat::AbstractArray, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
     load_variables!(peps, variables)
     energy, gradientA = two_sandwich(peps, peps, i, j, mat, optimizer, simplifier)
-    flatten_gradientA = vcat(reshape.(gradientA, :)...)[end-31:end]  #TODO: use the parameters in peps
+    flatten_gradientA = 2*vcat(reshape.(gradientA, :)...)[Int(end/2+9):end]  
     norm, gradientB = OMEinsum.cost_and_gradient(peps.code_inner_product, (peps.vertex_tensors..., peps.vertex_tensors...))
-    flatten_gradientB = vcat(reshape.(gradientB, :)...)[end-31:end]
-    G .= (flatten_gradientA*norm[]-flatten_gradientB*energy)/norm[]^2
+    flatten_gradientB = 2*vcat(reshape.(gradientB, :)...)[Int(end/2+1):end]
+    G2 .=(flatten_gradientA*norm[]-flatten_gradientB*energy)/norm[]^2
+    return G2
 end
 
 function peps_optimize2(peps::PEPS, i, j, mat::AbstractArray, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
     params = variables(peps)
     f_closure2(params) =  f2(peps, params, i, j, mat, optimizer, simplifier)
-    g_closure2!(G, params) = g2!(G, peps, params, i, j, mat, optimizer, simplifier)
+    g_closure2!(G2, params) = g2!(G2, peps, params, i, j, mat, optimizer, simplifier)
     result = IsoPEPS.optimize(f_closure2, g_closure2!, params, IsoPEPS.LBFGS(), Optim.Options(f_tol = 1e-6))
     @show result
     return result.minimum
 end
 
 function f_ising(peps::PEPS,  variables, g, J::Float64, h::Float64, optimizer::CodeOptimizer, simplifier::CodeSimplifier )
-    energy = 0
+    energy = 0  
     for i in peps.physical_labels
-        energy+=f1(peps, variables, i, -h*Matrix(X), optimizer, simplifier)
+        energy+=f1(peps, variables, i, -h*real(Matrix(X)), optimizer, simplifier)
+        
         for nb in neighbors(g, i)
-            energy+=f2(peps, variables, i, nb, -J*reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2), optimizer, simplifier)/2
+            energy+=0.5*f2(peps, variables, i, nb, -J*real(reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)), optimizer, simplifier)
         end
     end
-    @show energy
     return energy
 end
 
 function g_ising!(G, peps::PEPS, variables, g, J::Float64, h::Float64, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
+    G1 = zeros(eltype(variables),size(variables))
+    G2 = zeros(eltype(variables),size(variables))
+    fill!(G, 0)
     for i in peps.physical_labels
-        G .+= g1!(G, peps, variables, i, -h*Matrix(X), optimizer::CodeOptimizer, simplifier::CodeSimplifier)
+        G .+= g1!(G1, peps, variables, i, -h*real(Matrix(X)), optimizer::CodeOptimizer, simplifier::CodeSimplifier)
+  
         for nb in neighbors(g, i)
-            G .+= g2!(G, peps, variables, i, nb, -J*reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2), optimizer::CodeOptimizer, simplifier::CodeSimplifier)/2
+            G .+= 0.5*g2!(G2, peps, variables, i, nb, -J*real(reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)), optimizer::CodeOptimizer, simplifier::CodeSimplifier)
         end
     end
     return G
@@ -249,14 +255,32 @@ end
 
 function peps_optimize_ising(peps::PEPS, g, J::Float64, h::Float64, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
     params = variables(peps)
+   
     f_closure_ising(params) =  f_ising(peps, params,g,J,h, optimizer, simplifier)
     g_closure_ising!(G, params) = g_ising!(G, peps, params,g,J,h, optimizer, simplifier)
-    result = IsoPEPS.optimize(f_closure_ising, params, IsoPEPS.LBFGS(), Optim.Options(g_tol = 1e-6))
+    result = IsoPEPS.optimize(f_closure_ising, g_closure_ising!, params, IsoPEPS.LBFGS())
     @show result
     return result.minimum
 end
 
 
+# use AD
+
+"""
+function ChainRulesCore.rrule(::typeof(einsum), code::EinCode, @nospecialize(xs), size_dict)
+    y = einsum(code, xs, size_dict)
+    function einsum_pullback(dy)
+        dy = convert(typeof(y), dy)  # for filled array/cuarray et al.
+        dxs = ChainRulesCore.@thunk ntuple(i -> einsum_grad(getixs(code), xs, getiy(code), size_dict, conj(dy), i), length(xs))
+        return (NoTangent(), NoTangent(), dxs, NoTangent())
+    end
+    einsum_pullback(::NoTangent) = (NoTangent(), NoTangent(), NoTangent(), NoTangent())
+    return y, einsum_pullback
+end
+
+
+Mooncake.@from_rrule Mooncake.DefaultCtx Tuple{typeof(f_ising), Float64}
+"""
 
 
 

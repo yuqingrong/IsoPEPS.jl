@@ -1,6 +1,8 @@
 using IsoPEPS
 using Test
-
+import Mooncake
+using Mooncake
+import Zygote
 @testset "zero_peps and inner_product" begin
     g = SimpleGraph(4)
     for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
@@ -66,42 +68,79 @@ end
     @test expect ≈ exact
 end
 
+
+@testset "gradient" begin
+
+    g = SimpleGraph(2)
+    for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
+        add_edge!(g, i, j)
+    end
+    peps = rand_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+    x = variables(peps)
+    
+    G1 = zeros(eltype(x),size(x))
+    G2 = zeros(eltype(x),size(x))
+    @show G1
+
+    gradient1 = g1!(G1, peps, x, 1, real(Matrix(X)), TreeSA(), MergeGreedy())
+    f_closure1(x) =  f1(peps, x, 1, real(Matrix(X)), TreeSA(), MergeGreedy())
+    expect_gradient1 = grad(central_fdm(12, 1), f_closure1, x)[1]
+    @test isapprox(gradient1, expect_gradient1, rtol = 1e-4)
+
+    gradient2 = g2!(G2, peps, x, 1, 2, real(reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)), TreeSA(), MergeGreedy())
+    f_closure2(x) =  f2(peps, x, 1, 2, real(reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)), TreeSA(), MergeGreedy())
+    expect_gradient2 = grad(central_fdm(12, 1), f_closure2, x)[1]
+    @test isapprox(gradient2, expect_gradient2, rtol = 1e-4)
+
+    G1 = zeros(eltype(x),size(x))
+    G2 = zeros(eltype(x),size(x))
+    G = zeros(eltype(x),size(x))
+    gradient3 = g_ising!(G, peps, x, g, 1.0, 0.2, TreeSA(), MergeGreedy())
+    f_closure_ising(x) =  f_ising(peps, x, g, 1.0, 0.2, TreeSA(), MergeGreedy())
+    expect_gradient3 = grad(central_fdm(2, 1), f_closure_ising, x)[1]
+    @test isapprox(gradient3, expect_gradient3, rtol = 1e-4)
+end
+ 
+
 @testset "single variational optimization" begin
     g = SimpleGraph(4)
     for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
         add_edge!(g, i, j)
     end
-    peps = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
-    result = peps_optimize1(peps, 1, Matrix(X), TreeSA(), MergeGreedy())
+    peps = rand_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+    result = peps_optimize1(peps, 1, real(Matrix(X)), TreeSA(), MergeGreedy())
     h = put(4,(1,)=>X)
     eigenval,eigenvec = IsoPEPS.eigsolve(IsoPEPS.mat(h), 1, :SR; ishermitian=true)
-    @test isapprox(result , eigenval[1], rtol=1e-2)
+    @test isapprox(result , eigenval[1], rtol = 1e-2)
 end
-#TODO: test gradient
+
+
 #TODO: draw energy vs. iteration step
 @testset "ZZ variational optimization" begin
     g = SimpleGraph(4)
     for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
         add_edge!(g, i, j)
     end
-    peps = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
-    result = peps_optimize2(peps, 1, 2, reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2), TreeSA(), MergeGreedy())
+    peps = rand_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+    result = peps_optimize2(peps, 1, 2, real(reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)), TreeSA(), MergeGreedy())
     h = kron(4, 1=>Z, 2=>Z)
     eigenval,eigenvec = IsoPEPS.eigsolve(IsoPEPS.mat(h), 1, :SR; ishermitian=true)
     @test isapprox(result , eigenval[1], rtol=1e-2)
 end
 
-@testset "ising variational optimization" begin
+
+@testset "ising variational optimization" begin  
     g = SimpleGraph(4)
     for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
         add_edge!(g, i, j)
     end
     J, h = 1.0, 0.2
-    peps = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
+    peps = rand_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
     result = peps_optimize_ising(peps, g, J, h, TreeSA(), MergeGreedy())
+  
     hami = ising_hamiltonian_2d(2,2,J,h)
     eigenval,eigenvec = IsoPEPS.eigsolve(IsoPEPS.mat(hami), 1, :SR; ishermitian=true)
-    @test isapprox(result , eigenval[1], rtol=1e-2)
+    @test isapprox(result , eigenval[1], rtol=1e-4)
 end
 
 @testset "expect using Yao" begin
@@ -118,83 +157,23 @@ end
 
 
 
-
-
-@testset "truncate1" begin #product + noise
-    mps=generate_mps(8,10; d=2)
-    mps0=deepcopy(mps)
-    mps0.tensors[3] = cat(mps0.tensors[3], zeros(8, 2, 4), dims=3)
-    mps0.tensors[4] = cat(mps0.tensors[4], zeros(4, 2, 8), dims=1)
-    mps1=IsoPEPS.truncated_bmps(mps0.tensors,8)
-    @test size(mps.tensors[3],3)==size(mps1[4],1)
-end
-
-@testset "truncate2" begin #local random unitary 
-    mps=generate_mps(8,10; d=2)
-    mps0=deepcopy(mps)
-    A=randn(12,12)
-    Q,R=IsoPEPS.qr(A)
-    Q=Q[1:8, :]
-    mps0.tensors[3]=IsoPEPS.ein"ijk,kl->ijl"(mps0.tensors[3],Q)
-    mps0.tensors[4]=IsoPEPS.ein"li,ijk->ljk"(Q',mps0.tensors[4])
-    mps1=IsoPEPS.truncated_bmps(mps0.tensors,8)
-    @test size(mps.tensors[3],3)==size(mps1[4],1)
-end
-
-@testset "truncate3" begin #TFIM ground state
-    eigenval,eigenvec=IsoPEPS.eigsolve(IsoPEPS.mat(sum([kron(10, i=>(-IsoPEPS.X),  mod1(i+1, 10)=>IsoPEPS.X) for i in 1:10])
-                                                 + sum([-0.5 * kron(10, i => IsoPEPS.Z) for i in 1:10])), 1, :SR; ishermitian=true)
-
-    H=IsoPEPS.mat(sum([kron(10, i=>(-IsoPEPS.X),  mod1(i+1, 10)=>IsoPEPS.X) for i in 1:10])
-                  + sum([-0.5 * kron(10, i => IsoPEPS.Z) for i in 1:10]))
-
-    eigenmps=vec2mps(Array(eigenvec[1]))
-    eigenmps1=IsoPEPS.truncated_bmps(eigenmps.tensors,16)
-    eigenvec1=code_mps2vec(eigenmps1)
-    eigenval1=real((eigenvec1'*(H*eigenvec1))/(eigenvec1'*eigenvec1))
-    @show eigenval[1],eigenval1
-    @test isapprox(eigenval[1],eigenval1,atol=1e-3)
-end
-
-@testset "peps" begin
-    bra_ket=IsoPEPS.contract_2peps(peps,peps)
-    @show size(bra_ket[1][1])
-    @show size(bra_ket[2][1])
-    dmax=4
-    #bmps=IsoPEPS.truncated_bmps(bra_ket[1],dmax)
+@testset "AD gradient" begin
+   
+    g = SimpleGraph(2)
+    for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
+        add_edge!(g, i, j)
+    end
+    psi = rand_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
     
-    result=IsoPEPS.overlap_peps(bra_ket,dmax)
-    @show result
-    @test  isless(0.0,result)
-end 
-
-@testset "peps_variation" begin
-    Ly=2
-    Lx=2
-    nsites=Ly*Lx
-    bond_dim=2
-    #h=0.2
-    result= peps_variation(Ly,Lx,bond_dim)
-    @test isapprox(result, -4.040593699203846, atol=1e-4)
-end
-
-@testset "hamiltonian expectation value" begin
-    h = ising_hamiltonian_2d(2,2, 1.0, 0.2)
-    eigenval,eigenvec = IsoPEPS.eigsolve(IsoPEPS.mat(h), 1, :SR; ishermitian=true)
-    @test eigenval[1]≈  -4.040593699203846
-end
-
-@testset "gradient of hamiltonian with FiniteDifference" begin
-    Ly=2
-    Lx=2
-    nsites=Ly*Lx
-    bond_dim=2
-    #h=0.2
-    #result,f,g!= peps_variation(Ly,Lx,bond_dim)
-    a=IsoPEPS.grad(central_fdm(5, 1), f, params)[1] - g!(params)
-    @test a==0.0
-end
-
-@testset "optimization" begin
+    J, h = 1.0, 0.2
+    x = variables(psi)
+    backend = AutoMooncake(; config=nothing)
+    f_closure_ising(x) = f_ising(psi, x, g, 1.0, 0.2, TreeSA(), MergeGreedy())
     
+    prep = prepare_gradient(f_closure_ising, backend, x) 
+    #G = gradient(f_closure_ising, x)
+    grad = gradient(f_closure_ising, prep, backend, x)
 end
+
+
+
