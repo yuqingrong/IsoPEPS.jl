@@ -1,8 +1,8 @@
 using IsoPEPS
 using Test
 import Mooncake
-using Mooncake
-import Zygote
+import ForwardDiff
+import DifferentiationInterface
 @testset "zero_peps and inner_product" begin
     g = SimpleGraph(4)
     for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
@@ -128,7 +128,6 @@ end
     @test isapprox(result , eigenval[1], rtol=1e-2)
 end
 
-
 @testset "ising variational optimization" begin  
     g = SimpleGraph(4)
     for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
@@ -155,8 +154,6 @@ end
     @test eigenval2[1] ≈ -4.040593699203847
 end
 
-
-
 @testset "AD gradient" begin
    
     g = SimpleGraph(2)
@@ -168,12 +165,13 @@ end
     J, h = 1.0, 0.2
     x = variables(psi)
     backend = AutoMooncake(; config=nothing)
-    f_closure_ising(x) = f_ising(psi, x, g, 1.0, 0.2, TreeSA(), MergeGreedy())
-    
+    f_closure_ising(x) = f_ising(IsoPEPS.convert_type(eltype(x), psi), x, g, 1.0, 0.2, TreeSA(), MergeGreedy())
+    #grad = ForwardDiff.gradient(f_closure_ising, x)
     prep = prepare_gradient(f_closure_ising, backend, x) 
-    #G = gradient(f_closure_ising, x)
     grad = gradient(f_closure_ising, prep, backend, x)
 end
 
-
+using OMEinsum
+Mooncake.tangent_type(::Type{<:AbstractEinsum}) = Mooncake.NoTangent
+Mooncake.tangent_type(::Type{<:Vector{<:AbstractEinsum}}) = Mooncake.NoTangent
 

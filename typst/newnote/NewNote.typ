@@ -97,6 +97,10 @@ As forward mode, reveerse mode also has Jacobian after m evaluations.
 === conclusion
 
 $f: RR^n -> RR^m$. If $n>m$, the reverse mode is more efficient, elseif $m>n$, the forward mode is more efficient.
+
+=== code
+
+
 == Matrix computation
 === Matrix/Vector operations
 + pointwise multiplication: $C=A. *B =>c_(i j)=a_(i j)*b_(i j)$
@@ -531,6 +535,25 @@ end
 + $ZZ_2^T$ symmetry (Time-Reversal Symmetry in $ZZ_2$ Systems):
 
   $T X T^(-1) = X$, $T Y T^(-1) = Y$, $T Z T^(-1) = Z$
+
+== Efficient Simulation of Dynamics in Two-Dimensional Quantum Spin Systems with Isometric Tensor Networks @PhysRevB.106.245102
+
++ *isometry is a linear map*:  
+
+  $W: V_s ->V_l$
+
+  $W^dagger W = II, W W^dagger = P_(V_s)$, $P_(V_s)$ is projection operator of $V_s "to" V_l$.
+
++ *$LL_2$ norm*: Euclidean length of the vector
+
+ $v = (v_1, v_2, ..., v_n)$ in $RR^n "or" CC^n$, 
+
+ $||v||_2 = sqrt(|v_1|^2 + |v_2|^2 + ... + |v_n|^2)$
+ 
++ *norm tensor $N_l$*:
+
+  The contraction $angle.l psi|psi angle.r$ but leave out tensor at site $l$. Because of the isometric condition, $N_l = II_(partial V)$.
+
 #bibliography("bibliography.bib")
 
 

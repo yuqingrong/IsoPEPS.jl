@@ -1,7 +1,7 @@
 const OrderedEinCode{LT} = Union{NestedEinsum{LT}, SlicedEinsum{LT,<:NestedEinsum{LT}}}
+abstract type PEPS{T,NF,LT} <:AbstractRegister{NF} end
 
-
-struct PEPS{T,NF,LT<:Union{Int,Char},Ein<:OrderedEinCode} 
+struct GeneralPEPS{T,NF,LT<:Union{Int,Char},Ein<:OrderedEinCode} 
     physical_labels::Vector{LT}
     virtual_labels::Vector{LT}
 
@@ -16,7 +16,7 @@ struct PEPS{T,NF,LT<:Union{Int,Char},Ein<:OrderedEinCode}
     D::Int
 end
 
-function PEPS{NF}(
+function GeneralPEPS{NF}(
     physical_labels::Vector{LT},   
     virtual_labels::Vector{LT},
 
@@ -29,17 +29,30 @@ function PEPS{NF}(
 
     D::Int
     ) where {LT,T,NF,Ein}
-    PEPS{T,NF,LT,Ein}(physical_labels, virtual_labels, vertex_labels, vertex_tensors, max_index, code_statetensor, code_inner_product, D)
+    GeneralPEPS{T,NF,LT,Ein}(physical_labels, virtual_labels, vertex_labels, vertex_tensors, max_index, code_statetensor, code_inner_product, D)
 end
 
-function PEPS{NF}(vertex_labels::AbstractVector{<:AbstractVector{LT}}, vertex_tensors::Vector{<:AbstractArray{T}}, virtual_labels::AbstractVector{LT}, D::Int, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where {LT,T,NF}
+function GeneralPEPS{NF}(vertex_labels::AbstractVector{<:AbstractVector{LT}}, vertex_tensors::Vector{<:AbstractArray{T}}, virtual_labels::AbstractVector{LT}, D::Int, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where {LT,T,NF}
     physical_labels = [vl[findall(∉(virtual_labels), vl)[]] for vl in vertex_labels]
                                                                             
     max_ind = max(maximum(physical_labels), maximum(virtual_labels))
 
     # optimal contraction orders
     optcode_statetensor, optcode_inner_product = _optimized_code(vertex_labels, physical_labels, virtual_labels, max_ind, NF, D, optimizer, simplifier )
-    PEPS{NF}(physical_labels, virtual_labels, vertex_labels, vertex_tensors, max_ind, optcode_statetensor, optcode_inner_product, D)
+    GeneralPEPS{NF}(physical_labels, virtual_labels, vertex_labels, vertex_tensors, max_ind, optcode_statetensor, optcode_inner_product, D)
+end
+
+function convert_type(::Type{T}, peps::GeneralPEPS{T2, NF}) where {T, T2, NF}
+    p = GeneralPEPS{NF}(peps.physical_labels,
+            peps.virtual_labels,
+            peps.vertex_labels,
+            map(t -> T.(t), peps.vertex_tensors),
+            peps.max_index,
+            peps.code_statetensor,
+            peps.code_inner_product,
+            peps.D)
+    @show typeof(p)
+    return p
 end
 
 function _optimized_code(alllabels, physical_labels::AbstractVector{LT}, virtual_labels, max_ind, nflavor, D, optimizer, simplifier) where LT
@@ -49,10 +62,9 @@ function _optimized_code(alllabels, physical_labels::AbstractVector{LT}, virtual
     rep = [l=>max_ind+i for (i, l) in enumerate(virtual_labels)]  # max_ind+i: for virtual_labels of the other peps
     merge!(size_dict, Dict([l.second=>D for l in rep]))
     code_inner_product = EinCode([alllabels..., [replace(l, rep...) for l in alllabels]...], LT[])
-    @show code_inner_product,typeof([alllabels..., [replace(l, rep...) for l in alllabels]...])
+    
     optcode_inner_product = optimize_code(code_inner_product, size_dict, optimizer, simplifier)
 
-    @show optcode_inner_product
     return optcode_statetensor, optcode_inner_product
 end
 
@@ -65,8 +77,8 @@ function Base.conj(peps::PEPS)
     replace_tensors(peps, conj.(alltensors(peps)))
 end
 
-function replace_tensors(peps::PEPS{T,NF}, tensors) where {T,NF}
-    PEPS{NF}(peps.physical_labels, peps.virtual_labels,
+function replace_tensors(peps::GeneralPEPS{T,NF}, tensors) where {T,NF}
+    GeneralPEPS{NF}(peps.physical_labels, peps.virtual_labels,
         peps.vertex_labels, tensors, peps.max_index,
         peps.code_statetensor, peps.code_inner_product, peps.D
     )
@@ -84,14 +96,14 @@ function zero_peps(::Type{T}, g::SimpleGraph, D::Int, nflavor::Int, optimizer::C
         t[1] = 1  # normalization?
         push!(vertex_tensors, t)
     end
-    PEPS{nflavor}(vertex_labels, vertex_tensors, virtual_labels, D, optimizer, simplifier)
+    GeneralPEPS{nflavor}(vertex_labels, vertex_tensors, virtual_labels, D, optimizer, simplifier)
 end
 
 function rand_peps(::Type{T}, g::SimpleGraph, D::Int, nflavor::Int, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where T
     randn!(zero_peps(T, g, D, nflavor, optimizer, simplifier))
 end
 
-function Random.randn!(peps::PEPS)    
+function Random.randn!(peps::GeneralPEPS)    
     for t in alltensors(peps)
         randn!(t)
     end
@@ -104,11 +116,11 @@ function statetensor(peps::PEPS)
 end
 Yao.statevec(peps::PEPS) = vec(peps)
 
-alllabels(s::PEPS) = s.vertex_labels
-alltensors(s::PEPS) = s.vertex_tensors
+alllabels(s::GeneralPEPS) = s.vertex_labels
+alltensors(s::GeneralPEPS) = s.vertex_tensors
 
 
-function apply_onsite!(peps::PEPS{T,NF,LT}, i, mat::AbstractMatrix) where {T,NF,LT}
+function apply_onsite!(peps::GeneralPEPS{T,NF,LT}, i, mat::AbstractMatrix) where {T,NF,LT}
     @assert size(mat, 1) == size(mat, 2)
     ti = peps.vertex_tensors[i]
     old = getvlabel(peps, i)
@@ -117,7 +129,7 @@ function apply_onsite!(peps::PEPS{T,NF,LT}, i, mat::AbstractMatrix) where {T,NF,
     return peps                                     # if mlabel[2] in old, replace it with mlabel[1]
 end
 
-function single_sandwich_code(peps::PEPS{T,NF,LT}, i, mat::AbstractMatrix, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where {T,NF,LT}
+function single_sandwich_code(peps::GeneralPEPS{T,NF,LT}, i, mat::AbstractMatrix, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where {T,NF,LT}
     @assert size(mat, 1) == size(mat, 2)
     nflavor, D = NF, peps.D # TODO: Need to be modified
     size_dict = Dict([[l=>nflavor for l in peps.physical_labels]..., [l=>D for l in peps.virtual_labels]...])
@@ -128,7 +140,7 @@ function single_sandwich_code(peps::PEPS{T,NF,LT}, i, mat::AbstractMatrix, optim
     single_sandwich_code=EinCode([peps.vertex_labels..., mlabel, [replace(l, rep...) for l in peps.vertex_labels]...], LT[])
     optcode_single_sandwich = optimize_code(single_sandwich_code, size_dict, optimizer, simplifier)
 end
-function single_sandwich(p1::PEPS, p2::PEPS, i, mat::AbstractMatrix, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
+function single_sandwich(p1::GeneralPEPS{T}, p2::GeneralPEPS{T}, i, mat::AbstractMatrix{T}, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where T
     p1c = conj(p1)
     code = single_sandwich_code(p1, i, mat, optimizer,simplifier) 
     cost, gradient = OMEinsum.cost_and_gradient(code, (p1c.vertex_tensors..., mat, p2.vertex_tensors...))
@@ -136,7 +148,7 @@ function single_sandwich(p1::PEPS, p2::PEPS, i, mat::AbstractMatrix, optimizer::
 end 
 
 
-function two_sandwich_code(peps::PEPS{T,NF,LT}, i, j, mat::AbstractArray, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where {T,NF,LT}
+function two_sandwich_code(peps::GeneralPEPS{T,NF,LT}, i, j, mat::AbstractArray, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where {T,NF,LT}
     @assert size(mat, 1) == size(mat, 2)
     nflavor, D = NF, peps.D
     size_dict = Dict([[l=>nflavor for l in peps.physical_labels]..., [l=>D for l in peps.virtual_labels]...])
@@ -165,21 +177,23 @@ newlabel(peps::PEPS, offset) = peps.max_index + offset  # create a new label
 
 # variational optimization begin
 
-variables(peps::PEPS) = vcat(vec.(alltensors(peps))...) # peps->vec
-function load_variables!(peps::PEPS, variables)  # vec->peps
+variables(peps::GeneralPEPS) = vcat(vec.(alltensors(peps))...) # peps->vec
+function load_variables!(peps::GeneralPEPS{T}, variables::AbstractVector{T}) where T  # vec->peps
     k = 0
     for t in alltensors(peps)
+        # t .*= zero(eltype(variables))
         t .= reshape(variables[k+1:k+length(t)], size(t))
         k += length(t)
     end
     return peps
 end
 
-function f1(peps::PEPS, variables, i, mat::AbstractArray, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
+function f1(peps::PEPS{T}, variables::AbstractVector{T}, i, mat::AbstractArray{T}, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where T
     load_variables!(peps, variables)
     energy, _ = single_sandwich(peps, peps, i, mat, optimizer, simplifier)
     norm = inner_product(peps, peps)
-    return real(energy/norm[])
+    # return real(energy / norm[]) 
+    return (energy + energy') / 2 / norm[]
 end
 
 function g1!(G1, peps::PEPS, variables, i, mat::AbstractArray, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
@@ -205,7 +219,8 @@ function f2(peps::PEPS, variables, i, j, mat::AbstractArray, optimizer::CodeOpti
     load_variables!(peps, variables)
     energy, _ = two_sandwich(peps, peps, i, j, mat, optimizer, simplifier)
     norm = inner_product(peps, peps)
-    return real(energy/norm[])
+    #return real(energy / norm[]) 
+    return (energy + energy') / 2 / norm[]
 end
 
 function g2!(G2, peps::PEPS, variables, i, j, mat::AbstractArray, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
@@ -227,27 +242,27 @@ function peps_optimize2(peps::PEPS, i, j, mat::AbstractArray, optimizer::CodeOpt
     return result.minimum
 end
 
-function f_ising(peps::PEPS,  variables, g, J::Float64, h::Float64, optimizer::CodeOptimizer, simplifier::CodeSimplifier )
+function f_ising(peps::PEPS{T},  variables::AbstractVector{T}, g, J::Float64, h::Float64, optimizer::CodeOptimizer, simplifier::CodeSimplifier ) where {T}
     energy = 0  
     for i in peps.physical_labels
-        energy+=f1(peps, variables, i, -h*real(Matrix(X)), optimizer, simplifier)
+        energy+=f1(peps, variables, i, -h*Matrix{T}(X), optimizer, simplifier)
         
         for nb in neighbors(g, i)
-            energy+=0.5*f2(peps, variables, i, nb, -J*real(reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)), optimizer, simplifier)
+            energy+=0.5*f2(peps, variables, i, nb, -J*reshape(kron(Matrix{T}(Z),Matrix{T}(Z)),2,2,2,2), optimizer, simplifier)
         end
     end
     return energy
 end
 
-function g_ising!(G, peps::PEPS, variables, g, J::Float64, h::Float64, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
+function g_ising!(G, peps::PEPS{T}, variables, g, J::Float64, h::Float64, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
     G1 = zeros(eltype(variables),size(variables))
     G2 = zeros(eltype(variables),size(variables))
     fill!(G, 0)
     for i in peps.physical_labels
-        G .+= g1!(G1, peps, variables, i, -h*real(Matrix(X)), optimizer::CodeOptimizer, simplifier::CodeSimplifier)
+        G .+= g1!(G1, peps, variables, i, -h*Matrix{T}(X), optimizer::CodeOptimizer, simplifier::CodeSimplifier)
   
         for nb in neighbors(g, i)
-            G .+= 0.5*g2!(G2, peps, variables, i, nb, -J*real(reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)), optimizer::CodeOptimizer, simplifier::CodeSimplifier)
+            G .+= 0.5*g2!(G2, peps, variables, i, nb, -J*reshape(kron(Matrix{T}(Z),Matrix{T}(Z)),2,2,2,2), optimizer::CodeOptimizer, simplifier::CodeSimplifier)
         end
     end
     return G
@@ -265,8 +280,7 @@ end
 
 
 # use AD
-
-"""
+#=
 function ChainRulesCore.rrule(::typeof(einsum), code::EinCode, @nospecialize(xs), size_dict)
     y = einsum(code, xs, size_dict)
     function einsum_pullback(dy)
@@ -279,8 +293,8 @@ function ChainRulesCore.rrule(::typeof(einsum), code::EinCode, @nospecialize(xs)
 end
 
 
-Mooncake.@from_rrule Mooncake.DefaultCtx Tuple{typeof(f_ising), Float64}
-"""
+Mooncake.@from_rrule Mooncake.DefaultCtx Tuple{typeof(f_closure_ising), Float64}
+=#
 
 
 
@@ -296,23 +310,7 @@ Mooncake.@from_rrule Mooncake.DefaultCtx Tuple{typeof(f_ising), Float64}
 
 
 
-function generate_peps(::Type{T},bond_dim::Int,Ly::Int,Lx::Int;d::Int=2) where T
-    tensors=Vector{Vector{AbstractArray{T, 5}}}(undef,Ly)
-    for y in 1: Ly
-        row = Vector{AbstractArray{T, 5}}(undef, Lx)
-        for x in 1: Lx
-            left_dim=x==1 ? 1 : bond_dim
-            right_dim=x==Lx ? 1 : bond_dim
-            up_dim=y==1 ? 1 : bond_dim
-            down_dim=y==Ly ? 1 : bond_dim
-            row[x]=randn(T,left_dim,up_dim,down_dim,right_dim,d)
-        end
-        tensors[y]=row
-    end
 
-    return PEPS(tensors)
-end
-generate_peps(bond_dim::Int,Ly::Int,Lx::Int; d::Int=2) = generate_peps(Float64, bond_dim,Ly,Lx;d)
 
 function truncated_bmps(bmps,dmax::Int)
     for i in 1:(length(bmps)-1)        

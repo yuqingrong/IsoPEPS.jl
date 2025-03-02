@@ -15,12 +15,12 @@ using Optim
 import Optim: optimize
 using FiniteDiff, FiniteDifferences
 using SparseArrays,Arpack
-using Graphs
+using Graphs, GraphPlot
 using Graphs: SimpleEdge
 using DifferentiationInterface
 import Mooncake
 using ChainRulesCore
-using Zygote
+
 export Z, X, statevec, vec
 export ising_hamiltonian, ising_hamiltonian_2d,ed_groundstate
 export itime_groundstate!, lanczos
@@ -39,7 +39,7 @@ export ishermitian
 export sparse
 export grad, central_fdm
 export dot
-
+export IsometricPEPS, rand_isometricpeps, mose_move_right!,mose_move_right_step!,peps_fidelity
 include("LanczosAlgorithm.jl")
 include("KrylovkitYao.jl")
 include("ImTebd.jl")
@@ -48,5 +48,5 @@ include("mps.jl")
 include("mpo.jl")
 include("mpsandmpo.jl")
 include("peps.jl")
-
+include("isometricpeps.jl")
 end
