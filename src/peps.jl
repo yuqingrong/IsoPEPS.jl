@@ -1,7 +1,7 @@
 const OrderedEinCode{LT} = Union{NestedEinsum{LT}, SlicedEinsum{LT,<:NestedEinsum{LT}}}
 abstract type PEPS{T,NF,LT} <:AbstractRegister{NF} end
 
-struct GeneralPEPS{T,NF,LT<:Union{Int,Char},Ein<:OrderedEinCode} 
+struct GeneralPEPS{T,NF,LT<:Union{Int,Char},Ein<:OrderedEinCode} <: PEPS{T,NF,LT}
     physical_labels::Vector{LT}
     virtual_labels::Vector{LT}
 
@@ -84,7 +84,7 @@ function replace_tensors(peps::GeneralPEPS{T,NF}, tensors) where {T,NF}
     )
 end
 
-function zero_peps(::Type{T}, g::SimpleGraph, D::Int, nflavor::Int, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where T
+function zero_peps(::Type{T}, g, D::Int, nflavor::Int, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where T
     virtual_labels = collect(nv(g)+1:nv(g)+ne(g))  # nv(g): number of vertices; ne(g): number of edges
     vertex_labels = Vector{Int}[] 
     vertex_tensors = Array{T}[]
@@ -99,7 +99,7 @@ function zero_peps(::Type{T}, g::SimpleGraph, D::Int, nflavor::Int, optimizer::C
     GeneralPEPS{nflavor}(vertex_labels, vertex_tensors, virtual_labels, D, optimizer, simplifier)
 end
 
-function rand_peps(::Type{T}, g::SimpleGraph, D::Int, nflavor::Int, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where T
+function rand_peps(::Type{T}, g, D::Int, nflavor::Int, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where T
     randn!(zero_peps(T, g, D, nflavor, optimizer, simplifier))
 end
 

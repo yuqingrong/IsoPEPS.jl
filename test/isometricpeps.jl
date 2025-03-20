@@ -28,3 +28,8 @@ end
     p1 = mose_move_right!(copy(peps))
     @test peps_fidelity(p1, peps) ≈ 1
 end 
+
+
+@testset "isometric_condition" begin
+
+end

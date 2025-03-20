@@ -1,5 +1,5 @@
 
-struct IsometricPEPS{T} 
+struct IsometricPEPS{T} <: PEPS{T,2,Int}
 
     vertex_tensors::Vector{Vector{AbstractArray{T}}}
     col::Int
@@ -15,6 +15,9 @@ struct IsometricPEPS{T}
     end
 end
 
+function statetensor(peps::IsometricPEPS)
+    return reduce(vcat, peps.vertex_tensors[1])
+end
 
 
 function rand_isometricpeps(::Type{T}, bond_dim::Int, Ly::Int, Lx::Int; d::Int=2) where {T}

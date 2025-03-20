@@ -330,7 +330,53 @@ then we set the points as: $omega^0, omega^1, omega^2, ..., omega^n$, we can eas
 
     $r_2 - 2*r_1$, so that it should add $2*r_1$ to become $A$.
 == Lie Algebra and Lie group
+=== group introduction: 
++ *definition*: a set of elements with a binary operation that satisfies closure, associativity, identity, and invertibility.
+  - *closure*: for any $a,b in G$, $a*b in G$
+  - *associativity*: for any $a,b,c in G$, $(a*b)*c = a*(b*c)$
+  - *identity*: there exists an unique element $e in G$, such that for any $a in G$, $e*a = a*e = a$
+  - *invertibility*: for any $a in G$, there exists an unique element $b in G$, such that $a*b = b*a = e$
++ *example*:
+  - *abelian group*: a group that satisfies commutativity. $a*b = b*a$
+  - *non-abelian group*: a group that does not satisfy commutativity. $a*b != b*a$
+  - *general linear group*: $G L(n,CC) = {n times n "invertible matrices" | CC}$, non-abelian group except n=1.
+  - *symmetric group*: $S_n = {n! "permutations" | n}$.
+
+    eg: all permutations of set {1,2,3,4}, so there are 4!=24 elements.
+  - *integers mod $n$*: $Z_n = {0,1,2,...,n-1}$ 余数
+
++ *subgroup*: a subset of a group that is also a group. $H subset G$
+
+  properties:
+  - same identity as the $G$.
+  - same product operation as the $G$.
+  - inverse: $h^(-1) in H$
+  - closure: $h_1 * h_2 in H$
+ 
+ center of a group: $Z(G) = {g in G | g*h = h*g, forall h in G}$ (is subgroup of $G$)
+ 
+ direct product of groups: $G times H = {(g,h) | g in G, h in H}$, operation is $(g_1,h_1) * (g_2,h_2) = (g_1 * g_2, h_1 * h_2)$
+
++ *Homomorphism*: $G$ and $H$ are groups, $phi: G -> H$ is a homomorphism if $phi(g * h) = phi(g) * phi(h)$
+
+  kernel: $ker(phi) = {g in G | phi(g) = e_H}$
+
+  *Isomorphism*: $G$ and $H$ are groups, $phi: G -> H$ is an isomorphism if $phi$ is a homomorphism and one-to-one and on-to. 
+
++ *Quotient group*: $G/H = {g H | g in G}$
+
+  properties: $(g_1 H)(g_2 H) = (g_1 g_2)H$
+
+  eg.: $H=3Z$ in $Z$, $G/H = {0+3Z, 1+3Z, 2+3Z...}$
+
+       $(0+3Z)+(1+3Z)=(0+1)+3Z$
+       
+
+     
+
 === general concepts
+
+
 + Lie group:
 
   a  Lie group is a smooth manifold that is also a group.
@@ -342,7 +388,14 @@ then we set the points as: $omega^0, omega^1, omega^2, ..., omega^n$, we can eas
   algebra with "Lie bracket" $[ , ]$, $[X,Y] = X Y - Y X$
   
   - $g l(n;CC)$: general linear algebra. ${n times n "matrices" | CC}$
-== Quantum mechanics
+== Quantum computation and quantum information
++ measurement basis:
+
+  It comes from the Bloch sphere. We know that the Z operator has 2 eigenvectors: $|0 angle.r$ and $|1 angle.r$, X operator has 2 eigenvectors: $|+ angle.r = 1/sqrt(2)(|0 angle.r + |1 angle.r)$ and $|- angle.r = 1/sqrt(2)(|0 angle.r - |1 angle.r)$, Y operator has 2 eigenvectors: $|i angle.r = 1/sqrt(2)(|0 angle.r + i|1 angle.r)$ and $|-i angle.r = 1/sqrt(2)(|0 angle.r - i|1 angle.r)$. And they all can be expressed as a point on the Bloch sphere. Z,X,Y operators has coresponding x-axis, y-axis, z-axis on the Bloch sphere. 
+
+  Therefore, for a given state $|psi angle.r$, we can break it into one of the basis and do measurement (get the possibility of the result). For example, $|psi angle.r = 1/sqrt(2)(|+ angle.r + |- angle.r)$, the result of getting $|+ angle.r$ is $1/2$, and the result of getting $|- angle.r$ is also $1/2$.
+  
+  
 === transfer matrix
  $psi_(n+1) = T psi_ n$, $T$ is transfer matrix.
 
@@ -554,19 +607,120 @@ end
 
   The contraction $angle.l psi|psi angle.r$ but leave out tensor at site $l$. Because of the isometric condition, $N_l = II_(partial V)$.
 
+== Variational Quantum Eigensolver with Fewer Qubits @Liu_2019
+
++ *Jordan-Wigner transformation*: 
+
+  Map Pauli operators to Fermion operators (Fermion generation operator and annihilation operator). $sigma^x_j, sigma^y_j, sigma^z_j -> c_j, c_j^dagger$
+
+  $sigma^+_j = 1/2 (sigma^x_j + i sigma^y_j)$, $sigma^-_j = 1/2 (sigma^x_j - i sigma^y_j)$
+
+  $c_j = (product_(k=1)^(j-1) sigma^z_k) sigma^-_j$, $c_j^dagger = (product_(k=1)^(j-1) sigma^z_k) sigma^+_j$
+
+  It's a non-local transformation, because $c_j$ depends on $sigma^z_k$ for $k<j$. Besides,
+  ${c_j, c_j^dagger} = 0$, ${c_j, c_j} = 0$, ${c_j^dagger, c_j^dagger} = 0$
+
+  #v(0.5cm)
+  *Second quantization*: a general quantum many-body system, whose Hamiltonian is represented by generation and annihilation operators.
+
+  $H = sum_(j=1)^N c_j^dagger c_j + 1/2 sum_(j,k=1)^N (c_j^dagger c_k + c_k^dagger c_j)$
+
+  $H = sum_(j=1)^N c_j^dagger c_j + 1/2 sum_(j,k=1)^N (c_j^dagger c_k + c_k^dagger c_j)$
+
+  $H = sum_(j=1)^N c_j^dagger c_j + 1/2 sum_(j,k=1)^N (c_j^dagger c_k + c_k^dagger c_j)$
+  
+  #v(0.8cm)
++ *U(1)*:
+  - U(1) group: all complex number
+  - a system has U(1) symmetry means under the transformation $psi -> e^(i theta) psi$, it remain the same.
+  #v(0.3cm)
+  The Heisenberg model has a U(1) symmetry with good quantum number $S_z$. The Hamiltonian and $S_z$ (spin projection along z-axis) is invariant under the transformation $U(theta) = e^(-i theta sigma_i ^z /2)$.
+
+  According to *Baker-Campbell-Hausdorff formula*:
+
+  $e^A B e^(-A) = B + [A,B] + 1/2 [A,[A,B]] + 1/6 [A,[A,[A,B]]] + ...$
+  
+  $U(theta) sigma_i ^x U^(dagger)(theta) = sigma_i ^x cos(theta/2) - sigma_i ^y sin(theta/2)$
+  
+  $U(theta) sigma_i ^y U^(dagger)(theta) = sigma_i ^x sin(theta/2) + sigma_i ^y cos(theta/2)$
+  
+  $U(theta) sigma_i ^z U^(dagger)(theta) = sigma_i ^z$
+  
+  $H =  sigma_i ^x sigma_j^x + sigma_i ^y sigma_j^y + sigma_i ^z sigma_j^z = (sigma_i ^x cos(theta/2) - sigma_i ^y sin(theta/2))(sigma_j ^x cos(theta/2) - sigma_j ^y sin(theta/2)) + (sigma_i ^x sin(theta/2) + sigma_i ^y cos(theta/2))(sigma_j ^x sin(theta/2) + sigma_j ^y cos(theta/2)) + sigma_i ^z sigma_j^z = sigma_i ^x sigma_j^x + sigma_i ^y sigma_j^y + sigma_i ^z sigma_j^z$
+  
+  So $H$ is invariant under the transformation $U(theta)$. And $[H,S_z] = 0$,
+  $(d O)/(d t) = -i[H,O] => (d S_z)/(d t) = 0$, $S_z$ is invariant.
++ *$"SWAP"^alpha$ gate*:
+
+  $alpha = theta/pi$. $alpha = 0$: No swap; $alpha = 1$: Full swap; $alpha in (0,1)$: Partial swap.
+
+  $"SWAP"^alpha = mat(1,0,0,0;0,cos((alpha pi)/2), -i sin((alpha pi)/2),0;0,-i sin((alpha pi)/2),cos((alpha pi)/2),0;0,0,0,1)$
+
++ *SU(2)*:
+  - $S U(2)$ group: 
+  all $2 times 2$ unitary matrices with determinant 1.
+   $U U^dagger = U^dagger U = II$, $det(U) = 1$
+
+  - $S U(2)$ symmetry:
+    $U H U^dagger = H$
+
++ *Abelian symmetry* and *non-Abelian symmetry*:
+  - Abelian symmetry: $g_q g_2 = g_2 g_1$ eg. U(1) $e^(i theta_1) e^(i theta_2) = e^(i theta_2) e^(i theta_1)$
+  - Non-Abelian symmetry: $g_q g_2 != g_2 g_1$ eg. Pauli matrix
+
++ $overline(C N O T(1,a))H(1)X(1)|0 angle.r_1 times.circle |0 angle.r_a = overline(C N O T(1,a))H(1)|1 angle.r_1 times.circle |0 angle.r_a = overline(C N O T(1,a)) 1/sqrt(2)(|0 angle.r_1 - |1 angle.r_1) times.circle |0 angle.r_a = 1/sqrt(2)(|0 angle.r times.circle |1 angle.r_a - |1 angle.r times.circle |0angle.r_a)$
+
+ 
+
+== Quantum circuit learning @Mitarai_2018
+
++ *gradient of expectation value* with respect to a circuit parameter $theta_i$ :
+
+unitary gate: $U(theta) = product_(j=1)^l U_j (theta_j) = U_l (theta_l)...U_1 (theta_1)$, 
+let $U_(j:k) = U_j (theta_j)...U_k (theta_k)$
+
+$U_j (theta) =e^(-i/2 theta P_j) = cos(theta/2)II - i sin(theta/2) P_j$, $P_j$ is a Pauli peoduct, satisfies $P_j^2 = II$, $P_j rho P_j = rho$
+#v(0.5cm)
+$
+U_j (pi/2) rho U_j^dagger (pi/2) = (cos(pi/4)II - i sin(pi/4) P_j) rho (cos(pi/4)II + i sin(pi/4) P_j) = 1/2 (II + i P_j) rho (II - i P_j) = 1/2 (2rho-i[P_j,rho])$
+
+$
+U_j (-pi/2) rho U_j^dagger (-pi/2) = (cos(-pi/4)II - i sin(-pi/4) P_j) rho (cos(-pi/4)II + i sin(-pi/4) P_j) = 1/2 (II - i P_j) rho (II + i P_j) = 1/2 (2rho+i[P_j,rho])$
+
+$=>[P_j,rho] = i[U_j (pi/2) rho U_j^dagger (pi/2) - U_j (-pi/2) rho U_j^dagger (-pi/2)] ...................................................................(1)$
+#v(0.5cm)
+$angle.l B(theta) angle.r = "Tr"(B U_(l:1) rho_(i n) U_(l:1)^dagger) = "Tr"(B U_(l:j) (U_(j-1:1) rho_(i n) U_(j-1:1)^dagger) U_(l:j)^dagger)$
+
+$(partial U_j (theta_j) )/ (partial theta_j) = -i/2 P_j U_j (theta_j)$
+
+$(partial angle.l B angle.r )/ (partial theta_j) = "Tr"(B partial / (partial theta_j) (U_(l:j) [(U_(j-1:1) rho_(i n) U_(j-1:1)^dagger)] U_(l:j)^dagger)) = "Tr" (B U_(l:j+1) (-i/2 P_j U_j) [(U_(j-1:1) rho_(i n) U_(j-1:1)^dagger)] U_(l:j)^dagger) + "Tr" (B U_(l:j) [U_(j-1:1) rho_(i n) U_(j-1:1)^dagger] (-i/2 P_j U_j)^dagger U_(l:j+1)^dagger) = -i/2 "Tr" (B U_(l:j)[P_j, U_(j-1:1) rho_(i n) U_(j-1:1)^dagger] U_(l:j)^dagger) =-i/2 "Tr" (B U_(l:j)[P_j, rho_j] U_(l:j)^dagger) ......................................................................................................(2)$
+#v(0.5cm)
+Substitute (1) into (2):
+
+$(partial angle.l B angle.r) / (partial theta_j) =-i/2 "Tr" (B U_(l:j) [P_j, rho_j] U_(l:j)^dagger) = 1/2 "Tr" [B U_(l:j) (U_j (pi/2) rho_j U_j (pi/2)^dagger) U_(l:j)^dagger] - 1/2 "Tr" [B U_(l:j) (U_j (-pi/2) rho_j U_j (-pi/2)^dagger) U_(l:j)^dagger] = 1/2 (angle.l B(theta_j + pi/2) angle.r - angle.l B(theta_j - pi/2) angle.r) = 1/2 (angle.l B angle.r _j ^+ - angle.l B angle.r _j ^-)$
+
+
+
+
+
+
+
+
+
+
+
 #bibliography("bibliography.bib")
+
 
 
 #show: appendices 
 
 
-= Appendix section
+= Experiences and lessons
 
-#lorem(100)
 
-$E(theta)=(angle.l psi(theta)|h_1|psi(theta) angle.r) / (angle.l psi(theta)|psi(theta) angle.r) + (angle.l psi(theta)|h_2|psi(theta) angle.r) / (angle.l psi(theta)|psi(theta) angle.r) $
-let $A=angle.l psi(theta)|H|psi(theta) angle.r$
-let $B=angle.l psi(theta)|psi(theta) angle.r$
-how to calculate $(partial E)/(partial theta)$?
+$angle.l H angle.r _theta = angle.l psi _theta | H | psi _theta angle.r$
 
-$theta=[theta_1, theta_2, theta_3]$
+$(partial angle.l H angle.r _theta) / (partial theta_i) =?$
+
+
