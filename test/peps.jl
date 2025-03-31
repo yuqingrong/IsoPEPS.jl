@@ -171,6 +171,19 @@ end
     grad = gradient(f_closure_ising, prep, backend, x)
 end
 
+
+@testset "long_range_coherence_peps" begin
+    g = SimpleGraph(4)
+    for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
+        add_edge!(g, i, j)
+    end
+    peps = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
+    corr = long_range_coherence_peps(peps, 2, 3)
+    @show corr
+    #@test long_range_coherence_peps(peps, 1, 2) ≈ 0.0
+end
+
+
 using OMEinsum
 Mooncake.tangent_type(::Type{<:AbstractEinsum}) = Mooncake.NoTangent
 Mooncake.tangent_type(::Type{<:Vector{<:AbstractEinsum}}) = Mooncake.NoTangent

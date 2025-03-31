@@ -372,6 +372,9 @@ then we set the points as: $omega^0, omega^1, omega^2, ..., omega^n$, we can eas
        $(0+3Z)+(1+3Z)=(0+1)+3Z$
        
 
++ *normal matrix*: $A A^*=A^* A$
+
+  Normal matrix such as Hermitian($A^*=A$), skew-Hermitian($A^*=-A$), unitary($A^* = A^(-1)$) can be diagonalized. And it ia possible an orhtogonal basis for $CC^n$ consisting of eigenvectors for $A$.
      
 
 === general concepts

@@ -90,10 +90,10 @@ function zero_peps(::Type{T}, g, D::Int, nflavor::Int, optimizer::CodeOptimizer,
     vertex_tensors = Array{T}[]
     edge_map = Dict(zip(edges(g), virtual_labels))  # edges(g) returns edge between 2 vertices, [(1,2),(2,3)]
     for i=1:nv(g)
-        push!(vertex_labels, [i,[get(edge_map, SimpleEdge(i,nb), get(edge_map,SimpleEdge(nb,i),0)) for nb in neighbors(g, i)]...])  # write physical_labels and the corresponding virtual_labels together.
+        push!(vertex_labels, [i,[get(edge_map, SimpleEdge(i,nb), get(edge_map,SimpleEdge(nb,i),0)) for nb in union(inneighbors(g, i), outneighbors(g, i)) ]...])  # write physical_labels and the corresponding virtual_labels together.
     
         t = zeros(T, nflavor, fill(D, degree(g, i))...)  
-        t[1] = 1  # normalization?
+        t[1] = 1  
         push!(vertex_tensors, t)
     end
     GeneralPEPS{nflavor}(vertex_labels, vertex_tensors, virtual_labels, D, optimizer, simplifier)
@@ -277,6 +277,26 @@ function peps_optimize_ising(peps::PEPS, g, J::Float64, h::Float64, optimizer::C
     @show result
     return result.minimum
 end
+
+function long_range_coherence_peps(peps::GeneralPEPS, i::Int, j::Int)
+    T = eltype(peps.vertex_tensors[1])
+    corr = 0.0
+    norm = inner_product(peps, peps)[]
+    
+    for basis in [Z]
+        Si,_ = single_sandwich(peps, peps, i, Matrix{T}(basis), TreeSA(), MergeGreedy())
+        Sj,_ = single_sandwich(peps, peps, j, Matrix{T}(basis), TreeSA(), MergeGreedy())
+        SiSj,_ = two_sandwich(peps, peps, i, j, reshape(kron(Matrix{T}(basis), Matrix{T}(basis)),2,2,2,2), TreeSA(), MergeGreedy())
+       
+        corr = SiSj/norm #- (Si/norm * Sj/norm) 
+        @show Si/norm, Sj/norm
+        #corr = corr/sqrt((1 - (Si/norm)^2) * (1 - (Sj/norm)^2))   
+    end
+    return abs(corr)
+end
+    
+    
+
 
 
 # use AD
