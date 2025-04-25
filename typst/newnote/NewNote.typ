@@ -26,6 +26,7 @@
 
 This is a note document for the project: IsoPEPS of Rydberg atom arays. It includes basic knowledge (tensor network, matrix computation, Lie Algebra and Lie group, quantum mechanics, quantum computation and quantum information), coding technique of Julia and related paper review.
 
+
 = Basic knowledge
 
 == Tensor network
@@ -263,6 +264,7 @@ $vec(P(x_0), P(x_1), P(x_2), dots.v, P(x_(n-1))) = mat(1, x_0, x_0^2, ..., x_0^(
 needs $n$ points?
 
 $arrow.b$
+
 
 if $P(x)=x^2 =>P(-x)=P(x),  n "points"=>2n "points"$
 

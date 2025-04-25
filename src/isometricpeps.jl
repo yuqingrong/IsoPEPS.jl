@@ -115,3 +115,148 @@ end
 Base.copy(peps::IsometricPEPS) = IsometricPEPS(copy(peps.vertex_tensors), peps.col, peps.row, peps.D)
 
    
+
+
+function isometric_peps(::Type{T}, g, D::Int, nflavor::Int, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where T
+    peps = rand_peps(T, g, D, nflavor, optimizer, simplifier)
+    matrix_dims = []
+  
+    for i in 1:nv(g)
+        tensor = peps.vertex_tensors[i]
+        phys_dim = size(tensor, 1)  # Physical dimension
+        in_dim = prod([D for _ in inneighbors(g, i)])  # Product of incoming bond dimensions
+        out_dim = prod([D for _ in outneighbors(g, i)])  # Product of outgoing bond dimensions
+        
+        n_A = max(in_dim, phys_dim * out_dim)
+      
+        original_size = size(tensor)
+    
+        A = randn(T, n_A, n_A)
+        Q, R = qr(A)
+        Q=collect(Q)
+  
+        if phys_dim * out_dim >= in_dim
+            Q = Q[:, 1:in_dim] 
+        else
+            Q = Q[:, 1:phys_dim*out_dim]
+        end
+        push!(matrix_dims, size(Q))
+        peps.vertex_tensors[i] = reshape(Q, original_size)
+    end
+    
+    return peps, matrix_dims
+end
+
+function isometric_peps_to_unitary(peps::PEPS, g)
+    ugates = deepcopy(peps)
+    
+    for i in 1:nv(g)
+        tensor = peps.vertex_tensors[i]
+
+        phys_dim = size(tensor, 1)  # Physical dimension
+        in_dim = prod([peps.D for _ in inneighbors(g, i)])  # Product of incoming bond dimensions
+        out_dim = prod([peps.D for _ in outneighbors(g, i)])
+
+        ortho_dim = max(phys_dim * out_dim, in_dim)
+    
+        Q = reshape(tensor, ortho_dim, :)
+            
+        remaining = nullspace(Q') # TODO: check if this is correct
+        Q = hcat(Q, remaining)
+        target_size = size(Q)
+
+        dims = [2 for _ in 1:2*Int(log2(ortho_dim))]
+        Q = reshape(Q, dims...)
+        if phys_dim + out_dim - in_dim == 2
+            Q = permutedims(Q, (1, 3, 2, 4))
+        end
+        ugates.vertex_tensors[i] = reshape(Q, target_size...)
+    end
+ 
+    return ugates
+end
+
+
+function vector2point(v::AbstractVector, matrix_dims::Vector)
+    point = []
+    offset = 0
+    for (n, p) in matrix_dims
+        push!(point, reshape(v[offset+1:offset+n*p], n, p))
+        offset += n*p
+    end
+    return point
+end
+
+function vector2point(v::Tuple, matrix_dims::Vector)
+    point = []
+    for (i, (n, p)) in enumerate(matrix_dims)
+        push!(point, reshape(v[(i-1)*n*p+1:i*n*p], n, p))
+    end
+    return point
+end
+
+
+function point2vector(point, matrix_dims)
+    return vcat([vec(p) for p in point]...) 
+end
+
+
+
+
+function isopeps_optimize_ising(peps::PEPS, M::ProductManifold, matrix_dims::Vector, g, J::Float64, h::Float64, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
+    params = variables(peps)
+    p0 = RecursiveArrayTools.ArrayPartition(Tuple(vector2point(params, matrix_dims))...)
+    #G = similar(params)
+    energy = 0.0
+    @assert is_point(M, p0)
+    
+    function f_closure_ising(M,p0) 
+        point_tuple = Tuple(p0.x)
+        x = point2vector(point_tuple, matrix_dims)
+        #energy = f2(peps, x, 1, 2, reshape(kron(Matrix(Yao.Z),Matrix(Yao.Z)),2,2,2,2),optimizer, simplifier)
+        #energy = f1(peps, x, 1, -0.2*Matrix(Yao.X),optimizer, simplifier)+f1(peps, x, 2, -0.2*Matrix(Yao.X),optimizer, simplifier)+f2(peps, x, 1, 2, -1.0*reshape(kron(Matrix(Yao.Z),Matrix(Yao.Z)),2,2,2,2),optimizer, simplifier)
+        energy = f_ising(peps, x, g, J, h, optimizer, simplifier)
+        @show energy
+        return energy
+    end
+
+
+    function g_closure_ising(M,p0)
+        point_tuple = Tuple(p0.x)    
+        x = point2vector(point_tuple, matrix_dims)
+        G = similar(x)
+        fill!(G, 0)
+        G1 = similar(x)
+        G2 = similar(x)
+        G3 = similar(x)
+        grad_vec1 = g1!(G1, peps, x, 1, -0.2*Matrix(Yao.X), optimizer, simplifier)
+        grad_vec2 = g1!(G2, peps, x, 2, -0.2*Matrix(Yao.X),optimizer, simplifier)
+        grad_vec3 = g2!(G3, peps, x, 1, 2, -1.0*reshape(kron(Matrix(Yao.Z),Matrix(Yao.Z)),2,2,2,2),optimizer, simplifier)
+        G .= g_ising!(G, peps, x, g, J, h, optimizer, simplifier)
+        #G .= grad_vec1 + grad_vec2 + grad_vec3
+        # Convert vector gradient to matrices in ArrayPartition forma
+        grad = RecursiveArrayTools.ArrayPartition(Tuple(vector2point(G, matrix_dims))...)
+        
+        #grad_tangent = project(M,p0,grad)
+        #@assert all(size.(grad.x) .== size.(p0.x))
+        #@assert is_vector(M,p0, grad_tangent;atol = 1e-8)
+        return grad
+       
+    end
+    #grad_f(M, p0) = riemannian_gradient(M, p0, g_closure_ising(M,p0))
+
+    result = gradient_descent(
+        M, 
+        f_closure_ising, 
+        g_closure_ising,
+        p0;
+        evaluation=Manopt.AllocatingEvaluation(),
+        #retraction_method = QRRetraction(),
+        stopping_criterion = StopWhenGradientNormLess(1e-2) | StopAfterIteration(200),
+        record = [:Iteration, :Cost, :GradientNorm],
+        return_state = true
+    )
+    @show result
+    return result,energy
+end
+

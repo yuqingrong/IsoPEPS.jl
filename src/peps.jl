@@ -56,6 +56,18 @@ function convert_type(::Type{T}, peps::GeneralPEPS{T2, NF}) where {T, T2, NF}
 end
 
 function _optimized_code(alllabels, physical_labels::AbstractVector{LT}, virtual_labels, max_ind, nflavor, D, optimizer, simplifier) where LT
+    # Create a cache for optimized codes
+    global code_cache
+    if !@isdefined(code_cache)
+        global code_cache = Dict()
+    end
+    
+    # Create a key for the cache
+    key = hash((alllabels, physical_labels, virtual_labels, max_ind, nflavor, D))
+    
+    if haskey(code_cache, key)
+        return code_cache[key]
+    end
     code_statetensor = EinCode(alllabels, physical_labels)
     size_dict = Dict([[l=>nflavor for l in physical_labels]..., [l=>D for l in virtual_labels]...])
     optcode_statetensor = optimize_code(code_statetensor, size_dict, optimizer, simplifier)  # generate a good contraction order according to the label and dimension.
@@ -64,7 +76,7 @@ function _optimized_code(alllabels, physical_labels::AbstractVector{LT}, virtual
     code_inner_product = EinCode([alllabels..., [replace(l, rep...) for l in alllabels]...], LT[])
     
     optcode_inner_product = optimize_code(code_inner_product, size_dict, optimizer, simplifier)
-
+    code_cache[key] = (optcode_statetensor, optcode_inner_product)
     return optcode_statetensor, optcode_inner_product
 end
 
@@ -129,7 +141,7 @@ function apply_onsite!(peps::GeneralPEPS{T,NF,LT}, i, mat::AbstractMatrix) where
     return peps                                     # if mlabel[2] in old, replace it with mlabel[1]
 end
 
-function single_sandwich_code(peps::GeneralPEPS{T,NF,LT}, i, mat::AbstractMatrix, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where {T,NF,LT}
+function single_sandwich_code(peps::GeneralPEPS{T,NF,LT}, i, mat, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where {T,NF,LT}
     @assert size(mat, 1) == size(mat, 2)
     nflavor, D = NF, peps.D # TODO: Need to be modified
     size_dict = Dict([[l=>nflavor for l in peps.physical_labels]..., [l=>D for l in peps.virtual_labels]...])
@@ -140,7 +152,7 @@ function single_sandwich_code(peps::GeneralPEPS{T,NF,LT}, i, mat::AbstractMatrix
     single_sandwich_code=EinCode([peps.vertex_labels..., mlabel, [replace(l, rep...) for l in peps.vertex_labels]...], LT[])
     optcode_single_sandwich = optimize_code(single_sandwich_code, size_dict, optimizer, simplifier)
 end
-function single_sandwich(p1::GeneralPEPS{T}, p2::GeneralPEPS{T}, i, mat::AbstractMatrix{T}, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where T
+function single_sandwich(p1::GeneralPEPS{T}, p2::GeneralPEPS{T}, i, mat, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where T
     p1c = conj(p1)
     code = single_sandwich_code(p1, i, mat, optimizer,simplifier) 
     cost, gradient = OMEinsum.cost_and_gradient(code, (p1c.vertex_tensors..., mat, p2.vertex_tensors...))
@@ -177,7 +189,7 @@ newlabel(peps::PEPS, offset) = peps.max_index + offset  # create a new label
 
 # variational optimization begin
 
-variables(peps::GeneralPEPS) = vcat(vec.(alltensors(peps))...) # peps->vec
+variables(peps::PEPS) = vcat(vec.(alltensors(peps))...) # peps->vec
 function load_variables!(peps::GeneralPEPS{T}, variables::AbstractVector{T}) where T  # vec->peps
     k = 0
     for t in alltensors(peps)
@@ -188,23 +200,33 @@ function load_variables!(peps::GeneralPEPS{T}, variables::AbstractVector{T}) whe
     return peps
 end
 
-function f1(peps::PEPS{T}, variables::AbstractVector{T}, i, mat::AbstractArray{T}, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where T
+function f1(peps::PEPS{T}, variables::AbstractVector{T}, i, mat, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where T
     load_variables!(peps, variables)
     energy, _ = single_sandwich(peps, peps, i, mat, optimizer, simplifier)
     norm = inner_product(peps, peps)
-    # return real(energy / norm[]) 
-    return (energy + energy') / 2 / norm[]
+    return real(energy / norm[])
+    #return (energy + energy') / 2 / norm[]
 end
 
-function g1!(G1, peps::PEPS, variables, i, mat::AbstractArray, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
+
+
+function g1!(G1, peps::PEPS{T}, variables::AbstractVector{T}, i, mat, 
+                     optimizer::CodeOptimizer, simplifier::CodeSimplifier
+                     ) where T
     load_variables!(peps, variables)
+    #==
     energy, gradientA = single_sandwich(peps, peps, i, mat, optimizer, simplifier)
     flatten_gradientA = 2*vcat(reshape.(gradientA, :)...)[Int(end/2+3):end]  
     norm, gradientB = OMEinsum.cost_and_gradient(peps.code_inner_product, (peps.vertex_tensors..., peps.vertex_tensors...))
     flatten_gradientB = 2*vcat(reshape.(gradientB, :)...)[Int(end/2+1):end]
     G1 .=(flatten_gradientA*norm[]-flatten_gradientB*energy)/norm[]^2
+    ==#
+   
+    f1_closure(variables) = f1(peps, variables, i, mat, optimizer, simplifier)
+    G1 .= grad(central_fdm(5, 1), f1_closure, variables)[1]
     return G1
 end
+
 
 
 function peps_optimize1(peps::PEPS, i, mat::AbstractArray, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
@@ -215,21 +237,27 @@ function peps_optimize1(peps::PEPS, i, mat::AbstractArray, optimizer::CodeOptimi
     return result.minimum
 end
 
+
+
 function f2(peps::PEPS, variables, i, j, mat::AbstractArray, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
     load_variables!(peps, variables)
     energy, _ = two_sandwich(peps, peps, i, j, mat, optimizer, simplifier)
     norm = inner_product(peps, peps)
-    #return real(energy / norm[]) 
-    return (energy + energy') / 2 / norm[]
+    return real(energy / norm[]) 
+    #return (energy + energy') / 2 / norm[]
 end
 
 function g2!(G2, peps::PEPS, variables, i, j, mat::AbstractArray, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
     load_variables!(peps, variables)
+    #==
     energy, gradientA = two_sandwich(peps, peps, i, j, mat, optimizer, simplifier)
     flatten_gradientA = 2*vcat(reshape.(gradientA, :)...)[Int(end/2+9):end]  
     norm, gradientB = OMEinsum.cost_and_gradient(peps.code_inner_product, (peps.vertex_tensors..., peps.vertex_tensors...))
     flatten_gradientB = 2*vcat(reshape.(gradientB, :)...)[Int(end/2+1):end]
     G2 .=(flatten_gradientA*norm[]-flatten_gradientB*energy)/norm[]^2
+   ==#
+    f2_closure(variables) = f2(peps, variables, i, j, mat, optimizer, simplifier)
+    G2 .= grad(central_fdm(5, 1), f2_closure, variables)[1]
     return G2
 end
 
@@ -237,32 +265,36 @@ function peps_optimize2(peps::PEPS, i, j, mat::AbstractArray, optimizer::CodeOpt
     params = variables(peps)
     f_closure2(params) =  f2(peps, params, i, j, mat, optimizer, simplifier)
     g_closure2!(G2, params) = g2!(G2, peps, params, i, j, mat, optimizer, simplifier)
+     
     result = IsoPEPS.optimize(f_closure2, g_closure2!, params, IsoPEPS.LBFGS(), Optim.Options(f_tol = 1e-6))
     @show result
     return result.minimum
 end
+
 
 function f_ising(peps::PEPS{T},  variables::AbstractVector{T}, g, J::Float64, h::Float64, optimizer::CodeOptimizer, simplifier::CodeSimplifier ) where {T}
     energy = 0  
     for i in peps.physical_labels
         energy+=f1(peps, variables, i, -h*Matrix{T}(X), optimizer, simplifier)
         
-        for nb in neighbors(g, i)
+        for nb in union(inneighbors(g, i), outneighbors(g, i))
             energy+=0.5*f2(peps, variables, i, nb, -J*reshape(kron(Matrix{T}(Z),Matrix{T}(Z)),2,2,2,2), optimizer, simplifier)
         end
     end
     return energy
 end
 
-function g_ising!(G, peps::PEPS{T}, variables, g, J::Float64, h::Float64, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
+function g_ising!(G, peps::PEPS, variables, g, J::Float64, h::Float64, optimizer, simplifier)
     G1 = zeros(eltype(variables),size(variables))
     G2 = zeros(eltype(variables),size(variables))
     fill!(G, 0)
+    T = eltype(peps.vertex_tensors[1])
     for i in peps.physical_labels
-        G .+= g1!(G1, peps, variables, i, -h*Matrix{T}(X), optimizer::CodeOptimizer, simplifier::CodeSimplifier)
+        G .+= g1!(G1, peps, variables, i, -h*Matrix{T}(X), optimizer, simplifier)
   
-        for nb in neighbors(g, i)
-            G .+= 0.5*g2!(G2, peps, variables, i, nb, -J*reshape(kron(Matrix{T}(Z),Matrix{T}(Z)),2,2,2,2), optimizer::CodeOptimizer, simplifier::CodeSimplifier)
+        for nb in union(inneighbors(g, i), outneighbors(g, i))
+            @show i, nb
+            G .+= 0.5*g2!(G2, peps, variables, i, nb, -J*reshape(kron(Matrix{T}(Z),Matrix{T}(Z)),2,2,2,2), optimizer, simplifier)
         end
     end
     return G
@@ -273,7 +305,9 @@ function peps_optimize_ising(peps::PEPS, g, J::Float64, h::Float64, optimizer::C
    
     f_closure_ising(params) =  f_ising(peps, params,g,J,h, optimizer, simplifier)
     g_closure_ising!(G, params) = g_ising!(G, peps, params,g,J,h, optimizer, simplifier)
-    result = IsoPEPS.optimize(f_closure_ising, g_closure_ising!, params, IsoPEPS.LBFGS())
+    
+    result = IsoPEPS.optimize(f_closure_ising, g_closure_ising!, params, IsoPEPS.LBFGS()
+                    )
     @show result
     return result.minimum
 end
@@ -295,7 +329,7 @@ function long_range_coherence_peps(peps::GeneralPEPS, i::Int, j::Int)
     return abs(corr)
 end
     
-    
+  
 
 
 
