@@ -705,7 +705,11 @@ Substitute (1) into (2):
 $(partial angle.l B angle.r) / (partial theta_j) =-i/2 "Tr" (B U_(l:j) [P_j, rho_j] U_(l:j)^dagger) = 1/2 "Tr" [B U_(l:j) (U_j (pi/2) rho_j U_j (pi/2)^dagger) U_(l:j)^dagger] - 1/2 "Tr" [B U_(l:j) (U_j (-pi/2) rho_j U_j (-pi/2)^dagger) U_(l:j)^dagger] = 1/2 (angle.l B(theta_j + pi/2) angle.r - angle.l B(theta_j - pi/2) angle.r) = 1/2 (angle.l B angle.r _j ^+ - angle.l B angle.r _j ^-)$
 
 
+== PEPS as ground states: degeneracy and topology
 
+=== injective tensor network
+
+=== parent Hamiltonian
 
 
 

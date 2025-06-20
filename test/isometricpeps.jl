@@ -64,32 +64,35 @@ end
 
 
 @testset "isometric_peps_optimize" begin
-    g = SimpleDiGraph(4)
-    g2 = Graphs.grid([2,2])
+    g = SimpleDiGraph(16)
+    g2 = Graphs.grid([4,4])
     edge_pairs = [(src(e), dst(e)) for e in collect(edges(g2))]
     for (i,j) in edge_pairs
         add_edge!(g, i, j)
     end
-    peps, matrix_dims = isometric_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
+    peps, matrix_dims = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
     
-    M = ProductManifold([Manifolds.Stiefel(n, p, ℂ) for (n, p) in matrix_dims]...)
-    
+    M = ProductManifold([Manifolds.Stiefel(n, p) for (n, p) in matrix_dims]...)
+
     J, h = 1.0, 0.2
 
-    #x = variables(peps)
-    #p0 = Tuple(vector2point(x, matrix_dims)) 
+    x = variables(peps)
+    p0 = Tuple(vector2point(x, matrix_dims)) 
 
-    #@test all(Manifolds.is_point.(M.manifolds, p0))
-    #@test is_point(M, ArrayPartition(p0...))
+    @test all(Manifolds.is_point.(M.manifolds, p0))
 
-    #G = iso_g_ising!(zeros(eltype(x),size(x)), p0, matrix_dims, peps, g, J, h, GreedyMethod(), MergeGreedy())
-    result,energy = isopeps_optimize_ising(peps, M, matrix_dims, g, J, h, GreedyMethod(), MergeGreedy())
-    @show energy
-    hami = ising_hamiltonian_2d(2,2,J,h)
+
+    result, energy, optimized_peps, record= isopeps_optimize_ising(peps, M, matrix_dims, g, J, h, GreedyMethod(), MergeGreedy(), 100)
+    
+    hami = ising_hamiltonian_2d(4,4,J,h)
     eigenval,eigenvec = IsoPEPS.eigsolve(IsoPEPS.mat(hami), 1, :SR; ishermitian=true)
+    @show energy
     @show eigenval[1]
+    @show optimized_peps  
+    @show record, typeof(record)
     @test isapprox(energy, eigenval[1], rtol=1e-3)
 end
+
 
 @testset "isometric_peps_to_unitary" begin
     g = SimpleDiGraph(4)

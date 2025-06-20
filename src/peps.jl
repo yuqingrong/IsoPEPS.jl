@@ -155,7 +155,7 @@ end
 function single_sandwich(p1::GeneralPEPS{T}, p2::GeneralPEPS{T}, i, mat, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where T
     p1c = conj(p1)
     code = single_sandwich_code(p1, i, mat, optimizer,simplifier) 
-    cost, gradient = OMEinsum.cost_and_gradient(code, (p1c.vertex_tensors..., mat, p2.vertex_tensors...))
+    cost, gradient = OMEinsum.cost_and_gradient(code, (p1c.vertex_tensors..., real(mat), p2.vertex_tensors...))
     return cost[], gradient
 end 
 
@@ -174,7 +174,7 @@ end
 function two_sandwich(p1::PEPS, p2::PEPS, i, j, mat::AbstractArray, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
     p1c = conj(p1)
     code = two_sandwich_code(p1, i, j,  mat, optimizer,simplifier) 
-    cost, gradient = OMEinsum.cost_and_gradient(code, (p1c.vertex_tensors..., mat, p2.vertex_tensors...))
+    cost, gradient = OMEinsum.cost_and_gradient(code, (p1c.vertex_tensors..., real(mat), p2.vertex_tensors...))
     return cost[], gradient
 end
 
@@ -214,16 +214,17 @@ function g1!(G1, peps::PEPS{T}, variables::AbstractVector{T}, i, mat,
                      optimizer::CodeOptimizer, simplifier::CodeSimplifier
                      ) where T
     load_variables!(peps, variables)
-    #==
+  
     energy, gradientA = single_sandwich(peps, peps, i, mat, optimizer, simplifier)
     flatten_gradientA = 2*vcat(reshape.(gradientA, :)...)[Int(end/2+3):end]  
     norm, gradientB = OMEinsum.cost_and_gradient(peps.code_inner_product, (peps.vertex_tensors..., peps.vertex_tensors...))
     flatten_gradientB = 2*vcat(reshape.(gradientB, :)...)[Int(end/2+1):end]
     G1 .=(flatten_gradientA*norm[]-flatten_gradientB*energy)/norm[]^2
-    ==#
    
+   #=
     f1_closure(variables) = f1(peps, variables, i, mat, optimizer, simplifier)
     G1 .= grad(central_fdm(5, 1), f1_closure, variables)[1]
+    =#
     return G1
 end
 
@@ -249,15 +250,16 @@ end
 
 function g2!(G2, peps::PEPS, variables, i, j, mat::AbstractArray, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
     load_variables!(peps, variables)
-    #==
+ 
     energy, gradientA = two_sandwich(peps, peps, i, j, mat, optimizer, simplifier)
     flatten_gradientA = 2*vcat(reshape.(gradientA, :)...)[Int(end/2+9):end]  
     norm, gradientB = OMEinsum.cost_and_gradient(peps.code_inner_product, (peps.vertex_tensors..., peps.vertex_tensors...))
     flatten_gradientB = 2*vcat(reshape.(gradientB, :)...)[Int(end/2+1):end]
     G2 .=(flatten_gradientA*norm[]-flatten_gradientB*energy)/norm[]^2
-   ==#
+#=
     f2_closure(variables) = f2(peps, variables, i, j, mat, optimizer, simplifier)
-    G2 .= grad(central_fdm(5, 1), f2_closure, variables)[1]
+    G2 .= grad(central_fdm(5, 1), f2_closure, variables)[1] 
+    =#
     return G2
 end
 
@@ -293,7 +295,7 @@ function g_ising!(G, peps::PEPS, variables, g, J::Float64, h::Float64, optimizer
         G .+= g1!(G1, peps, variables, i, -h*Matrix{T}(X), optimizer, simplifier)
   
         for nb in union(inneighbors(g, i), outneighbors(g, i))
-            @show i, nb
+            
             G .+= 0.5*g2!(G2, peps, variables, i, nb, -J*reshape(kron(Matrix{T}(Z),Matrix{T}(Z)),2,2,2,2), optimizer, simplifier)
         end
     end
@@ -308,9 +310,10 @@ function peps_optimize_ising(peps::PEPS, g, J::Float64, h::Float64, optimizer::C
     
     result = IsoPEPS.optimize(f_closure_ising, g_closure_ising!, params, IsoPEPS.LBFGS()
                     )
-    @show result
+   
     return result.minimum
 end
+
 
 function long_range_coherence_peps(peps::GeneralPEPS, i::Int, j::Int)
     T = eltype(peps.vertex_tensors[1])

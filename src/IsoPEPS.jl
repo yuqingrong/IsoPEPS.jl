@@ -1,4 +1,3 @@
-
 module IsoPEPS
 
 using Random
@@ -18,13 +17,12 @@ using SparseArrays,Arpack
 using Graphs, GraphPlot
 using Graphs: SimpleEdge
 using DifferentiationInterface
-import Mooncake
 using ChainRulesCore
 using Statistics
 using OMEinsumContractionOrders
 using Manifolds, Manopt
 using RecursiveArrayTools
-using Enzyme
+
 export statevec, vec
 export ising_hamiltonian, ising_hamiltonian_2d,ed_groundstate
 export itime_groundstate!, lanczos

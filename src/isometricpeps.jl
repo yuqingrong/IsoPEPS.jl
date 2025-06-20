@@ -112,7 +112,7 @@ function peps_fidelity(p1::IsometricPEPS, p2::IsometricPEPS)
     return abs(inner_prod)^2/(norm_psi)^2
 end
 
-Base.copy(peps::IsometricPEPS) = IsometricPEPS(copy(peps.vertex_tensors), peps.col, peps.row, peps.D)
+Base.copy(peps::PEPS) = PEPS(copy(peps.vertex_tensors), peps.col, peps.row, peps.D)
 
    
 
@@ -161,14 +161,35 @@ function isometric_peps_to_unitary(peps::PEPS, g)
     
         Q = reshape(tensor, ortho_dim, :)
             
-        remaining = nullspace(Q') # TODO: check if this is correct
+        remaining = nullspace(Q') 
         Q = hcat(Q, remaining)
         target_size = size(Q)
 
         dims = [2 for _ in 1:2*Int(log2(ortho_dim))]
         Q = reshape(Q, dims...)
+
+        all_neighbors = union(inneighbors(g, i), outneighbors(g, i))
+        out_index = findall(x -> x in outneighbors(g, i), all_neighbors) .+ 1
+        in_index = findall(x -> x in inneighbors(g, i), all_neighbors) .+ 1
+
+        ancil = phys_dim + out_dim - in_dim
+        if ancil > 0
+            in_ancil = Int(log2(ancil))
+            out_ancil = nothing
+            in_ancil_index = collect(length(all_neighbors)+1:length(all_neighbors)+1+in_ancil)
+            Q = permutedims(Q, (1,out_index..., in_index..., in_ancil_index... ))
+        elseif ancil < 0
+            in_ancil = nothing
+            out_ancil = Int(log2(-ancil))
+            out_ancil_index = collect(length(all_neighbors)+1:length(all_neighbors)+1+out_ancil)
+            Q = permutedims(Q, (1, out_index..., out_ancil_index..., in_index... ))
+        else
+            Q = permutedims(Q, (1, out_index..., in_index... ))
+        end
+    
         if phys_dim + out_dim - in_dim == 2
             Q = permutedims(Q, (1, 3, 2, 4))
+            
         end
         ugates.vertex_tensors[i] = reshape(Q, target_size...)
     end
@@ -203,20 +224,18 @@ end
 
 
 
-function isopeps_optimize_ising(peps::PEPS, M::ProductManifold, matrix_dims::Vector, g, J::Float64, h::Float64, optimizer::CodeOptimizer, simplifier::CodeSimplifier)
+function isopeps_optimize_ising(peps::PEPS, M::ProductManifold, matrix_dims::Vector, g, J::Float64, h::Float64, optimizer::CodeOptimizer, simplifier::CodeSimplifier, step::Int)
     params = variables(peps)
     p0 = RecursiveArrayTools.ArrayPartition(Tuple(vector2point(params, matrix_dims))...)
-    #G = similar(params)
+
     energy = 0.0
     @assert is_point(M, p0)
     
     function f_closure_ising(M,p0) 
         point_tuple = Tuple(p0.x)
         x = point2vector(point_tuple, matrix_dims)
-        #energy = f2(peps, x, 1, 2, reshape(kron(Matrix(Yao.Z),Matrix(Yao.Z)),2,2,2,2),optimizer, simplifier)
-        #energy = f1(peps, x, 1, -0.2*Matrix(Yao.X),optimizer, simplifier)+f1(peps, x, 2, -0.2*Matrix(Yao.X),optimizer, simplifier)+f2(peps, x, 1, 2, -1.0*reshape(kron(Matrix(Yao.Z),Matrix(Yao.Z)),2,2,2,2),optimizer, simplifier)
+        
         energy = f_ising(peps, x, g, J, h, optimizer, simplifier)
-        @show energy
         return energy
     end
 
@@ -226,25 +245,14 @@ function isopeps_optimize_ising(peps::PEPS, M::ProductManifold, matrix_dims::Vec
         x = point2vector(point_tuple, matrix_dims)
         G = similar(x)
         fill!(G, 0)
-        G1 = similar(x)
-        G2 = similar(x)
-        G3 = similar(x)
-        grad_vec1 = g1!(G1, peps, x, 1, -0.2*Matrix(Yao.X), optimizer, simplifier)
-        grad_vec2 = g1!(G2, peps, x, 2, -0.2*Matrix(Yao.X),optimizer, simplifier)
-        grad_vec3 = g2!(G3, peps, x, 1, 2, -1.0*reshape(kron(Matrix(Yao.Z),Matrix(Yao.Z)),2,2,2,2),optimizer, simplifier)
+    
         G .= g_ising!(G, peps, x, g, J, h, optimizer, simplifier)
-        #G .= grad_vec1 + grad_vec2 + grad_vec3
-        # Convert vector gradient to matrices in ArrayPartition forma
         grad = RecursiveArrayTools.ArrayPartition(Tuple(vector2point(G, matrix_dims))...)
-        
-        #grad_tangent = project(M,p0,grad)
-        #@assert all(size.(grad.x) .== size.(p0.x))
-        #@assert is_vector(M,p0, grad_tangent;atol = 1e-8)
+  
         return grad
        
     end
-    #grad_f(M, p0) = riemannian_gradient(M, p0, g_closure_ising(M,p0))
-
+   
     result = gradient_descent(
         M, 
         f_closure_ising, 
@@ -252,11 +260,20 @@ function isopeps_optimize_ising(peps::PEPS, M::ProductManifold, matrix_dims::Vec
         p0;
         evaluation=Manopt.AllocatingEvaluation(),
         #retraction_method = QRRetraction(),
-        stopping_criterion = StopWhenGradientNormLess(1e-2) | StopAfterIteration(200),
+        stopping_criterion = #=StopWhenGradientNormLess(1e-2) |=# StopAfterIteration(step),
         record = [:Iteration, :Cost, :GradientNorm],
         return_state = true
     )
-    @show result
-    return result,energy
+    
+
+    record = get_record(result)
+    final_p = get_solver_result(result)
+    final_energy = f_closure_ising(M, final_p)
+    
+    optimized_vector = point2vector(Tuple(final_p.x), matrix_dims)
+    optimized_peps = peps
+    load_variables!(optimized_peps, optimized_vector)
+  
+    return result, final_energy, optimized_peps, record
 end
 
