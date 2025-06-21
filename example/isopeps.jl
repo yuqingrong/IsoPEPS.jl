@@ -78,7 +78,7 @@ end
 
 
 function energy_accuracy_vs_D(Lx::Int, Ly::Int, g::SimpleDiGraph, J::Float64, h::Float64)  # different D
-    D_values = [2, 3, 4]
+    D_values = [2, 3]
     steps = collect(1:10:100)
     energy_differences = Dict{Float64, Vector{Float64}}()
     iteration_list = Dict{Float64, Vector{Int}}()
@@ -92,11 +92,11 @@ function energy_accuracy_vs_D(Lx::Int, Ly::Int, g::SimpleDiGraph, J::Float64, h:
         
         peps, matrix_dims = isometric_peps(Float64, g, D, 2, TreeSA(), MergeGreedy())
         M = ProductManifold([Manifolds.Stiefel(n, p) for (n, p) in matrix_dims]...)   
-        result, energy, optimized_peps, record = isopeps_optimize_ising(peps, M, matrix_dims, g, J, h, IsoPEPS.GreedyMethod(), IsoPEPS.MergeGreedy(), 100)
+        result, energy, optimized_peps, record = isopeps_optimize_ising(peps, M, matrix_dims, g, J, h, IsoPEPS.GreedyMethod(), IsoPEPS.MergeGreedy(), 50)
             
         @show record
-        iteration_list[D] = [ r[1] for r in record[1:10:end] ]
-        energy_differences[D] = [ abs(r[2] - energy_exact) for r in record[1:10:end] ]
+        iteration_list[D] = [ r[1] for r in record[1:5:end] ]
+        energy_differences[D] = [ abs(r[2] - energy_exact) for r in record[1:5:end] ]
       
     end
     
