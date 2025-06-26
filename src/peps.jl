@@ -33,8 +33,9 @@ function GeneralPEPS{NF}(
 end
 
 function GeneralPEPS{NF}(vertex_labels::AbstractVector{<:AbstractVector{LT}}, vertex_tensors::Vector{<:AbstractArray{T}}, virtual_labels::AbstractVector{LT}, D::Int, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where {LT,T,NF}
-    physical_labels = [vl[findall(∉(virtual_labels), vl)[]] for vl in vertex_labels]
-                                                                            
+    physical_labels =  [vl[findall(∉(virtual_labels), vl)[1]] for vl in vertex_labels] 
+    @show physical_labels
+    @show vertex_labels                                                  
     max_ind = max(maximum(physical_labels), maximum(virtual_labels))
 
     # optimal contraction orders
@@ -56,18 +57,7 @@ function convert_type(::Type{T}, peps::GeneralPEPS{T2, NF}) where {T, T2, NF}
 end
 
 function _optimized_code(alllabels, physical_labels::AbstractVector{LT}, virtual_labels, max_ind, nflavor, D, optimizer, simplifier) where LT
-    # Create a cache for optimized codes
-    global code_cache
-    if !@isdefined(code_cache)
-        global code_cache = Dict()
-    end
-    
-    # Create a key for the cache
-    key = hash((alllabels, physical_labels, virtual_labels, max_ind, nflavor, D))
-    
-    if haskey(code_cache, key)
-        return code_cache[key]
-    end
+     
     code_statetensor = EinCode(alllabels, physical_labels)
     size_dict = Dict([[l=>nflavor for l in physical_labels]..., [l=>D for l in virtual_labels]...])
     optcode_statetensor = optimize_code(code_statetensor, size_dict, optimizer, simplifier)  # generate a good contraction order according to the label and dimension.
@@ -76,7 +66,7 @@ function _optimized_code(alllabels, physical_labels::AbstractVector{LT}, virtual
     code_inner_product = EinCode([alllabels..., [replace(l, rep...) for l in alllabels]...], LT[])
     
     optcode_inner_product = optimize_code(code_inner_product, size_dict, optimizer, simplifier)
-    code_cache[key] = (optcode_statetensor, optcode_inner_product)
+   
     return optcode_statetensor, optcode_inner_product
 end
 
@@ -97,17 +87,19 @@ function replace_tensors(peps::GeneralPEPS{T,NF}, tensors) where {T,NF}
 end
 
 function zero_peps(::Type{T}, g, D::Int, nflavor::Int, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where T
+
     virtual_labels = collect(nv(g)+1:nv(g)+ne(g))  # nv(g): number of vertices; ne(g): number of edges
     vertex_labels = Vector{Int}[] 
     vertex_tensors = Array{T}[]
     edge_map = Dict(zip(edges(g), virtual_labels))  # edges(g) returns edge between 2 vertices, [(1,2),(2,3)]
     for i=1:nv(g)
-        push!(vertex_labels, [i,[get(edge_map, SimpleEdge(i,nb), get(edge_map,SimpleEdge(nb,i),0)) for nb in union(inneighbors(g, i), outneighbors(g, i)) ]...])  # write physical_labels and the corresponding virtual_labels together.
+        push!(vertex_labels, [i,[get(edge_map,SimpleEdge(nb,i),0) for nb in inneighbors(g, i) ]...,[get(edge_map,SimpleEdge(i,nb),0) for nb in outneighbors(g, i) ]...])  # write physical_labels and the corresponding virtual_labels together.
     
         t = zeros(T, nflavor, fill(D, degree(g, i))...)  
         t[1] = 1  
         push!(vertex_tensors, t)
     end
+    vertex_labels = [[x for x in vl if x ≠ 0] for vl in vertex_labels]
     GeneralPEPS{nflavor}(vertex_labels, vertex_tensors, virtual_labels, D, optimizer, simplifier)
 end
 
@@ -121,6 +113,33 @@ function Random.randn!(peps::GeneralPEPS)
     end
     return peps
 end
+
+function dtorus(Lx::Int, Ly::Int)  
+    g = SimpleDiGraph(Lx * Ly)  
+    
+    for i in 1:Lx, j in 1:Ly
+        node = (i-1)*Ly + j  
+        
+        right = (i % Lx) * Ly + j
+        add_edge!(g, node, right)
+        
+        bottom = (i-1)*Ly + (j % Ly) + 1
+        add_edge!(g, node, bottom)
+        
+    end
+    return g
+end
+
+function dgrid(Lx::Int, Ly::Int)
+    g = SimpleDiGraph(Lx * Ly)
+    g2 = Graphs.grid([Lx, Ly])
+    edge_pairs = [(src(e), dst(e)) for e in collect(edges(g2))]
+    for (i,j) in edge_pairs
+        add_edge!(g, i, j)
+    end
+    return g
+end
+
 
 Base.vec(peps::PEPS) = vec(statetensor(peps))
 function statetensor(peps::PEPS)

@@ -4,16 +4,10 @@ using Graphs, GraphPlot, Compose
 import Yao
 
 @testset "isopeps2circuit" begin
-    g = SimpleDiGraph(4)
-    g2 = Graphs.grid([2,2])
-    edge_pairs = [(src(e), dst(e)) for e in collect(edges(g2))]
-    for (i,j) in edge_pairs
-        add_edge!(g, i, j)
-    end
-    #draw(PNG("g.png", 16cm, 16cm), gplot(g))
-    #peps = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
+    g = dgrid(2,2)
+    #peps = rand_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
     #peps, pepsu = peps2ugate(peps, g)
-    peps,_ = isometric_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
+    peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
     pepsu = isometric_peps_to_unitary(peps, g)
     
     #@test isapprox(pepsu.vertex_tensors[1]'*pepsu.vertex_tensors[1], Matrix(I, 8, 8),atol=1e-10)  
@@ -26,7 +20,7 @@ import Yao
     @test collect_blocks(IsoPEPS.Measure, circ2)|>length == 5
  
     reg1 = Yao.zero_state(5;nbatch=100000)
-    reg2 = Yao.zero_state(10;nbatch=100000)
+    reg2 = Yao.zero_state(5;nbatch=100000)
     res1 = gensample(circ1, reg1, pepsu, Yao.Z)
    
     @test res1[1,1] in [0,1]
@@ -34,9 +28,9 @@ import Yao
    
 
  
-    corr1 = long_range_coherence(circ1, reg1, pepsu, 2, 3)
-    corr2 = long_range_coherence(circ2, reg2, pepsu, 2, 3)
-    corr_expect1= long_range_coherence_peps(peps, 2, 3) 
+    corr1 = long_range_coherence(circ1, reg1, pepsu, 3, 4)
+    corr2 = long_range_coherence(circ2, reg2, pepsu, 3, 4)
+    corr_expect1= long_range_coherence_peps(peps, 3, 4) 
     @show corr_expect1
     
 
@@ -50,12 +44,7 @@ end
 
 @testset "Bell State" begin
     
-    g = SimpleDiGraph(2)
-    g2 = grid([1,2])
-    edge_pairs = [(src(e), dst(e)) for e in collect(edges(g2))]
-    for (i,j) in edge_pairs
-        add_edge!(g, i, j)
-    end
+    g = dgrid(2,2)
     peps = zero_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
     # Create a Bell state by setting specific tensor values
     # For a 2-qubit system with a Bell state |Φ⁺⟩ = (|00⟩ + |11⟩)/√2

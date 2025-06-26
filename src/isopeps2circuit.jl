@@ -13,7 +13,7 @@ end
 
 function peps2ugate(peps::GeneralPEPS, g)
     ugates = deepcopy(peps)
-   
+    T = eltype(peps.vertex_tensors[1])
     for i in peps.physical_labels
         out = max(length(outneighbors(g, i))+1,length(inneighbors(g, i)))
       
@@ -22,7 +22,7 @@ function peps2ugate(peps::GeneralPEPS, g)
         A= reshape(peps.vertex_tensors[i], 2^out, :)
         # Seed the random number generator for reproducibility
         Random.seed!(42)
-        reshaped = randn(ComplexF64, 2^out, 2^out)
+        reshaped = randn(T, 2^out, 2^out)
         @assert size(reshaped, 2) <= size(reshaped, 1)
         Q, R = qr(reshaped)
         @assert Q[:,1:size(reshaped,2)] * R ≈ reshaped
@@ -127,7 +127,7 @@ function get_circuit(pepsu::GeneralPEPS, g)
 end
 
 function new_get_circuit(pepsu::GeneralPEPS, g)
-    nbit = 10  # TODO: make this dynamic
+    nbit = 5  # TODO: make this dynamic
     circ = chain(nbit)
     target_qubits = Vector{Vector{Int}}(undef, length(pepsu.physical_labels))
     remain_qubits = Vector{Vector{Int}}(undef, length(pepsu.physical_labels))

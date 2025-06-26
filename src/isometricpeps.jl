@@ -163,8 +163,9 @@ function isometric_peps_to_unitary(peps::PEPS, g)
             
         remaining = nullspace(Q') 
         Q = hcat(Q, remaining)
+        @assert Q*Q' ≈ Matrix(I, size(Q, 1), size(Q, 1))
         target_size = size(Q)
-
+        
         dims = [2 for _ in 1:2*Int(log2(ortho_dim))]
         Q = reshape(Q, dims...)
 
@@ -172,25 +173,27 @@ function isometric_peps_to_unitary(peps::PEPS, g)
         out_index = findall(x -> x in outneighbors(g, i), all_neighbors) .+ 1
         in_index = findall(x -> x in inneighbors(g, i), all_neighbors) .+ 1
 
-        ancil = phys_dim + out_dim - in_dim
+        ancil = 1 + length(outneighbors(g, i)) - length(inneighbors(g, i))
+        #ancil = phys_dim + out_dim - in_dim
+        @show ancil
         if ancil > 0
-            in_ancil = Int(log2(ancil))
+            in_ancil = ancil
             out_ancil = nothing
-            in_ancil_index = collect(length(all_neighbors)+1:length(all_neighbors)+1+in_ancil)
+            in_ancil_index = collect(length(all_neighbors)+2:length(all_neighbors)+2+in_ancil-1)
+            @show (1,out_index..., in_index..., in_ancil_index... )
+            @show out_index, in_index, in_ancil_index
             Q = permutedims(Q, (1,out_index..., in_index..., in_ancil_index... ))
         elseif ancil < 0
             in_ancil = nothing
-            out_ancil = Int(log2(-ancil))
-            out_ancil_index = collect(length(all_neighbors)+1:length(all_neighbors)+1+out_ancil)
+            out_ancil = -ancil
+            out_ancil_index = collect(length(all_neighbors)+2:length(all_neighbors)+2+out_ancil-1)
+            @show (1,out_index..., out_ancil_index..., in_index... )
+            @show out_index, out_ancil_index, in_index
             Q = permutedims(Q, (1, out_index..., out_ancil_index..., in_index... ))
         else
             Q = permutedims(Q, (1, out_index..., in_index... ))
         end
-    
-        if phys_dim + out_dim - in_dim == 2
-            Q = permutedims(Q, (1, 3, 2, 4))
-            
-        end
+  
         ugates.vertex_tensors[i] = reshape(Q, target_size...)
     end
  

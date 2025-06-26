@@ -37,14 +37,12 @@ end
 end
 
 @testset "isometric_peps" begin
-    g = SimpleDiGraph(9)
-    g2 = grid([3,3])
-    edge_pairs = [(src(e), dst(e)) for e in collect(edges(g2))]
-    for (i,j) in edge_pairs
-        add_edge!(g, i, j)
-    end
-    peps,_ = isometric_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
-    @test isapprox(reshape(peps.vertex_tensors[5], 8, 4)'*reshape(peps.vertex_tensors[5], 8, 4), Matrix(I, 4, 4),atol=1e-10)  
+    g1 = dgrid(3,3)
+    g2 = dtorus(3,3)
+    peps1,_ = isometric_peps(ComplexF64, g1, 2, 2, TreeSA(), MergeGreedy())
+    peps2,_ = isometric_peps(ComplexF64, g2, 2, 2, TreeSA(), MergeGreedy())
+    @test isapprox(reshape(peps1.vertex_tensors[5], 8, 4)'*reshape(peps1.vertex_tensors[5], 8, 4), Matrix(I, 4, 4),atol=1e-10)  
+    @test isapprox(reshape(peps2.vertex_tensors[5], 8, 4)'*reshape(peps2.vertex_tensors[5], 8, 4), Matrix(I, 4, 4),atol=1e-10)  
 end
 
 
@@ -64,8 +62,8 @@ end
 
 
 @testset "isometric_peps_optimize" begin
-    g = SimpleDiGraph(16)
-    g2 = Graphs.grid([4,4])
+    g = SimpleDiGraph(9)
+    g2 = Graphs.grid([3,3])
     edge_pairs = [(src(e), dst(e)) for e in collect(edges(g2))]
     for (i,j) in edge_pairs
         add_edge!(g, i, j)
@@ -84,7 +82,7 @@ end
 
     result, energy, optimized_peps, record= isopeps_optimize_ising(peps, M, matrix_dims, g, J, h, GreedyMethod(), MergeGreedy(), 100)
     
-    hami = ising_hamiltonian_2d(4,4,J,h)
+    hami = ising_hamiltonian_2d(3,3,J,h)
     eigenval,eigenvec = IsoPEPS.eigsolve(IsoPEPS.mat(hami), 1, :SR; ishermitian=true)
     @show energy
     @show eigenval[1]
@@ -95,14 +93,35 @@ end
 
 
 @testset "isometric_peps_to_unitary" begin
-    g = SimpleDiGraph(4)
-    g2 = grid([2,2])
+    g = dgrid(2,2)
+    peps, matrix_dims = isometric_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
+    ugates = isometric_peps_to_unitary(peps, g)
+    @test isapprox(ugates.vertex_tensors[2]*ugates.vertex_tensors[2]', Matrix(I, 4, 4), atol=1e-10)
+    @test isapprox(ugates.vertex_tensors[2]'*ugates.vertex_tensors[2], Matrix(I, 4, 4), atol=1e-10)
+end
+
+using Profile
+
+Profile.clear()
+
+Profile.init(n=100_000_000, delay=0.001)  # 100M samples, 1ms interval
+
+@profile begin
+    g = SimpleDiGraph(9)
+    g2 = Graphs.grid([3,3])
     edge_pairs = [(src(e), dst(e)) for e in collect(edges(g2))]
     for (i,j) in edge_pairs
         add_edge!(g, i, j)
     end
-    peps, matrix_dims = isometric_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
-    ugates = isometric_peps_to_unitary(peps, g)
-    @test isapprox((reshape(ugates.vertex_tensors[1], 8, 8)'*reshape(ugates.vertex_tensors[1], 8, 8)), Matrix(I, 8, 8), atol=1e-10)
-    @test isapprox((reshape(ugates.vertex_tensors[1], 8, 8)*reshape(ugates.vertex_tensors[1], 8, 8)'), Matrix(I, 8, 8), atol=1e-10)
+    peps, matrix_dims = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+    
+    M = ProductManifold([Manifolds.Stiefel(n, p) for (n, p) in matrix_dims]...)
+
+    J, h = 1.0, 0.2
+
+    x = variables(peps)
+    result, energy, optimized_peps, record= isopeps_optimize_ising(peps, M, matrix_dims, g, J, h, TreeSA(), MergeGreedy(), 100)
+    open("profile_results1.txt", "w") do io
+        Profile.print(io; format=:tree, mincount=2000)
+    end
 end

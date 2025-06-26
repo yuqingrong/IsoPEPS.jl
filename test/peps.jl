@@ -2,13 +2,10 @@ using IsoPEPS
 using Test
 using ForwardDiff
 import DifferentiationInterface
-using Enzyme
 import OMEinsumContractionOrders
+import Yao
 @testset "zero_peps and inner_product" begin
-    g = SimpleGraph(4)
-    for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
-        add_edge!(g, i, j)
-    end
+    g = dgrid(2,2)
     peps = zero_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
     @test peps.physical_labels == [1,2,3,4]
     @test peps.virtual_labels == [5,6,7,8]
@@ -17,10 +14,7 @@ import OMEinsumContractionOrders
 end
 
 @testset "rand_peps and inner_product" begin
-    g = SimpleGraph(4)
-    for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
-        add_edge!(g, i, j)
-    end
+    g = dgrid(2,2)
     peps1 = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
     peps2 = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
     @test peps1.physical_labels == [1,2,3,4]
@@ -28,7 +22,10 @@ end
     @test inner_product(peps1, peps1)[] ≈ statevec(peps1)' * statevec(peps1)
     @test inner_product(peps1, peps2)[] ≈ statevec(peps1)' * statevec(peps2)
 end
-import Yao
+
+
+
+
 @testset "apply_onsite" begin
     g = SimpleGraph(4)
     for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
@@ -36,35 +33,28 @@ import Yao
     end
     peps = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
     reg = Yao.ArrayReg(vec(peps))
-    m = Matrix(X)
+    m = Matrix(Yao.X)
     apply_onsite!(peps, 1, m)
     reg |> put(4, (1,)=>Yao.matblock(m))
     @test vec(peps) ≈ statevec(reg)
 end
 
 @testset "single_sandwich" begin
-    g = SimpleGraph(4)
-    for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
-        add_edge!(g, i, j)
-    end
-    peps = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
-    
+    g = dgrid(2,2)
+    peps = rand_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+   
     h = put(4,(1,)=>Yao.X)
-    @show mat
     expect, gradient = single_sandwich(peps, peps, 1, Matrix(Yao.X), TreeSA(), MergeGreedy())
-    exact = (statevec(peps)' * mat(h) * statevec(peps))[1]
+    exact = (statevec(peps)' * Yao.mat(h) * statevec(peps))[1]
     @test expect ≈ exact
 end
 
 @testset "two_sandwich" begin
-    g = SimpleGraph(4)
-    for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
-        add_edge!(g, i, j)
-    end
-    peps = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
+    g = dgrid(2,2)
+    peps = rand_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
 
-    h = put(4,(1,2)=>kron(Z,Z))
-    expect, _ = two_sandwich(peps, peps, 1, 2, reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2), TreeSA(), MergeGreedy())
+    h = put(4,(1,2)=>kron(Yao.Z,Yao.Z))
+    expect, _ = two_sandwich(peps, peps, 1, 2, reshape(kron(Matrix(Yao.Z),Matrix(Yao.Z)),2,2,2,2), TreeSA(), MergeGreedy())
     exact = (statevec(peps)' * Yao.mat(h) * statevec(peps))[1]
     @test expect ≈ exact
 end
@@ -194,6 +184,24 @@ end
     #@test long_range_coherence_peps(peps, 1, 2) ≈ 0.0
 end
 
+@testset "dtorus" begin
+    g = dtorus(2,2)
+    peps = rand_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+    @test peps.physical_labels == [1,2,3,4]
+    @test peps.virtual_labels == [5,6,7,8,9,10,11,12]
+    @show peps.vertex_labels
+    @test inner_product(peps,peps)[] ≈ statevec(peps)' * statevec(peps)
+
+    h1 = put(4,(1,)=>Yao.X)
+    exact1 = (statevec(peps)' * Yao.mat(h1) * statevec(peps))[1]
+    @test single_sandwich(peps, peps, 1, Matrix(Yao.X), TreeSA(), MergeGreedy())[1] ≈ exact1
+
+    h2 = put(4,(1,2)=>Yao.kron(Yao.Z,Yao.Z))
+    exact2 = (statevec(peps)' * Yao.mat(h2) * statevec(peps))[1]
+    @test two_sandwich(peps, peps, 1, 2, reshape(kron(Matrix(Yao.Z),Matrix(Yao.Z)),2,2,2,2), TreeSA(), MergeGreedy())[1] ≈ exact2
+end
+
+
 
 using OMEinsum
 Mooncake.tangent_type(::Type{<:AbstractEinsum}) = Mooncake.NoTangent
@@ -205,9 +213,9 @@ for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
 end
 peps = rand_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
 using OMEinsumContractionOrders
-result = optimized_peps_optimize2(peps, 1, 2, real(reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)), TreeSA(), MergeGreedy())
-@time optimized_peps_optimize2(peps, 1, 2, real(reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)), TreeSA(), MergeGreedy())
-@time peps_optimize2(peps, 1, 2, real(reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)), TreeSA(), MergeGreedy())
+result = optimized_peps_optimize2(peps, 1, 2, real(reshape(kron(Matrix(Yao.Z),Matrix(Yao.Z)),2,2,2,2)), TreeSA(), MergeGreedy())
+@time optimized_peps_optimize2(peps, 1, 2, real(reshape(kron(Matrix(Yao.Z),Matrix(Yao.Z)),2,2,2,2)), TreeSA(), MergeGreedy())
+@time peps_optimize2(peps, 1, 2, real(reshape(kron(Matrix(Yao.Z),Matrix(Yao.Z)),2,2,2,2)), TreeSA(), MergeGreedy())
 Profile.clear() 
-@profile peps_optimize2(peps, 1, 2, real(reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)), TreeSA(), MergeGreedy())
+@profile peps_optimize2(peps, 1, 2, real(reshape(kron(Matrix(Yao.Z),Matrix(Yao.Z)),2,2,2,2)), TreeSA(), MergeGreedy())
 Profile.print(format=:flat)
