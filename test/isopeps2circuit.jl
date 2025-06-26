@@ -13,92 +13,40 @@ import Yao
     #@test isapprox(pepsu.vertex_tensors[1]'*pepsu.vertex_tensors[1], Matrix(I, 8, 8),atol=1e-10)  
     #@test isapprox(pepsu.vertex_tensors[1]*pepsu.vertex_tensors[1]', Matrix(I, 8, 8),atol=1e-10)  
     #@test isapprox((reshape(peps.vertex_tensors[2], 4, 2)'*reshape(peps.vertex_tensors[2], 4, 2)), Matrix(I, 2, 2), atol=1e-10)
-
-    circ1 = get_circuit(pepsu, g)
-    circ2 = new_get_circuit(pepsu, g)
-   
+    nbit1 =3
+    nbit2 = 5
+    circ1 = get_reuse_circuit(nbit1, pepsu, g)
+    circ2 = get_circuit(nbit2, pepsu, g)
+  
     @test collect_blocks(IsoPEPS.Measure, circ2)|>length == 5
  
-    reg1 = Yao.zero_state(5;nbatch=100000)
-    reg2 = Yao.zero_state(5;nbatch=100000)
+    reg1 = Yao.zero_state(nbit1;nbatch=100000)
+    reg2 = Yao.zero_state(nbit2;nbatch=100000)
     res1 = gensample(circ1, reg1, pepsu, Yao.Z)
-   
+    
     @test res1[1,1] in [0,1]
     @test all(x -> x in [0,1], res1)
-   
 
  
-    corr1 = long_range_coherence(circ1, reg1, pepsu, 3, 4)
-    corr2 = long_range_coherence(circ2, reg2, pepsu, 3, 4)
-    corr_expect1= long_range_coherence_peps(peps, 3, 4) 
-    @show corr_expect1
+    corr1 = long_range_coherence(circ1, reg1, pepsu, 2, 3)
+    corr2 = long_range_coherence(circ2, reg2, pepsu, 2, 3)
+    corr_expect= long_range_coherence_peps(peps, 2, 3) 
     
-
-    @test isapprox(corr2, corr_expect1, atol=1e-2)
-    @show corr1, corr2
+    @test isapprox(corr1, corr_expect, atol=1e-2)
+    @test isapprox(corr2, corr_expect, atol=1e-2)
+   
+    @show corr_expect, corr1, corr2
     @test 0 ≤ corr1 ≤ 1
 end
    
-
-
-
-@testset "Bell State" begin
-    
-    g = dgrid(2,2)
-    peps = zero_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
-    # Create a Bell state by setting specific tensor values
-    # For a 2-qubit system with a Bell state |Φ⁺⟩ = (|00⟩ + |11⟩)/√2
-    
-    # Reset the tensors to zeros
-    peps.vertex_tensors[1] .= 0
-    peps.vertex_tensors[2] .= 0
-    
-    # Set the tensor elements to create a Bell state
-    # For the first site tensor (with shape 2×2)
-    peps.vertex_tensors[1][1,1] = 1/sqrt(2)  # |0⟩ component
-    peps.vertex_tensors[1][2,2] = 1/sqrt(2)  # |1⟩ component
-    
-    # For the second site tensor (with shape 2×2)
-    peps.vertex_tensors[2][1,1] = 1  # |0⟩ component for first site's |0⟩
-    peps.vertex_tensors[2][2,2] = 1  # |1⟩ component for first site's |1⟩
-    
-    # Create ugates with the same structure as peps but with 4x4 tensors
-    ugates = deepcopy(peps)
-    
-    # Initialize tensors with zeros
-    ugates.vertex_tensors[1] = zeros(ComplexF64, 4, 4)
-    
-    # Set values for the first tensor (4x4)
-    ugates.vertex_tensors[1][1,1] = 1/sqrt(2)  # |0⟩ component
-    ugates.vertex_tensors[1][1,4] = 1/sqrt(2)  # |1⟩ component
-    ugates.vertex_tensors[1][2,2] = 1          # Identity part
-    ugates.vertex_tensors[1][3,3] = 1          # Identity part
-    ugates.vertex_tensors[1][4,1] = 1/sqrt(2)  # |1⟩ component
-    ugates.vertex_tensors[1][4,4] = -1/sqrt(2)  # |0⟩ component
-    
-    
-    
-    # Display the original tensors for comparison
-    @show peps.vertex_tensors[1]
-    @show peps.vertex_tensors[2]
-    @show ugates.vertex_tensors[1]
-    @show ugates.vertex_tensors[2]
-
-    corr_expect1= long_range_coherence_peps(peps, 1, 2)
-    @show corr_expect1
-
-    circ = get_circuit(ugates, g)
-    reg = Yao.zero_state(3;nbatch=10)
-
-    res = gensample(circ, reg, ugates, Z)
-    @show res
-    corr1 = long_range_coherence(circ, reg, ugates, 1, 2)
-    
-    @test isapprox(corr1, corr_expect1, atol=1e-2)
-    @show corr1
-    @test 0 ≤ corr1 ≤ 1
+@testset "torus_circuit" begin
+    g = dtorus(3,3)
+    peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+    pepsu = isometric_peps_to_unitary(peps, g)
+    circ = get_iter_circuit(pepsu, g)
+    @show circ
+    @test collect_blocks(IsoPEPS.Measure, circ)|>length == 27
 end
-
 
 
 

@@ -135,12 +135,22 @@ function isometric_peps(::Type{T}, g, D::Int, nflavor::Int, optimizer::CodeOptim
         Q, R = qr(A)
         Q=collect(Q)
   
+        dims = [2 for _ in 1:Int(log2(phys_dim*out_dim*in_dim))]
+        all_neighbors = union(inneighbors(g, i), outneighbors(g, i))
+        out_index = findall(x -> x in outneighbors(g, i), all_neighbors) .+ 1   # TODO: not right if the shape is 2*2 in torus
+        in_index = findall(x -> x in inneighbors(g, i), all_neighbors) .+ 1
         if phys_dim * out_dim >= in_dim
             Q = Q[:, 1:in_dim] 
+            push!(matrix_dims, size(Q))
+           
+            
         else
             Q = Q[:, 1:phys_dim*out_dim]
+            push!(matrix_dims, size(Q))
+            Q = reshape(Q, dims...)
+            Q = permutedims(Q, (3,1,2))
         end
-        push!(matrix_dims, size(Q))
+        
         peps.vertex_tensors[i] = reshape(Q, original_size)
     end
     
@@ -157,41 +167,38 @@ function isometric_peps_to_unitary(peps::PEPS, g)
         in_dim = prod([peps.D for _ in inneighbors(g, i)])  # Product of incoming bond dimensions
         out_dim = prod([peps.D for _ in outneighbors(g, i)])
 
-        ortho_dim = max(phys_dim * out_dim, in_dim)
-    
-        Q = reshape(tensor, ortho_dim, :)
-            
-        remaining = nullspace(Q') 
-        Q = hcat(Q, remaining)
-        @assert Q*Q' ≈ Matrix(I, size(Q, 1), size(Q, 1))
-        target_size = size(Q)
-        
-        dims = [2 for _ in 1:2*Int(log2(ortho_dim))]
-        Q = reshape(Q, dims...)
-
         all_neighbors = union(inneighbors(g, i), outneighbors(g, i))
         out_index = findall(x -> x in outneighbors(g, i), all_neighbors) .+ 1
         in_index = findall(x -> x in inneighbors(g, i), all_neighbors) .+ 1
 
         ancil = 1 + length(outneighbors(g, i)) - length(inneighbors(g, i))
+        ortho_dim = max(phys_dim * out_dim, in_dim)
+    
+        #Q = reshape(tensor, ortho_dim, :)
+        Q = reshape(tensor, out_dim*phys_dim, :)
+        if ancil < 0
+            Q = transpose(Q)
+        end
+
+        remaining = nullspace(Q') 
+        Q = hcat(Q, remaining)
+    
+        #@assert Q'*Q ≈ Matrix(I, size(Q, 1), size(Q, 2))
+        target_size = size(Q)
+        
+        dims = [2 for _ in 1:2*Int(log2(ortho_dim))]
+        Q = reshape(Q, dims...)
+
+       
         #ancil = phys_dim + out_dim - in_dim
-        @show ancil
-        if ancil > 0
-            in_ancil = ancil
-            out_ancil = nothing
-            in_ancil_index = collect(length(all_neighbors)+2:length(all_neighbors)+2+in_ancil-1)
-            @show (1,out_index..., in_index..., in_ancil_index... )
-            @show out_index, in_index, in_ancil_index
-            Q = permutedims(Q, (1,out_index..., in_index..., in_ancil_index... ))
-        elseif ancil < 0
+    
+        if ancil < 0
             in_ancil = nothing
             out_ancil = -ancil
             out_ancil_index = collect(length(all_neighbors)+2:length(all_neighbors)+2+out_ancil-1)
-            @show (1,out_index..., out_ancil_index..., in_index... )
-            @show out_index, out_ancil_index, in_index
-            Q = permutedims(Q, (1, out_index..., out_ancil_index..., in_index... ))
-        else
-            Q = permutedims(Q, (1, out_index..., in_index... ))
+           
+            Q = permutedims(Q, (3,4,1,2))   # TODO: use out_ancil_index, in_index...
+       
         end
   
         ugates.vertex_tensors[i] = reshape(Q, target_size...)

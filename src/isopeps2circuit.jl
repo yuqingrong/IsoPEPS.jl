@@ -70,8 +70,7 @@ function peps2ugate(peps::GeneralPEPS, g)
 end
 
 
-function get_circuit(pepsu::GeneralPEPS, g)
-   nbit = 5  # TODO: make this dynamic
+function get_reuse_circuit(nbit::Int, pepsu::GeneralPEPS, g)
    circ = chain(nbit)
    target_qubits = Vector{Vector{Int}}(undef, length(pepsu.physical_labels))
    free_qubits = collect(1:nbit)
@@ -82,30 +81,24 @@ function get_circuit(pepsu::GeneralPEPS, g)
         inneighbors = Graphs.inneighbors(g, i)
         n = Int(log2(size(pepsu.vertex_tensors[i])[1]))-length(inneighbors)
     
-        # Initialize target_qubits[i] instead of target_qubits[1]
+       
         if isempty(inneighbors)
             target_qubits[i] = free_qubits[1:n]
         else
-            # Check if remain_qubits[j] is initialized for all inneighbors
-            last_elements = Int[]
-            for j in inneighbors
-                if !isnothing(remain_qubits[j]) && !isempty(remain_qubits[j])
-                    push!(last_elements, remain_qubits[j][end])
-                end
-            end
             
+            
+            last_elements = Int[remain_qubits[j][1] for j in inneighbors 
+            if !isnothing(remain_qubits[j]) && !isempty(remain_qubits[j])]
             target_qubits[i] = vcat(last_elements, free_qubits[1:n]) 
-            target_qubits[i] = sort(target_qubits[i])
-            @show target_qubits[1]
-            # Update remain_qubits for inneighbors
+            
+            
             for j in inneighbors
                 if !isnothing(remain_qubits[j]) && !isempty(remain_qubits[j])
-                    remain_qubits[j] = remain_qubits[j][1:end-1] 
+                    remain_qubits[j] = remain_qubits[j][2:end] 
                 end
             end
         end
         
-        # Ensure target_qubits[i] is not empty before proceeding
         if !isempty(target_qubits[i])
             chain(nbit, put(nbit, Tuple(target_qubits[i])=>matblock(pepsu.vertex_tensors[i]))) |> add!
             Bag(basis_rotor(Z, nbit, target_qubits[i])) |> add!
@@ -115,10 +108,10 @@ function get_circuit(pepsu::GeneralPEPS, g)
                 Measure(nbit; locs=target_qubits[i][2], resetto=0) |> add!
             end
             
-            free_qubits = vcat(target_qubits[i][1], free_qubits[n+1:end])
+            free_qubits = vcat(target_qubits[i][1], free_qubits[n+1:end]) |> sort
             remain_qubits[i] = target_qubits[i][2:end]
         else
-            # Handle the case where target_qubits[i] is empty
+           
             @warn "Empty target_qubits for node $i"
             remain_qubits[i] = Int[]
         end
@@ -126,8 +119,7 @@ function get_circuit(pepsu::GeneralPEPS, g)
    return circ
 end
 
-function new_get_circuit(pepsu::GeneralPEPS, g)
-    nbit = 5  # TODO: make this dynamic
+function get_circuit(nbit::Int, pepsu::GeneralPEPS, g)
     circ = chain(nbit)
     target_qubits = Vector{Vector{Int}}(undef, length(pepsu.physical_labels))
     remain_qubits = Vector{Vector{Int}}(undef, length(pepsu.physical_labels))
@@ -136,24 +128,20 @@ function new_get_circuit(pepsu::GeneralPEPS, g)
     
     for i in 1:length(pepsu.physical_labels) 
          inneighbors = Graphs.inneighbors(g, i)
-         n = Int(log2(size(pepsu.vertex_tensors[i])[1]))-length(inneighbors)
+         n = Int(log2(size(pepsu.vertex_tensors[i])[1]))-length(inneighbors)    
      
          # Initialize target_qubits[i] instead of target_qubits[1]
-         if isempty(inneighbors)
-             target_qubits[i] = free_qubits[1:n]
-         else
+        if isempty(inneighbors)
+            target_qubits[i] = free_qubits[1:n]
+        else
              # Check if remain_qubits[j] is initialized for all inneighbors
-             last_elements = Int[]
-             for j in inneighbors
-                 if !isnothing(remain_qubits[j]) && !isempty(remain_qubits[j])
-                     push!(last_elements, remain_qubits[j][1])
-                 end
-             end
+            last_elements = Int[remain_qubits[j][1] for j in inneighbors 
+            if !isnothing(remain_qubits[j]) && !isempty(remain_qubits[j])]
+            
              
-             target_qubits[i] = vcat(last_elements, free_qubits[1:n]) 
-             target_qubits[i] = sort(target_qubits[i])
-        @show target_qubits[i]
-        @show free_qubits
+            target_qubits[i] = vcat(last_elements, free_qubits[1:n]) |> sort
+            #target_qubits[i] = sort(target_qubits[i])
+        
              # Update remain_qubits for inneighbors
              for j in inneighbors
                  if !isnothing(remain_qubits[j]) && !isempty(remain_qubits[j])
@@ -250,3 +238,50 @@ basis_rotor(::XGate) = Ry(-0.5π)
 basis_rotor(::YGate) = Rx(0.5π)   
 
 basis_rotor(basis, nbit, locs) = repeat(nbit, basis_rotor(basis), locs)
+
+
+"""circuit for torus"""
+function get_iter_circuit(pepsu::GeneralPEPS, g; n_physical_qubits::Int=1, n_virtual_qubits::Int=6, iterations::Int=3)
+    nbit = n_physical_qubits + n_virtual_qubits
+    circ = chain(nbit)
+    
+    physical_qubits = collect(1:n_physical_qubits)
+    virtual_qubits = collect(n_physical_qubits+1:nbit)
+    
+    n_sites = length(pepsu.physical_labels)
+    Lx = Ly = Int(sqrt(n_sites))  # Assuming square lattice TODO: make it better
+    
+    for iter in 1:iterations
+        for site in 1:n_sites
+            col, row = CartesianIndices((Lx, Ly))[site][1],CartesianIndices((Lx, Ly))[site][2]
+            
+            pq = physical_qubits[((site-1) % n_physical_qubits) + 1]
+            
+            vq_v = virtual_qubits[row]  
+            vq_h = virtual_qubits[col + Ly]   
+            
+            target_qubits = [pq, vq_v, vq_h]
+          
+            gate = pepsu.vertex_tensors[site]
+            
+            push!(circ, put(nbit, Tuple(target_qubits)=>matblock(gate)))    
+            push!(circ, Measure(nbit; locs=pq, resetto=0))
+            
+        end
+    end
+    
+    return circ
+end
+
+
+"""Initialize virtual qubits to random state (only once at the beginning!)"""
+function init_random_vq(circ, nbit, virtual_qubits)
+    for vq in virtual_qubits
+        push!(circ, put(nbit, vq=>Ry(rand()*2π)))
+        push!(circ, put(nbit, vq=>Rz(rand()*2π)))
+    end
+end
+
+function converge_condiction()
+
+end

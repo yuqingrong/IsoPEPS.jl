@@ -42,7 +42,7 @@ export sparse
 export grad, central_fdm
 export dot
 export IsometricPEPS, rand_isometricpeps, mose_move_right!,mose_move_right_step!,peps_fidelity, isometric_peps
-export peps2ugate, get_circuit,new_get_circuit,Measure, collect_blocks,I, gensample, long_range_coherence, zz_correlation, mean
+export peps2ugate, get_circuit,get_reuse_circuit,get_iter_circuit,Measure, collect_blocks,I, gensample, long_range_coherence, zz_correlation, mean
 export ProductManifold, Stiefel, isopeps_optimize_ising, vector2point, point2vector, isometric_peps_to_unitary
 
 include("LanczosAlgorithm.jl")

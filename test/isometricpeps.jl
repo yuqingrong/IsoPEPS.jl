@@ -41,8 +41,16 @@ end
     g2 = dtorus(3,3)
     peps1,_ = isometric_peps(ComplexF64, g1, 2, 2, TreeSA(), MergeGreedy())
     peps2,_ = isometric_peps(ComplexF64, g2, 2, 2, TreeSA(), MergeGreedy())
-    @test isapprox(reshape(peps1.vertex_tensors[5], 8, 4)'*reshape(peps1.vertex_tensors[5], 8, 4), Matrix(I, 4, 4),atol=1e-10)  
-    @test isapprox(reshape(peps2.vertex_tensors[5], 8, 4)'*reshape(peps2.vertex_tensors[5], 8, 4), Matrix(I, 4, 4),atol=1e-10)  
+
+    @test isapprox(reshape(peps1.vertex_tensors[1], 8, 1)'*reshape(peps1.vertex_tensors[1], 8, 1), Matrix(I, 1, 1),atol=1e-10)  
+    @test isapprox(reshape(peps2.vertex_tensors[1], 8, 4)'*reshape(peps2.vertex_tensors[1], 8, 4), Matrix(I, 4, 4),atol=1e-10)  
+
+    @test isapprox(reshape(peps1.vertex_tensors[2], 8, 2)'*reshape(peps1.vertex_tensors[2], 8, 2), Matrix(I, 2, 2),atol=1e-10)  
+    @test isapprox(reshape(peps2.vertex_tensors[2], 8, 4)'*reshape(peps2.vertex_tensors[2], 8, 4), Matrix(I, 4, 4),atol=1e-10)  
+
+    @test isapprox(reshape(peps1.vertex_tensors[end], 2, 4)*reshape(peps1.vertex_tensors[end], 2, 4)', Matrix(I, 2, 2),atol=1e-10)  
+    @test isapprox(reshape(peps2.vertex_tensors[end], 8, 4)'*reshape(peps2.vertex_tensors[end], 8, 4), Matrix(I, 4, 4),atol=1e-10)  
+
 end
 
 
@@ -93,12 +101,26 @@ end
 
 
 @testset "isometric_peps_to_unitary" begin
-    g = dgrid(2,2)
-    peps, matrix_dims = isometric_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
-    ugates = isometric_peps_to_unitary(peps, g)
-    @test isapprox(ugates.vertex_tensors[2]*ugates.vertex_tensors[2]', Matrix(I, 4, 4), atol=1e-10)
-    @test isapprox(ugates.vertex_tensors[2]'*ugates.vertex_tensors[2], Matrix(I, 4, 4), atol=1e-10)
+    g1 = dgrid(2,2)
+    peps1, matrix_dims1 = isometric_peps(ComplexF64, g1, 2, 2, TreeSA(), MergeGreedy())
+    ugates1 = isometric_peps_to_unitary(peps1, g1)
+    @test isapprox(ugates1.vertex_tensors[2]*ugates1.vertex_tensors[2]', Matrix(I, 4, 4), atol=1e-10)
+    @test isapprox(ugates1.vertex_tensors[2]'*ugates1.vertex_tensors[2], Matrix(I, 4, 4), atol=1e-10)
+
+    @test isapprox(ugates1.vertex_tensors[4]*ugates1.vertex_tensors[4]', Matrix(I, 4, 4), atol=1e-10)
+    @test isapprox(ugates1.vertex_tensors[4]'*ugates1.vertex_tensors[4], Matrix(I, 4, 4), atol=1e-10)
+
+    g2 = dtorus(3,3)
+    peps2, matrix_dims2 = isometric_peps(ComplexF64, g2, 2, 2, TreeSA(), MergeGreedy())
+    ugates2 = isometric_peps_to_unitary(peps2, g2)
+    @test isapprox(ugates2.vertex_tensors[1]*ugates2.vertex_tensors[1]', Matrix(I, 8, 8), atol=1e-10)
+    @test isapprox(ugates2.vertex_tensors[1]'*ugates2.vertex_tensors[1], Matrix(I, 8, 8), atol=1e-10)
+
+    @test isapprox(ugates2.vertex_tensors[9]*ugates2.vertex_tensors[9]', Matrix(I, 8, 8), atol=1e-10)
+    @test isapprox(ugates2.vertex_tensors[9]'*ugates2.vertex_tensors[9], Matrix(I, 8, 8), atol=1e-10)
 end
+
+
 
 using Profile
 

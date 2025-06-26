@@ -93,7 +93,7 @@ function zero_peps(::Type{T}, g, D::Int, nflavor::Int, optimizer::CodeOptimizer,
     vertex_tensors = Array{T}[]
     edge_map = Dict(zip(edges(g), virtual_labels))  # edges(g) returns edge between 2 vertices, [(1,2),(2,3)]
     for i=1:nv(g)
-        push!(vertex_labels, [i,[get(edge_map,SimpleEdge(nb,i),0) for nb in inneighbors(g, i) ]...,[get(edge_map,SimpleEdge(i,nb),0) for nb in outneighbors(g, i) ]...])  # write physical_labels and the corresponding virtual_labels together.
+        push!(vertex_labels, [i,[get(edge_map,SimpleEdge(i,nb),0) for nb in outneighbors(g, i) ]...,[get(edge_map,SimpleEdge(nb,i),0) for nb in inneighbors(g, i) ]...])  # write physical_labels and the corresponding virtual_labels together.
     
         t = zeros(T, nflavor, fill(D, degree(g, i))...)  
         t[1] = 1  
