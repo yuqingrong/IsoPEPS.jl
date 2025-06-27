@@ -170,7 +170,7 @@ function get_circuit(nbit::Int, pepsu::GeneralPEPS, g)
     return circ
 end
 
-function gensample(circ, reg::AbstractRegister, pepsu::GeneralPEPS, basis)
+function gensample(circ, reg::AbstractRegister, pepsu::GeneralPEPS, basis)  # TODO: add more basis: X, Y
     nbit = nqubits(reg)
     res = zeros(Int, nbatch(reg), length(pepsu.physical_labels)+1)
     
@@ -241,36 +241,131 @@ basis_rotor(basis, nbit, locs) = repeat(nbit, basis_rotor(basis), locs)
 
 
 """circuit for torus"""
-function get_iter_circuit(pepsu::GeneralPEPS, g; n_physical_qubits::Int=1, n_virtual_qubits::Int=6, iterations::Int=3)
+function iter_sz_convergence(pepsu::GeneralPEPS, g; n_physical_qubits::Int=1, n_virtual_qubits::Int=6, max_iterations::Int=100, sz_tol::Float64=0.01, convergence_window::Int=10)
     nbit = n_physical_qubits + n_virtual_qubits
-    circ = chain(nbit)
-    
     physical_qubits = collect(1:n_physical_qubits)
     virtual_qubits = collect(n_physical_qubits+1:nbit)
     
-    n_sites = length(pepsu.physical_labels)
-    Lx = Ly = Int(sqrt(n_sites))  # Assuming square lattice TODO: make it better
+    all_measurements = Vector{Int}[]
+    converged = false
+    converged_iter = -1
     
-    for iter in 1:iterations
-        for site in 1:n_sites
-            col, row = CartesianIndices((Lx, Ly))[site][1],CartesianIndices((Lx, Ly))[site][2]
-            
-            pq = physical_qubits[((site-1) % n_physical_qubits) + 1]
-            
-            vq_v = virtual_qubits[row]  
-            vq_h = virtual_qubits[col + Ly]   
-            
-            target_qubits = [pq, vq_v, vq_h]
-          
-            gate = pepsu.vertex_tensors[site]
-            
-            push!(circ, put(nbit, Tuple(target_qubits)=>matblock(gate)))    
-            push!(circ, Measure(nbit; locs=pq, resetto=0))
-            
+    # TODO: initialize virtual qubits with random state
+    
+    circ = Yao.chain(nbit)
+    
+
+    for iter in 1:max_iterations
+        circ = get_iter_circuit(circ, pepsu, n_physical_qubits, n_virtual_qubits, physical_qubits, virtual_qubits)   # add series of blocks to circ
+        circ_reg = copy(circ)
+
+        reg = Yao.zero_state(nbit)
+        reg |> circ_reg
+        iter_res = extract_sz_measurements(circ_reg, nbit, g)  # single iteration result
+        push!(all_measurements, iter_res)   # Store measurements
+        
+        # Check convergence
+        if iter >= convergence_window
+            if fidelity_convergence(all_measurements; tol=sz_tol, window=convergence_window)
+                converged = true
+                converged_iter = iter
+                println("Converged at iteration $iter")
+                break
+            end
         end
     end
     
+    if !converged
+        println("Did not converge within $max_iterations iterations")
+    end
+    
+    return circ, converged, converged_iter
+end
+
+function get_iter_circuit(circ, pepsu::GeneralPEPS, n_physical_qubits::Int, n_virtual_qubits::Int, physical_qubits::Vector{Int}, virtual_qubits::Vector{Int})   
+    n_sites = length(pepsu.physical_labels)
+    nbit = n_physical_qubits + n_virtual_qubits
+    Lx = Ly = Int(sqrt(n_sites))  # Assuming square lattice TODO: make it better
+    
+    for site in 1:n_sites
+        col, row = CartesianIndices((Lx, Ly))[site][1],CartesianIndices((Lx, Ly))[site][2]
+            
+        pq = physical_qubits[((site-1) % n_physical_qubits) + 1]
+            
+        vq_v = virtual_qubits[row]  
+        vq_h = virtual_qubits[col + Ly]   
+            
+        target_qubits = [pq, vq_v, vq_h]
+          
+        gate = pepsu.vertex_tensors[site]
+            
+        push!(circ, put(nbit, Tuple(target_qubits)=>matblock(gate)))    
+        push!(circ, Measure(nbit; locs=pq, resetto=0))
+            
+    end
+   
     return circ
+end
+
+
+function fidelity_convergence(all_measurements::Vector{Vector{Int}}; tol::Float64=0.01, window::Int=10)
+    if length(all_measurements) < window
+        return false
+    end
+    prev_state = all_measurements[end-1]
+    curr_state = all_measurements[end]
+
+    fidelity = sum(prev_state .== curr_state) / length(prev_state)
+
+    if fidelity < 1 - tol
+        return false
+    end
+
+    return true
+end
+
+function extract_sz_measurements(circ, nbit::Int, g)
+    iter_res = zeros(Int, nv(g))
+    result = collect_blocks(Measure, circ)[end-nv(g)+1:end]
+
+    for j in 1:length(result)
+        iter_res[j] = result[j].results
+    end    
+    return iter_res
+end
+
+function torus_gensample(circ, reg::AbstractRegister, pepsu::GeneralPEPS, basis)
+    nbit = nqubits(reg)
+    res = zeros(Int, nbatch(reg), length(pepsu.physical_labels))
+    
+    bags = collect_blocks(Bag, circ)
+    
+    for bag in bags
+        setcontent!(bag, basis_rotor(basis, nbit, occupied_locs(bag.content)))
+    end
+    
+    copy(reg) |> circ
+    result = collect_blocks(Measure, circ)[end-length(pepsu.physical_labels)+1:end]
+    
+    for j in 1:length(result)
+        res[:,j] = result[j].results # Access first element of result array
+    end    
+ 
+    return res
+end
+
+
+function torus_long_range_coherence(circ, reg::AbstractRegister, pepsu::GeneralPEPS, i::Int, j::Int)
+    corr = 0.0
+    for basis in [Z]
+        samples = torus_gensample(circ, reg, pepsu, basis)   
+        SiSj = mean((-1)^(samples[shot,i] + samples[shot,j]) for shot in 1:nbatch(reg))
+         
+        println("Circuit SiSj: ", SiSj)
+         
+        corr = SiSj
+    end
+    return abs(corr)
 end
 
 
@@ -280,8 +375,4 @@ function init_random_vq(circ, nbit, virtual_qubits)
         push!(circ, put(nbit, vq=>Ry(rand()*2π)))
         push!(circ, put(nbit, vq=>Rz(rand()*2π)))
     end
-end
-
-function converge_condiction()
-
 end

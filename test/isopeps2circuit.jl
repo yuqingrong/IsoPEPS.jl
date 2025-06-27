@@ -43,10 +43,48 @@ end
     g = dtorus(3,3)
     peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
     pepsu = isometric_peps_to_unitary(peps, g)
-    circ = get_iter_circuit(pepsu, g)
-    @show circ
-    @test collect_blocks(IsoPEPS.Measure, circ)|>length == 27
+    circ = Yao.chain(7)
+    circ = get_iter_circuit(circ, pepsu, 1, 6, collect(1:1), collect(2:7))
+    @test collect_blocks(IsoPEPS.Measure, circ)|>length == 9
 end
+
+@testset "Sz_convergence" begin
+    all_measurements1 = [zeros(Int,3) for _ in 1:100]
+    all_measurements2 = [rand(Int,3) for _ in 1:100]
+    @test Sz_convergence(all_measurements1) == true
+    @test Sz_convergence(all_measurements2) == false
+end
+
+@testset "extract_sz_measurements" begin
+    nbit = 7
+    g = dtorus(3,3)
+    peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+    pepsu = isometric_peps_to_unitary(peps, g)
+    circ = Yao.chain(nbit)
+    circ = get_iter_circuit(circ, pepsu, 1, 6, collect(1:1), collect(2:7))
+    reg = Yao.zero_state(nbit)
+    reg |> circ  # TODO: reg should be put to the total circuit
+    iter_res = extract_sz_measurements(circ, nbit, g)
+    @test size(iter_res) == (nv(g),)
+    @test all(x -> x in [0,1], iter_res)
+end
+
+@testset "iter_sz_convergence" begin
+    g = dtorus(3,3)
+    peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+    pepsu = isometric_peps_to_unitary(peps, g)
+    circ, converged, converged_iter = iter_sz_convergence(pepsu, g)
+    @test converged == true
+
+    nbit = 7
+    reg = Yao.zero_state(nbit; nbatch=100000)
+
+    corr_circ = torus_long_range_coherence(circ, reg, pepsu, 1, 2)
+    corr_expect = long_range_coherence_peps(peps, 1, 2)  
+    @test isapprox(corr_circ, corr_expect, atol=1e-2)
+end
+
+
 
 
 

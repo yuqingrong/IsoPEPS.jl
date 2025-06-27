@@ -33,9 +33,7 @@ function GeneralPEPS{NF}(
 end
 
 function GeneralPEPS{NF}(vertex_labels::AbstractVector{<:AbstractVector{LT}}, vertex_tensors::Vector{<:AbstractArray{T}}, virtual_labels::AbstractVector{LT}, D::Int, optimizer::CodeOptimizer, simplifier::CodeSimplifier) where {LT,T,NF}
-    physical_labels =  [vl[findall(∉(virtual_labels), vl)[1]] for vl in vertex_labels] 
-    @show physical_labels
-    @show vertex_labels                                                  
+    physical_labels =  [vl[findall(∉(virtual_labels), vl)[1]] for vl in vertex_labels]                                                 
     max_ind = max(maximum(physical_labels), maximum(virtual_labels))
 
     # optimal contraction orders
