@@ -1,5 +1,5 @@
-# TODO: change a name of the function
-function Lanczos(nsites::Int64, J::Float64, h::Float64)
+
+function hamiltonian(nsites::Int64, J::Float64, h::Float64)
     H = spzeros(2^nsites, 2^nsites)
     
     for state in 0:(2^nsites - 1)
