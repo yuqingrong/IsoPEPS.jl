@@ -336,7 +336,7 @@ end
 
 function torus_gensample(circ, reg::AbstractRegister, pepsu::GeneralPEPS, basis)
     nbit = nqubits(reg)
-    res = zeros(Int, nbatch(reg), length(pepsu.physical_labels))
+    res = zeros(Int, nbatch(reg), length(pepsu.physical_labels)*converged_iter)
     
     bags = collect_blocks(Bag, circ)
     
@@ -345,12 +345,12 @@ function torus_gensample(circ, reg::AbstractRegister, pepsu::GeneralPEPS, basis)
     end
     
     copy(reg) |> circ
-    result = collect_blocks(Measure, circ)[end-length(pepsu.physical_labels)+1:end]
+    result = collect_blocks(Measure, circ)#[end-length(pepsu.physical_labels)+1:end]
     
     for j in 1:length(result)
         res[:,j] = result[j].results # Access first element of result array
     end    
- 
+    @show length(result)
     return res
 end
 

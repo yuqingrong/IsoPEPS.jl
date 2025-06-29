@@ -79,8 +79,8 @@ end
     nbit = 7
     reg = Yao.zero_state(nbit; nbatch=100000)
 
-    corr_circ = torus_long_range_coherence(circ, reg, pepsu, 1, 2)
-    corr_expect = long_range_coherence_peps(peps, 1, 2)  
+    corr_circ = torus_long_range_coherence(circ, reg, pepsu, 2, 3)
+    corr_expect = long_range_coherence_peps(peps, 2, 3)  
     @test isapprox(corr_circ, corr_expect, atol=1e-2)
 end
 
