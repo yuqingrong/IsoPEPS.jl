@@ -241,15 +241,17 @@ basis_rotor(basis, nbit, locs) = repeat(nbit, basis_rotor(basis), locs)
 
 
 """circuit for torus"""
-function iter_sz_convergence(pepsu::GeneralPEPS, g; n_physical_qubits::Int=1, n_virtual_qubits::Int=6, max_iterations::Int=100, sz_tol::Float64=0.01, convergence_window::Int=10)
+function iter_sz_convergence(pepsu::GeneralPEPS, g; n_physical_qubits::Int=1, n_virtual_qubits::Int=6, max_iterations::Int=1000, sz_tol::Float64=0.001, convergence_window::Int=10)
     nbit = n_physical_qubits + n_virtual_qubits
     physical_qubits = collect(1:n_physical_qubits)
     virtual_qubits = collect(n_physical_qubits+1:nbit)
     
-    all_measurements = Vector{Int}[]
+    all_res = []
     converged = false
     converged_iter = -1
     
+    p_all = []
+    q_all = []
     # TODO: initialize virtual qubits with random state
     
     circ = Yao.chain(nbit)
@@ -257,16 +259,15 @@ function iter_sz_convergence(pepsu::GeneralPEPS, g; n_physical_qubits::Int=1, n_
 
     for iter in 1:max_iterations
         circ = get_iter_circuit(circ, pepsu, n_physical_qubits, n_virtual_qubits, physical_qubits, virtual_qubits)   # add series of blocks to circ
-        circ_reg = copy(circ)
-
-        reg = Yao.zero_state(nbit)
-        reg |> circ_reg
-        iter_res = extract_sz_measurements(circ_reg, nbit, g)  # single iteration result
-        push!(all_measurements, iter_res)   # Store measurements
+     
+        reg = Yao.zero_state(nbit; nbatch=100000)
+        iter_res = extract_res(circ, reg, g, iter)  # single iteration result
+        push!(all_res, iter_res)   # Store measurements
         
         # Check convergence
         if iter >= convergence_window
-            if fidelity_convergence(all_measurements; tol=sz_tol, window=convergence_window)
+            converge, p_all, q_all = converge_condition(all_res; tol=sz_tol, window=convergence_window)
+            if converge
                 converged = true
                 converged_iter = iter
                 println("Converged at iteration $iter")
@@ -279,7 +280,7 @@ function iter_sz_convergence(pepsu::GeneralPEPS, g; n_physical_qubits::Int=1, n_
         println("Did not converge within $max_iterations iterations")
     end
     
-    return circ, converged, converged_iter
+    return circ, converged, converged_iter, p_all, q_all
 end
 
 function get_iter_circuit(circ, pepsu::GeneralPEPS, n_physical_qubits::Int, n_virtual_qubits::Int, physical_qubits::Vector{Int}, virtual_qubits::Vector{Int})   
@@ -308,35 +309,59 @@ function get_iter_circuit(circ, pepsu::GeneralPEPS, n_physical_qubits::Int, n_vi
 end
 
 
-function fidelity_convergence(all_measurements::Vector{Vector{Int}}; tol::Float64=0.01, window::Int=10)
-    if length(all_measurements) < window
-        return false
+function converge_condition(all_res::Vector; tol::Float64=0.001, window::Int=10)
+    if length(all_res) < window 
+        converge = false
     end
-    prev_state = all_measurements[end-1]
-    curr_state = all_measurements[end]
-
-    fidelity = sum(prev_state .== curr_state) / length(prev_state)
-
-    if fidelity < 1 - tol
-        return false
+    
+    prev_state = all_res[end-1]
+    curr_state = all_res[end]
+    
+    prev_counts = countmap(prev_state)
+    curr_counts = countmap(curr_state)
+    all_states = union(keys(prev_counts), keys(curr_counts))
+    
+    total_prev = length(prev_state)
+    total_curr = length(curr_state)
+    
+    kl_div = 0.0
+    p_all = []
+    q_all = []
+    for state in all_states
+        p = get(prev_counts, state, 0) / total_prev 
+        q = get(curr_counts, state, 0) / total_curr 
+        push!(p_all, p)
+        push!(q_all, q)
+        kl_div += p * log(p / q)
     end
-
-    return true
+    if kl_div < tol
+        converge = true
+    else
+        converge = false
+    end
+    return converge, p_all, q_all
 end
 
-function extract_sz_measurements(circ, nbit::Int, g)
-    iter_res = zeros(Int, nv(g))
-    result = collect_blocks(Measure, circ)[end-nv(g)+1:end]
 
-    for j in 1:length(result)
-        iter_res[j] = result[j].results
-    end    
-    return iter_res
+function countmap(matrix::Matrix)
+    counts = Dict{Vector{Int}, Int}()
+    for row in eachrow(matrix)
+        row_vec = collect(row)
+        counts[row_vec] = get(counts, row_vec, 0) + 1
+    end
+    return counts
 end
 
-function torus_gensample(circ, reg::AbstractRegister, pepsu::GeneralPEPS, basis)
+
+
+function extract_res(circ, reg::AbstractRegister, g, iter)
+    res = torus_gensample(circ, reg, g, iter)[:,end-nv(g)+1:end]
+   
+end
+
+function torus_gensample(circ, reg::AbstractRegister,g, iter)
     nbit = nqubits(reg)
-    res = zeros(Int, nbatch(reg), length(pepsu.physical_labels)*converged_iter)
+    res = zeros(Int, nbatch(reg), nv(g)*iter)
     
     bags = collect_blocks(Bag, circ)
     
@@ -350,21 +375,20 @@ function torus_gensample(circ, reg::AbstractRegister, pepsu::GeneralPEPS, basis)
     for j in 1:length(result)
         res[:,j] = result[j].results # Access first element of result array
     end    
-    @show length(result)
+    
     return res
 end
 
 
-function torus_long_range_coherence(circ, reg::AbstractRegister, pepsu::GeneralPEPS, i::Int, j::Int)
+function torus_long_range_coherence(circ, reg::AbstractRegister, g, iter, i::Int, j::Int)
     corr = 0.0
-    for basis in [Z]
-        samples = torus_gensample(circ, reg, pepsu, basis)   
-        SiSj = mean((-1)^(samples[shot,i] + samples[shot,j]) for shot in 1:nbatch(reg))
+   
+    samples = torus_gensample(circ, reg, g, iter)   
+    SiSj = mean((-1)^(samples[shot,i] + samples[shot,j]) for shot in 1:nbatch(reg))
          
-        println("Circuit SiSj: ", SiSj)
+    println("Circuit SiSj: ", SiSj)
          
-        corr = SiSj
-    end
+    corr = SiSj
     return abs(corr)
 end
 
