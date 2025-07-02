@@ -118,7 +118,7 @@ end
     g = dtorus(3,3)
     peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
     #pepsu = isometric_peps_to_unitary(peps, g)
-    peps_new = specific_peps(peps, pi/4)
+    peps_new = specific_peps(peps, pi/4, pi/4)
     @test isapprox(reshape(peps_new.vertex_tensors[1], 8,4)'* reshape(peps.vertex_tensors[1], 8,4), Matrix(I, 4, 4), atol=1e-10)
 end
 

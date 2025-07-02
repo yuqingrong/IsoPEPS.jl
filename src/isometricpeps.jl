@@ -157,8 +157,8 @@ function isometric_peps(::Type{T}, g, D::Int, nflavor::Int, optimizer::CodeOptim
     return peps, matrix_dims
 end
 
-function specific_peps(peps::PEPS, theta)   # just for isometric peps with 5 indices
-    scatter = [1 0 0 0; 0 cos(theta)  -sin(theta) 0; 0 sin(theta) cos(theta) 0; 0 0 0 1]
+function specific_peps(peps::PEPS, theta, fai)   # just for isometric peps with 5 indices
+    scatter = [cos(fai) 0 0 -sin(fai); 0 cos(theta)  -sin(theta) 0; 0 sin(theta) cos(theta) 0; sin(fai) 0 0 cos(fai)]
     U12 = kron(scatter, I(2))
     U23 = kron(I(2), scatter)
     U_total = U12 * U23 * U12

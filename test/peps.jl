@@ -229,7 +229,7 @@ using CairoMakie
 # probability amplitude of quantum states at difference bases (X, Y, Z)
 g = dtorus(3,3)
 peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
-peps = specific_peps(peps, pi/4)
+peps = specific_peps(peps, pi/4, pi/4)
 amplitudes_Z = pro_amplitude(peps)
 amplitudes_X = pro_amplitude(peps, basis=:X)
 amplitudes_Y = pro_amplitude(peps, basis=:Y)
@@ -245,8 +245,7 @@ save("pro_amplitude.png", fig);
 # correlation matrix
 g = dtorus(3,3)
 peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
-peps = specific_peps(peps, pi/4)
-corr1 = long_range_coherence_peps(peps, 1, 2)
+peps = specific_peps(peps, pi/4, pi/4)
 corr = all_corr(peps)
 @show corr
 fig = Figure(size = (800, 600))

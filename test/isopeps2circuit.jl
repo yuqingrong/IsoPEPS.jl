@@ -66,26 +66,29 @@ end
 @testset "iter_sz_convergence" begin
     g = dtorus(3,3)
     peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+    peps = specific_peps(peps, pi/4)
     pepsu = isometric_peps_to_unitary(peps, g)
     circ, converged, converged_iter = iter_sz_convergence(pepsu, g)
     @test converged == true
-    #reg = Yao.zero_state(7; nbatch=100000)
-    #corr_circ = torus_long_range_coherence(circ, reg, g, converged_iter, 1, 2)
-    #corr_expect = long_range_coherence_peps(peps, 1, 2)
-    #@test isapprox(corr_circ, corr_expect, atol=1e-2)
+    reg = Yao.zero_state(7; nbatch=100000)
+    corr_circ = torus_long_range_coherence(circ, reg, g, converged_iter, 1, 2)
+    corr_expect = long_range_coherence_peps(peps, 1, 2)
+    @test isapprox(corr_circ, corr_expect, atol=1e-2)
 end
 
 
 
-# amplitude of quantum state
+
 using CairoMakie
+# amplitude of quantum state
 g = dtorus(3,3)
 peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
-peps = specific_peps(peps, pi/4)
+peps = specific_peps(peps, pi/4, pi/4)
 pepsu = isometric_peps_to_unitary(peps, g)
 p_exact = pro_amplitude(peps)
 circ, converged, converged_iter, p_all, q_all = iter_sz_convergence(pepsu, g)
-
+@test sum(p_all) ≈ 1.0
+@test sum(q_all) ≈ 1.0
 x_axis = 1:length(p_all)
 fig = Figure(size = (1000, 400))
 ax = Axis(fig[1, 1], xlabel="measure results", ylabel="probability")
@@ -96,4 +99,17 @@ axislegend(ax)
 save("p_all_q_all.png", fig)
 
 
+# correlation
+g = dtorus(3,3)
+peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+peps = specific_peps(peps, pi/4, pi/4)
+pepsu = isometric_peps_to_unitary(peps, g)
+corr = all_corr(peps)
 
+circ, converged, converged_iter = iter_sz_convergence(pepsu, g)
+reg = Yao.zero_state(7; nbatch=100000)
+
+fig = Figure(size = (800, 600))
+ax = Axis3(fig[1, 1], xlabel="Site i", ylabel="Site j", zlabel="Correlation")
+surface!(ax, 1:9, 1:9, corr, colormap=:viridis)
+save("correlation_3d.png", fig)

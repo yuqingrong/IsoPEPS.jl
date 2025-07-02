@@ -241,7 +241,7 @@ basis_rotor(basis, nbit, locs) = repeat(nbit, basis_rotor(basis), locs)
 
 
 """circuit for torus"""
-function iter_sz_convergence(pepsu::GeneralPEPS, g; n_physical_qubits::Int=1, n_virtual_qubits::Int=6, max_iterations::Int=1000, sz_tol::Float64=0.04, convergence_window::Int=2)
+function iter_sz_convergence(pepsu::GeneralPEPS, g; n_physical_qubits::Int=1, n_virtual_qubits::Int=6, max_iterations::Int=1000, sz_tol::Float64=0.04, convergence_window::Int=50)
     nbit = n_physical_qubits + n_virtual_qubits
     physical_qubits = collect(1:n_physical_qubits)
     virtual_qubits = collect(n_physical_qubits+1:nbit)
@@ -309,7 +309,7 @@ function get_iter_circuit(circ, pepsu::GeneralPEPS, n_physical_qubits::Int, n_vi
 end
 
 
-function converge_condition(all_res::Vector; tol::Float64=0.04, window::Int=2)
+function converge_condition(all_res::Vector; tol::Float64=0.04, window::Int=50)
     if length(all_res) < window 
         converge = false
     end
@@ -429,6 +429,15 @@ function torus_long_range_coherence(circ, reg::AbstractRegister, g, iter, i::Int
     return abs(corr)
 end
 
+function torus_all_corr(circ, reg::AbstractRegister, g, iter)
+    corr = zeros(nv(g), nv(g))
+    for i in 1:nv(g)
+        for j in 1:nv(g)
+            corr[i,j] = torus_long_range_coherence(circ, reg, g, iter, i, j)
+        end
+    end 
+    return corr
+end
 
 """Initialize virtual qubits to random state (only once at the beginning!)"""
 function init_random_vq(circ, nbit, virtual_qubits)
