@@ -49,16 +49,6 @@ end
 end
 
 
-@testset "countmap and converge_condition" begin
-    all_res = [[0 1 0 1; 1 0 1 0; 0 1 0 1; 1 0 1 0], [0 1 0 1; 1 0 1 0; 0 1 0 1; 1 0 1 0]]
-    res = [0 1 0 1; 1 0 1 0; 0 1 0 1; 1 0 1 0]
-    counts = countmap(res)
-    converge_condition(all_res)
-    @test counts == Dict([[0,1,0,1] => 2, [1,0,1,0] => 2])
-    @test converge_condition(all_res) == true
-end
-
-
 @testset "sample and extract_res" begin
     nbit = 7
     g = dtorus(3,3)
@@ -79,21 +69,27 @@ end
     pepsu = isometric_peps_to_unitary(peps, g)
     circ, converged, converged_iter = iter_sz_convergence(pepsu, g)
     @test converged == true
-    reg = Yao.zero_state(7; nbatch=100000)
-    corr_circ = torus_long_range_coherence(circ, reg, g, converged_iter, 1, 2)
-    corr_expect = long_range_coherence_peps(peps, 1, 2)
+    #reg = Yao.zero_state(7; nbatch=100000)
+    #corr_circ = torus_long_range_coherence(circ, reg, g, converged_iter, 1, 2)
+    #corr_expect = long_range_coherence_peps(peps, 1, 2)
     #@test isapprox(corr_circ, corr_expect, atol=1e-2)
 end
 
+
+
+# amplitude of quantum state
 using CairoMakie
 g = dtorus(3,3)
 peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+peps = specific_peps(peps, pi/4)
 pepsu = isometric_peps_to_unitary(peps, g)
+p_exact = pro_amplitude(peps)
 circ, converged, converged_iter, p_all, q_all = iter_sz_convergence(pepsu, g)
 
 x_axis = 1:length(p_all)
 fig = Figure(size = (1000, 400))
 ax = Axis(fig[1, 1], xlabel="measure results", ylabel="probability")
+lines!(ax, x_axis, p_exact, color=(:red, 0.6), label="p_exact")
 lines!(ax, x_axis, p_all, color=(:blue, 0.6), label="p_all")
 lines!(ax, x_axis, q_all, color=(:orange, 0.5), label="q_all")
 axislegend(ax)

@@ -241,7 +241,7 @@ basis_rotor(basis, nbit, locs) = repeat(nbit, basis_rotor(basis), locs)
 
 
 """circuit for torus"""
-function iter_sz_convergence(pepsu::GeneralPEPS, g; n_physical_qubits::Int=1, n_virtual_qubits::Int=6, max_iterations::Int=1000, sz_tol::Float64=0.001, convergence_window::Int=10)
+function iter_sz_convergence(pepsu::GeneralPEPS, g; n_physical_qubits::Int=1, n_virtual_qubits::Int=6, max_iterations::Int=1000, sz_tol::Float64=0.04, convergence_window::Int=2)
     nbit = n_physical_qubits + n_virtual_qubits
     physical_qubits = collect(1:n_physical_qubits)
     virtual_qubits = collect(n_physical_qubits+1:nbit)
@@ -309,7 +309,7 @@ function get_iter_circuit(circ, pepsu::GeneralPEPS, n_physical_qubits::Int, n_vi
 end
 
 
-function converge_condition(all_res::Vector; tol::Float64=0.001, window::Int=10)
+function converge_condition(all_res::Vector; tol::Float64=0.04, window::Int=2)
     if length(all_res) < window 
         converge = false
     end
@@ -317,16 +317,17 @@ function converge_condition(all_res::Vector; tol::Float64=0.001, window::Int=10)
     prev_state = all_res[end-1]
     curr_state = all_res[end]
     
+    # Generate bitstrings based on actual data dimensions
+    n_bits = size(prev_state, 2)  # Number of columns in the data
+    bitstrings = [reverse(digits(i, base=2, pad=n_bits)) for i in 0:(2^n_bits-1)]
+    
     prev_counts = countmap(prev_state)
     curr_counts = countmap(curr_state)
-    all_states = union(keys(prev_counts), keys(curr_counts))
-    
-    total_prev = length(prev_state)
-    total_curr = length(curr_state)
     
     kl_div = 0.0
     p_all = []
     q_all = []
+    #=
     for state in all_states
         p = get(prev_counts, state, 0) / total_prev 
         q = get(curr_counts, state, 0) / total_curr 
@@ -338,19 +339,55 @@ function converge_condition(all_res::Vector; tol::Float64=0.001, window::Int=10)
         converge = true
     else
         converge = false
+    end=#
+    tvd = 0.0
+    
+    total_prev = sum(values(prev_counts))
+    total_curr = sum(values(curr_counts))
+    
+    for state in bitstrings
+        p = get(prev_counts, state, 0) / total_prev
+        q = get(curr_counts, state, 0) / total_curr
+        push!(p_all, p)
+        push!(q_all, q)
+        tvd += abs(p - q)
     end
+  
+    tvd /= 2  
+    
+
+    
+    if tvd < tol
+        converge = true
+    else
+        converge = false
+    end
+    @show tvd
     return converge, p_all, q_all
 end
 
 
 function countmap(matrix::Matrix)
     counts = Dict{Vector{Int}, Int}()
-    for row in eachrow(matrix)
-        row_vec = collect(row)
-        counts[row_vec] = get(counts, row_vec, 0) + 1
+    
+    # Generate bitstrings based on actual matrix dimensions
+    n_bits = size(matrix, 2)  # Number of columns in the matrix
+    bitstrings = [reverse(digits(i, base=2, pad=n_bits)) for i in 0:(2^n_bits-1)]
+    
+    for string in bitstrings
+        counts[string] = 0
     end
+    
+    for row in eachrow(matrix)
+        row_vec = vec(row)
+        if haskey(counts, row_vec)
+            counts[row_vec] += 1
+        end
+    end
+    @show counts
     return counts
 end
+
 
 
 

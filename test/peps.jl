@@ -201,6 +201,61 @@ end
     @test two_sandwich(peps, peps, 1, 2, reshape(kron(Matrix(Yao.Z),Matrix(Yao.Z)),2,2,2,2), TreeSA(), MergeGreedy())[1] ≈ exact2
 end
 
+@testset "pro_amplitude" begin
+    g = dtorus(3,3)
+    peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+    peps = specific_peps(peps, pi/4)
+    amplitudes_Z = pro_amplitude(peps)
+    @test length(amplitudes_Z) == 512
+    @test sum(amplitudes_Z) ≈ 1.0
+    amplitudes_X = pro_amplitude(peps, basis=:X)
+    @test length(amplitudes_X) == 512
+    @test sum(amplitudes_X) ≈ 1.0
+    amplitudes_Y = pro_amplitude(peps, basis=:Y)
+    @test length(amplitudes_Y) == 512
+    @test sum(amplitudes_Y) ≈ 1.0
+end
+
+@testset "all_corr" begin
+    g = dtorus(3,3)
+    peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+    peps = specific_peps(peps, pi/4)
+    corr = all_corr(peps)
+    @test size(corr) == (9,9)
+end
+
+using CairoMakie
+
+# probability amplitude of quantum states at difference bases (X, Y, Z)
+g = dtorus(3,3)
+peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+peps = specific_peps(peps, pi/4)
+amplitudes_Z = pro_amplitude(peps)
+amplitudes_X = pro_amplitude(peps, basis=:X)
+amplitudes_Y = pro_amplitude(peps, basis=:Y)
+x_axis = 1:512
+fig = Figure(size = (1000, 400))
+ax = Axis(fig[1, 1], xlabel="bitstring", ylabel="amplitude")
+lines!(ax, x_axis, amplitudes_Z, color=(:blue, 0.5), label="Z")
+lines!(ax, x_axis, amplitudes_X, color=(:orange, 0.5), label="X")
+lines!(ax, x_axis, amplitudes_Y, color=(:green, 0.5), label="Y")
+axislegend(ax)
+save("pro_amplitude.png", fig);
+
+# correlation matrix
+g = dtorus(3,3)
+peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+peps = specific_peps(peps, pi/4)
+corr1 = long_range_coherence_peps(peps, 1, 2)
+corr = all_corr(peps)
+@show corr
+fig = Figure(size = (800, 600))
+ax = Axis3(fig[1, 1], xlabel="Site i", ylabel="Site j", zlabel="Correlation")
+surface!(ax, 1:9, 1:9, corr, colormap=:viridis)
+save("correlation_3d.png", fig)
+
+
+
 
 
 using OMEinsum
