@@ -1,6 +1,5 @@
 using IsoPEPS
 using Test
-using ForwardDiff
 import DifferentiationInterface
 import OMEinsumContractionOrders
 import Yao
@@ -83,8 +82,8 @@ end
     G1 = zeros(eltype(x),size(x))
     G2 = zeros(eltype(x),size(x))
     G = zeros(eltype(x),size(x))
-    gradient3 = g_ising!(G, peps, x, g, 1.0, 0.2, GreedyMethod(), MergeGreedy())
-    f_closure_ising(x) =  f_ising(peps, x, g, 1.0, 0.2, GreedyMethod(), MergeGreedy())
+    gradient3 = g_ising!(G, peps, x, g, 1.0, 0.2, TreeSA(), MergeGreedy())
+    f_closure_ising(x) =  f_ising(peps, x, g, 1.0, 0.2, TreeSA(), MergeGreedy())
     expect_gradient3 = grad(central_fdm(12, 1), f_closure_ising, x)[1]
     @test isapprox(gradient3, expect_gradient3, rtol = 1e-4)
 end
@@ -110,7 +109,7 @@ end
         add_edge!(g, i, j)
     end
     peps = rand_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
-    result = peps_optimize2(peps, 1, 2, real(reshape(kron(Matrix(Yao.Z),Matrix(Yao.Z)),2,2,2,2)), GreedyMethod(), MergeGreedy())
+    result = peps_optimize2(peps, 1, 2, real(reshape(kron(Matrix(Yao.Z),Matrix(Yao.Z)),2,2,2,2)), TreeSA(), MergeGreedy())
     #result = peps_optimize2(peps, 1, 2, real(reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)), TreeSA(), MergeGreedy())
     @show result
     #result = cached_peps_optimize2(peps, 1, 2, real(reshape(kron(Matrix(Z),Matrix(Z)),2,2,2,2)), TreeSA(), MergeGreedy())
@@ -126,7 +125,7 @@ end
     end
     J, h = 1.0, 0.2
     peps = rand_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
-    result = peps_optimize_ising(peps, g, J, h, GreedyMethod(), MergeGreedy())
+    result = peps_optimize_ising(peps, g, J, h, TreeSA(), MergeGreedy())
   
     hami = ising_hamiltonian_2d(2,2,J,h)
     eigenval,eigenvec = IsoPEPS.eigsolve(IsoPEPS.mat(hami), 1, :SR; ishermitian=true)
@@ -181,9 +180,7 @@ end
 
 
 
-using OMEinsum
-Mooncake.tangent_type(::Type{<:AbstractEinsum}) = Mooncake.NoTangent
-Mooncake.tangent_type(::Type{<:Vector{<:AbstractEinsum}}) = Mooncake.NoTangent
+
 
 g = SimpleGraph(4)
 for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
