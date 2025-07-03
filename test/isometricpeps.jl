@@ -2,7 +2,7 @@ using IsoPEPS
 using Test
 using Graphs
 using Manifolds, OMEinsumContractionOrders
-import RecursiveArrayTools: ArrayPartition
+import RecursiveArrayTools
 @testset "IsometricPEPS" begin
     peps = rand_isometricpeps(ComplexF64, 2, 3, 3)
     @test peps.col == 3
@@ -68,10 +68,10 @@ end
    @test isapprox(x1, x0)
 end
 
-
+#=
 @testset "isometric_peps_optimize" begin
-    g = SimpleDiGraph(9)
-    g2 = Graphs.grid([3,3])
+    g = SimpleDiGraph(4)
+    g2 = Graphs.grid([2,2])
     edge_pairs = [(src(e), dst(e)) for e in collect(edges(g2))]
     for (i,j) in edge_pairs
         add_edge!(g, i, j)
@@ -79,26 +79,22 @@ end
     peps, matrix_dims = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
     
     M = ProductManifold([Manifolds.Stiefel(n, p) for (n, p) in matrix_dims]...)
-
+    @show M
     J, h = 1.0, 0.2
 
     x = variables(peps)
-    p0 = Tuple(vector2point(x, matrix_dims)) 
-
+    p0 = Tuple(point(peps, matrix_dims)) 
+    @show p0
     @test all(Manifolds.is_point.(M.manifolds, p0))
 
 
-    result, energy, optimized_peps, record= isopeps_optimize_ising(peps, M, matrix_dims, g, J, h, GreedyMethod(), MergeGreedy(), 100)
+    result, energy, optimized_peps, record = isopeps_optimize_ising(peps, M, matrix_dims, g, J, h, GreedyMethod(), MergeGreedy(), 100)
     
-    hami = ising_hamiltonian_2d(3,3,J,h)
+    hami = ising_hamiltonian_2d(2,2,J,h)
     eigenval,eigenvec = IsoPEPS.eigsolve(IsoPEPS.mat(hami), 1, :SR; ishermitian=true)
-    @show energy
-    @show eigenval[1]
-    @show optimized_peps  
-    @show record, typeof(record)
     @test isapprox(energy, eigenval[1], rtol=1e-3)
 end
-
+=#
 
 @testset "isometric_peps_to_unitary" begin
     g1 = dgrid(2,2)

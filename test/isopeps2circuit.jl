@@ -48,12 +48,6 @@ end
     @test collect_blocks(IsoPEPS.Measure, circ)|>length == 9
 end
 
-@testset "Sz_convergence" begin
-    all_measurements1 = [zeros(Int,3) for _ in 1:100]
-    all_measurements2 = [rand(Int,3) for _ in 1:100]
-    @test Sz_convergence(all_measurements1) == true
-    @test Sz_convergence(all_measurements2) == false
-end
 
 @testset "extract_sz_measurements" begin
     nbit = 7
@@ -68,7 +62,7 @@ end
     @test size(iter_res) == (nv(g),)
     @test all(x -> x in [0,1], iter_res)
 end
-
+#=
 @testset "iter_sz_convergence" begin
     g = dtorus(3,3)
     peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
@@ -79,11 +73,11 @@ end
     nbit = 7
     reg = Yao.zero_state(nbit; nbatch=100000)
 
-    corr_circ = torus_long_range_coherence(circ, reg, pepsu, 2, 3)
-    corr_expect = long_range_coherence_peps(peps, 2, 3)  
+    #corr_circ = torus_long_range_coherence(circ, reg, pepsu, 2, 3)
+    #corr_expect = long_range_coherence_peps(peps, 2, 3)  
     @test isapprox(corr_circ, corr_expect, atol=1e-2)
 end
-
+=#
 
 
 

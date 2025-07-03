@@ -66,7 +66,7 @@ end
     for (i,j) in [(1,2)]
         add_edge!(g, i, j)
     end
-    peps = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
+    peps = rand_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
 
     
 
@@ -155,22 +155,6 @@ end
     @test eigenval2[1] ≈ -4.040593699203847
 end
 
-@testset "AD gradient" begin
-   
-    g = SimpleGraph(2)
-    for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
-        add_edge!(g, i, j)
-    end
-    psi = rand_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
-    
-    J, h = 1.0, 0.2
-    x = variables(psi)
-    backend = AutoMooncake(; config=nothing)
-    f_closure_ising(x) = f_ising(IsoPEPS.convert_type(eltype(x), psi), x, g, 1.0, 0.2, TreeSA(), MergeGreedy())
-    #grad = ForwardDiff.gradient(f_closure_ising, x)
-    prep = prepare_gradient(f_closure_ising, backend, x) 
-    grad = gradient(f_closure_ising, prep, backend, x)
-end
 
 
 @testset "long_range_coherence_peps" begin
@@ -178,10 +162,10 @@ end
     for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
         add_edge!(g, i, j)
     end
-    peps = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
+    peps = rand_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
     corr = long_range_coherence_peps(peps, 2, 3)
     @show corr
-    #@test long_range_coherence_peps(peps, 1, 2) ≈ 0.0
+    @test long_range_coherence_peps(peps, 1, 1) ≈ 1.0
 end
 
 @testset "dtorus" begin

@@ -41,10 +41,10 @@ export ishermitian
 export sparse
 export grad, central_fdm
 export dot
-export IsometricPEPS, rand_isometricpeps, mose_move_right!,mose_move_right_step!,peps_fidelity, isometric_peps
+export IsometricPEPS, rand_isometricpeps, mose_move_right!,mose_move_right_step!,peps_fidelity, isometric_peps, point
 export peps2ugate, get_circuit,get_reuse_circuit,get_iter_circuit,Measure, collect_blocks,I, gensample, long_range_coherence, zz_correlation, mean, Sz_convergence,
        iter_sz_convergence, extract_sz_measurements, init_random_vq, torus_long_range_coherence, torus_gensample
-export ProductManifold, Stiefel, isopeps_optimize_ising, vector2point, point2vector, isometric_peps_to_unitary
+export ProductManifold, Stiefel, isopeps_optimize_ising, isometric_peps_to_unitary
 
 export check_all_sites_convergence, adaptive_all_sites_convergence, monitor_all_sites_iteration_convergence
 export check_convergence_all_sites

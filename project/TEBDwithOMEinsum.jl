@@ -107,7 +107,7 @@ function compute_energy(mps, nsites, J, h)
     end
     return energy
 end
-"""
+
 function inner_product(mps1, mps2)
     # Initialize with an identity for the bond dimension contraction
     overlap = 1.0
@@ -127,7 +127,6 @@ function inner_product(mps1, mps2)
 
     return overlap
 end
-"""
 
 
 function time_evolve(iter::Int)
