@@ -112,7 +112,7 @@ function peps_fidelity(p1::IsometricPEPS, p2::IsometricPEPS)
     return abs(inner_prod)^2/(norm_psi)^2
 end
 
-Base.copy(peps::PEPS) = PEPS(copy(peps.vertex_tensors), peps.col, peps.row, peps.D)
+Base.copy(peps::PEPS) = IsometricPEPS(copy(peps.vertex_tensors), peps.col, peps.row, peps.D)
 
    
 
@@ -208,20 +208,18 @@ function isometric_peps_to_unitary(peps::PEPS, g)
 end
 
 
-function vector2point(v::AbstractVector, matrix_dims::Vector)
+function point(peps::PEPS, matrix_dims::Vector)
     point = []
-    offset = 0
-    for (n, p) in matrix_dims
-        push!(point, reshape(v[offset+1:offset+n*p], n, p))
-        offset += n*p
+    for i in peps.physical_labels
+        push!(point, reshape(peps.vertex_tensors[i], matrix_dims[i]))
     end
     return point
 end
 
-function vector2point(v::Tuple, matrix_dims::Vector)
+function point(peps::PEPS, matrix_dims::Vector)
     point = []
-    for (i, (n, p)) in enumerate(matrix_dims)
-        push!(point, reshape(v[(i-1)*n*p+1:i*n*p], n, p))
+    for i in peps.physical_labels
+        push!(point, reshape(peps.vertex_tensors[i], matrix_dims[i]))
     end
     return point
 end
@@ -241,7 +239,7 @@ function isopeps_optimize_ising(peps::PEPS, M::ProductManifold, matrix_dims::Vec
     energy = 0.0
     @assert is_point(M, p0)
     
-    function f_closure_ising(M,p0) 
+    function f_closure_ising(M, p0) 
         point_tuple = Tuple(p0.x)
         x = point2vector(point_tuple, matrix_dims)
         
@@ -270,7 +268,7 @@ function isopeps_optimize_ising(peps::PEPS, M::ProductManifold, matrix_dims::Vec
         p0;
         evaluation=Manopt.AllocatingEvaluation(),
         #retraction_method = QRRetraction(),
-        stopping_criterion = #=StopWhenGradientNormLess(1e-2) |=# StopAfterIteration(step),
+        stopping_criterion = StopWhenGradientNormLess(1e-2) | StopAfterIteration(step),
         record = [:Iteration, :Cost, :GradientNorm],
         return_state = true
     )

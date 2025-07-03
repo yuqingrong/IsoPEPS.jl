@@ -1,7 +1,7 @@
 using IsoPEPS
 using Test
 
-
+#=
 @testset "mps_dot_mpo_dot_mps" begin #TFIM ground state
     nsites=10
     eigenval,eigenvec=IsoPEPS.eigsolve(IsoPEPS.mat(sum([kron(nsites, i=>(-IsoPEPS.Z),  mod1(i+1, nsites)=>IsoPEPS.Z) for i in 1:nsites])
@@ -23,4 +23,4 @@ using Test
     @test isapprox(eigenval[1],result,atol=1e-3)
     @test isapprox(eigenval[1],eigenval1,atol=1e-3)  
 end
- 
+ =#

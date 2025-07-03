@@ -23,7 +23,7 @@ end
 generate_mps(bond_dim::Int,nsites::Int; d::Int=2) = generate_mps(ComplexF64, bond_dim,nsites;d)
 
 
-function code_dot(bra::MPS,ket::MPS;optimizer=GreedyMethod())
+function code_dot(bra::MPS, ket::MPS; optimizer=GreedyMethod())
     store=IndexStore()
     index_bra=Vector{Int}[]
     index_ket=Vector{Int}[]
@@ -44,7 +44,7 @@ function code_dot(bra::MPS,ket::MPS;optimizer=GreedyMethod())
     ixs=[index_bra...,index_ket...]
     size_dict=OMEinsum.get_size_dict(ixs,[bra.tensors...,ket.tensors...])
     code=optimize_code(DynamicEinCode(ixs,Int[]),size_dict,optimizer)
-    return code,code(conj.(bra.tensors)..., ket.tensors...)[]
+    return code, code(conj.(bra.tensors)..., ket.tensors...)[]
 end
 
 
@@ -85,7 +85,7 @@ end
 
 
 function mps_variation(nsites::Int,bond_dim::Int,h::Float64)
-    psi=generate_mps(bond_dim,nsites)
+    psi=generate_mps(Float64, bond_dim, nsites)
     params=vcat(map(vec, psi.tensors)...)
     #params = code_mps2vec(psi)
     H=transverse_ising_mpo(nsites,h)
@@ -136,6 +136,5 @@ function mps_variation(nsites::Int,bond_dim::Int,h::Float64)
         params,
         IsoPEPS.LBFGS()
     )
-    @show result
     return result,f,g!
 end
