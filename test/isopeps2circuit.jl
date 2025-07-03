@@ -48,119 +48,68 @@ end
     @test collect_blocks(IsoPEPS.Measure, circ)|>length == 9
 end
 
-@testset "Sz_convergence" begin
-    all_measurements1 = [zeros(Int,3) for _ in 1:100]
-    all_measurements2 = [rand(Int,3) for _ in 1:100]
-    @test Sz_convergence(all_measurements1) == true
-    @test Sz_convergence(all_measurements2) == false
-end
 
-@testset "extract_sz_measurements" begin
+@testset "sample and extract_res" begin
     nbit = 7
     g = dtorus(3,3)
     peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
     pepsu = isometric_peps_to_unitary(peps, g)
     circ = Yao.chain(nbit)
     circ = get_iter_circuit(circ, pepsu, 1, 6, collect(1:1), collect(2:7))
-    reg = Yao.zero_state(nbit)
-    reg |> circ  # TODO: reg should be put to the total circuit
-    iter_res = extract_sz_measurements(circ, nbit, g)
-    @test size(iter_res) == (nv(g),)
+    reg = Yao.zero_state(nbit; nbatch=1000)
+    reg |> circ 
+    iter_res = extract_res(circ, reg, g, 1)
+    @test size(iter_res) == (1000, nv(g))
     @test all(x -> x in [0,1], iter_res)
 end
 
 @testset "iter_sz_convergence" begin
     g = dtorus(3,3)
     peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+    peps = specific_peps(peps, pi/4)
     pepsu = isometric_peps_to_unitary(peps, g)
     circ, converged, converged_iter = iter_sz_convergence(pepsu, g)
     @test converged == true
-
-    nbit = 7
-    reg = Yao.zero_state(nbit; nbatch=100000)
-
-    corr_circ = torus_long_range_coherence(circ, reg, pepsu, 2, 3)
-    corr_expect = long_range_coherence_peps(peps, 2, 3)  
+    reg = Yao.zero_state(7; nbatch=100000)
+    corr_circ = torus_long_range_coherence(circ, reg, g, converged_iter, 1, 2)
+    corr_expect = long_range_coherence_peps(peps, 1, 2)
     @test isapprox(corr_circ, corr_expect, atol=1e-2)
 end
 
 
 
 
-
-
-g = SimpleDiGraph(4)
-g2 = Graphs.grid([2,2])
-edge_pairs = [(src(e), dst(e)) for e in collect(edges(g2))]
-for (i,j) in edge_pairs
-    add_edge!(g, i, j)
-end
-    
-peps = rand_peps(ComplexF64, g, 2, 2, TreeSA(), MergeGreedy())
-peps, pepsu = peps2ugate(peps, g)
-circ = get_circuit(pepsu, g)
-batch_sizes = 1000:1000:100000
-
-    
-corrs = Float64[]
-    
-for batch_size in batch_sizes
-    reg = Yao.zero_state(5; nbatch=batch_size)
-    corr = long_range_coherence(circ, reg, pepsu, 1, 2)
-   
-    push!(corrs, corr)
-    @show batch_size
-end
-    
-corr_expect = 0.2
 using CairoMakie
-fig = Figure()
-ax = Axis(fig[1,1], 
-title = "Correlation vs Batch Size",
-xlabel = "Batch Size",
-ylabel = "Correlation")
-    
-lines!(ax, collect(batch_sizes), corrs, label="correlation from circuit")
-hlines!(ax, [corr_expect], label="exact correlation", linestyle=:dash)
-
-axislegend()
-    
-save("Correlation vs Batchsize.png", fig)
-    
-
-
-# Calculate error bars by running multiple trials
-n_trials = 10
-all_corrs = zeros(length(batch_sizes), n_trials)
-
-for (i, batch_size) in enumerate(batch_sizes)
-    for j in 1:n_trials
-        reg = Yao.zero_state(5; nbatch=batch_size)
-        all_corrs[i,j] = long_range_coherence(circ, reg, pepsu, 1, 2)
-    end
-    @show batch_size
-end
-
-# Calculate mean and standard error
-mean_corrs = mean(all_corrs, dims=2)[:,1]
-std_errs = std(all_corrs, dims=2)[:,1] ./ sqrt(n_trials)
-
-# Plot with error bars
-fig = Figure()
-ax = Axis(fig[1,1],
-    title = "Correlation vs Batch Size with Error Bars",
-    xlabel = "Batch Size",
-    ylabel = "Correlation"
-)
-
-errorbars!(ax, collect(batch_sizes), mean_corrs, std_errs, 
-    whiskerwidth=10)
-    scatter!(ax, collect(batch_sizes), mean_corrs, 
-    label="S")
-
-    hlines!(ax, [corr_expect], label="E", linestyle=:dash)
-axislegend()
-
-save("correlation_with_errors.png", fig)
+# amplitude of quantum state
+g = dtorus(3,3)
+peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+peps = specific_peps(peps, pi/4, pi/4)
+pepsu = isometric_peps_to_unitary(peps, g)
+p_exact = pro_amplitude(peps)
+circ, converged, converged_iter, p_all, q_all = iter_sz_convergence(pepsu, g)
+@test sum(p_all) ≈ 1.0
+@test sum(q_all) ≈ 1.0
+x_axis = 1:length(p_all)
+fig = Figure(size = (1000, 400))
+ax = Axis(fig[1, 1], xlabel="measure results", ylabel="probability")
+lines!(ax, x_axis, p_exact, color=(:red, 0.6), label="p_exact")
+lines!(ax, x_axis, p_all, color=(:blue, 0.6), label="p_all")
+lines!(ax, x_axis, q_all, color=(:orange, 0.5), label="q_all")
+axislegend(ax)
+save("p_all_q_all.png", fig)
 
 
+# correlation
+g = dtorus(3,3)
+peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+peps = specific_peps(peps, pi/4, pi/4)
+pepsu = isometric_peps_to_unitary(peps, g)
+corr = all_corr(peps)
+
+circ, converged, converged_iter = iter_sz_convergence(pepsu, g)
+reg = Yao.zero_state(7; nbatch=100000)
+
+fig = Figure(size = (800, 600))
+ax = Axis3(fig[1, 1], xlabel="Site i", ylabel="Site j", zlabel="Correlation")
+surface!(ax, 1:9, 1:9, corr, colormap=:viridis)
+save("correlation_3d.png", fig)

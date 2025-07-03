@@ -73,6 +73,42 @@ function inner_product(p1::PEPS, p2::PEPS)
     p1.code_inner_product(alltensors(p1c)..., alltensors(p2)...) 
 end
 
+function pro_amplitude(peps::PEPS; basis::Symbol=:Z)
+    peps_tensors = peps.code_statetensor(alltensors(peps)...)
+    bitstrings = [reverse(digits(i, base=2, pad=9)).+1 for i in 0:511] # not always 9 qubits
+    z_amplitudes = [peps_tensors[bitstrings[i]...] for i in 1:512]
+    
+    if basis == :Z
+        amplitudes = z_amplitudes
+    elseif basis == :X
+        hadamard = [1 1; 1 -1] / sqrt(2)
+        amplitudes = zeros(ComplexF64, 512)
+        for i in 1:512
+            for j in 1:512
+                h_factor = 1.0
+                for qubit in 1:9
+                    h_factor *= hadamard[bitstrings[i][qubit], bitstrings[j][qubit]]
+                end
+                amplitudes[i] += z_amplitudes[j] * h_factor
+            end
+        end
+    elseif basis == :Y     
+        y_gate = [0 -im; im 0]
+        amplitudes = zeros(ComplexF64, 512)
+        for i in 1:512
+            for j in 1:512
+                y_factor = 1.0
+                for qubit in 1:9
+                    y_factor *= y_gate[bitstrings[i][qubit], bitstrings[j][qubit]]
+                end
+                amplitudes[i] += z_amplitudes[j] * y_factor
+            end
+        end
+    end
+    norm_factor = sum(abs, amplitudes)
+    return abs.(amplitudes) ./ norm_factor
+end
+
 function Base.conj(peps::PEPS)
     replace_tensors(peps, conj.(alltensors(peps)))
 end
@@ -137,6 +173,9 @@ function dgrid(Lx::Int, Ly::Int)
     end
     return g
 end
+
+
+
 
 
 Base.vec(peps::PEPS) = vec(statetensor(peps))
@@ -338,18 +377,23 @@ function long_range_coherence_peps(peps::GeneralPEPS, i::Int, j::Int)
     norm = inner_product(peps, peps)[]
     
     for basis in [Z]
-        Si,_ = single_sandwich(peps, peps, i, Matrix{T}(basis), TreeSA(), MergeGreedy())
-        Sj,_ = single_sandwich(peps, peps, j, Matrix{T}(basis), TreeSA(), MergeGreedy())
         SiSj,_ = two_sandwich(peps, peps, i, j, reshape(kron(Matrix{T}(basis), Matrix{T}(basis)),2,2,2,2), TreeSA(), MergeGreedy())
        
         corr = SiSj/norm #- (Si/norm * Sj/norm) 
-        @show Si/norm, Sj/norm
         #corr = corr/sqrt((1 - (Si/norm)^2) * (1 - (Sj/norm)^2))   
     end
     return abs(corr)
 end
     
-  
+function all_corr(peps::PEPS)
+    corr = Matrix{Float64}(undef, length(peps.physical_labels), length(peps.physical_labels))
+    for i in peps.physical_labels
+        for j in peps.physical_labels
+            corr[i, j] = long_range_coherence_peps(peps, i, j)
+        end
+    end
+    return corr
+end
 
 
 

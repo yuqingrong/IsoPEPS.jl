@@ -9,7 +9,6 @@ import RecursiveArrayTools: ArrayPartition
     @test peps.vertex_tensors[1][1] isa AbstractArray{ComplexF64, 5}
 end
 
-
 @testset "mose_move_single_column!" begin
     # initialize a peps
     peps = rand_isometricpeps(ComplexF64, 2, 4, 4)
@@ -24,13 +23,11 @@ end
     
 end
 
-
 @testset "mose_move_all_columns!" begin
     peps = rand_isometricpeps(ComplexF64, 2, 4, 4)
     p1 = mose_move_right!(copy(peps))
     @test peps_fidelity(p1, peps) ≈ 1
 end 
-
 
 @testset "isometric_condition" begin
 
@@ -53,7 +50,6 @@ end
 
 end
 
-
 @testset "vector2point" begin
     g = SimpleDiGraph(4)
     g2 = grid([2,2])
@@ -67,7 +63,6 @@ end
     x1 = point2vector(p0, matrix_dims)
    @test isapprox(x1, x0)
 end
-
 
 @testset "isometric_peps_optimize" begin
     g = SimpleDiGraph(9)
@@ -99,7 +94,6 @@ end
     @test isapprox(energy, eigenval[1], rtol=1e-3)
 end
 
-
 @testset "isometric_peps_to_unitary" begin
     g1 = dgrid(2,2)
     peps1, matrix_dims1 = isometric_peps(ComplexF64, g1, 2, 2, TreeSA(), MergeGreedy())
@@ -118,6 +112,14 @@ end
 
     @test isapprox(ugates2.vertex_tensors[9]*ugates2.vertex_tensors[9]', Matrix(I, 8, 8), atol=1e-10)
     @test isapprox(ugates2.vertex_tensors[9]'*ugates2.vertex_tensors[9], Matrix(I, 8, 8), atol=1e-10)
+end
+
+@testset "specific_peps" begin
+    g = dtorus(3,3)
+    peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+    #pepsu = isometric_peps_to_unitary(peps, g)
+    peps_new = specific_peps(peps, pi/4, pi/4)
+    @test isapprox(reshape(peps_new.vertex_tensors[1], 8,4)'* reshape(peps.vertex_tensors[1], 8,4), Matrix(I, 4, 4), atol=1e-10)
 end
 
 
