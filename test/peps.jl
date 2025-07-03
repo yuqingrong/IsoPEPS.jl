@@ -95,7 +95,7 @@ end
         add_edge!(g, i, j)
     end
     peps = rand_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
-    result = peps_optimize1(peps, 1, real(Matrix(Yao.X)), GreedyMethod(), MergeGreedy())
+    result = peps_optimize1(peps, 1, real(Matrix(Yao.X)), TreeSA(), MergeGreedy())
     h = put(4,(1,)=>Yao.X)
     eigenval,eigenvec = IsoPEPS.eigsolve(IsoPEPS.mat(h), 1, :SR; ishermitian=true)
     @test isapprox(result , eigenval[1], rtol = 1e-2)
