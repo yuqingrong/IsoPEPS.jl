@@ -4,8 +4,6 @@ using Random
 using Yao, Yao.EasyBuild
 using KrylovKit: eigsolve
 using LinearAlgebra
-
-using LinearAlgebra
 using Arpack
 using OMEinsum
 import Yao
@@ -17,7 +15,6 @@ using SparseArrays,Arpack
 using Graphs, GraphPlot
 using Graphs: SimpleEdge
 using DifferentiationInterface
-using ChainRulesCore
 using Statistics
 using OMEinsumContractionOrders
 using Manifolds, Manopt
