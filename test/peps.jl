@@ -23,9 +23,6 @@ end
     @test inner_product(peps1, peps2)[] ≈ statevec(peps1)' * statevec(peps2)
 end
 
-
-
-
 @testset "apply_onsite" begin
     g = SimpleGraph(4)
     for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
@@ -61,7 +58,6 @@ end
 
 
 @testset "gradient" begin
-
     g = SimpleGraph(2)
     for (i,j) in [(1,2)]
         add_edge!(g, i, j)
@@ -77,8 +73,6 @@ end
     gradient1 = g1!(G1, peps, x, 1, Matrix(Yao.X), TreeSA(), MergeGreedy())
     f_closure1(x) =  f1(peps, x, 1, Matrix(Yao.X), TreeSA(), MergeGreedy())
     expect_gradient1 = grad(central_fdm(12, 1), f_closure1, x)[1]
-    @show gradient1
-    @show expect_gradient1
     @test isapprox(gradient1, expect_gradient1, rtol = 1e-2)
 
     gradient2 = g2!(G2, peps, x, 1, 2, reshape(kron(Matrix(Yao.Z),Matrix(Yao.Z)),2,2,2,2), TreeSA(), MergeGreedy())
