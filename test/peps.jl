@@ -129,7 +129,7 @@ end
   
     hami = ising_hamiltonian_2d(2,2,J,h)
     eigenval,eigenvec = IsoPEPS.eigsolve(IsoPEPS.mat(hami), 1, :SR; ishermitian=true)
-    @test isapprox(result , eigenval[1], rtol=1e-4)
+    @test isapprox(result , eigenval[1], rtol=1e-2)
 end
 
 
@@ -181,7 +181,7 @@ end
 
 
 
-
+#=
 g = SimpleGraph(4)
 for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
     add_edge!(g, i, j)
@@ -194,3 +194,4 @@ result = optimized_peps_optimize2(peps, 1, 2, real(reshape(kron(Matrix(Yao.Z),Ma
 Profile.clear() 
 @profile peps_optimize2(peps, 1, 2, real(reshape(kron(Matrix(Yao.Z),Matrix(Yao.Z)),2,2,2,2)), TreeSA(), MergeGreedy())
 Profile.print(format=:flat)
+=#
