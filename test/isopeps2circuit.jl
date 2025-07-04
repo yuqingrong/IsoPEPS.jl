@@ -82,7 +82,7 @@ end
 
 
 
-
+#=
 g = SimpleDiGraph(4)
 g2 = Graphs.grid([2,2])
 edge_pairs = [(src(e), dst(e)) for e in collect(edges(g2))]
@@ -157,4 +157,4 @@ axislegend()
 
 save("correlation_with_errors.png", fig)
 
-
+=#
