@@ -83,7 +83,7 @@ using CairoMakie
 # amplitude of quantum state
 g = dtorus(3,3)
 peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
-peps = specific_peps(peps, pi/4, pi/4)
+peps = specific_peps(peps, pi/4, pi/8)
 pepsu = isometric_peps_to_unitary(peps, g)
 p_exact = pro_amplitude(peps)
 circ, converged, converged_iter, p_all, q_all = iter_sz_convergence(pepsu, g)
