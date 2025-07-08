@@ -138,3 +138,14 @@ function mps_variation(nsites::Int,bond_dim::Int,h::Float64)
     )
     return result,f,g!
 end
+
+function specific_mps(peps::PEPS, theta, fai)
+    pepsu = deepcopy(peps)
+    U = [cos(fai) 0 0 -sin(fai); 0 cos(theta)  -sin(theta) 0; 0 sin(theta) cos(theta) 0; sin(fai) 0 0 cos(fai)]
+    for i in peps.physical_labels
+        @show size(peps.vertex_tensors[i])
+        peps.vertex_tensors[i] = reshape(U[:,1:2], size(peps.vertex_tensors[i]))
+        pepsu.vertex_tensors[i] = U
+    end
+    return peps, pepsu
+end

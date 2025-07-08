@@ -55,7 +55,6 @@ end
     @test expect ≈ exact
 end
 
-
 @testset "gradient" begin
     g = SimpleGraph(2)
     for (i,j) in [(1,2)]
@@ -88,7 +87,6 @@ end
     @test isapprox(gradient3, expect_gradient3, rtol = 1e-4)
 end
  
-
  @testset "single variational optimization" begin
     g = SimpleGraph(4)
     for (i,j) in [(1,2), (1,3), (2,4), (3,4)]
@@ -100,7 +98,6 @@ end
     eigenval,eigenvec = IsoPEPS.eigsolve(IsoPEPS.mat(h), 1, :SR; ishermitian=true)
     @test isapprox(result , eigenval[1], rtol = 1e-2)
 end
-
 
 #TODO: draw energy vs. iteration step
 @testset "ZZ variational optimization" begin
@@ -132,10 +129,6 @@ end
     @test isapprox(result , eigenval[1], rtol=1e-2)
 end
 
-
-
-
-
 @testset "expect using Yao" begin
     h1 = put(4,(1,)=>Yao.X)
     eigenval1,eigenvec1 = IsoPEPS.eigsolve(IsoPEPS.mat(h1), 1, :SR; ishermitian=true)
@@ -147,8 +140,6 @@ end
     eigenval2,eigenvec2 = IsoPEPS.eigsolve(IsoPEPS.mat(h3), 1, :SR; ishermitian=true)
     @test eigenval2[1] ≈ -4.040593699203847
 end
-
-
 
 @testset "long_range_coherence_peps" begin
     g = SimpleGraph(4)
@@ -177,7 +168,6 @@ end
     exact2 = (statevec(peps)' * Yao.mat(h2) * statevec(peps))[1]
     @test two_sandwich(peps, peps, 1, 2, reshape(kron(Matrix(Yao.Z),Matrix(Yao.Z)),2,2,2,2), TreeSA(), MergeGreedy())[1] ≈ exact2
 end
-
 
 
 

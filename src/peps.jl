@@ -73,6 +73,43 @@ function inner_product(p1::PEPS, p2::PEPS)
     p1.code_inner_product(alltensors(p1c)..., alltensors(p2)...) 
 end
 
+function pro_amplitude(peps::PEPS; basis::Symbol=:Z)
+    peps_tensors = peps.code_statetensor(alltensors(peps)...)
+    bitstrings = [reverse(digits(i, base=2, pad=length(peps.physical_labels))).+1 for i in 0:2^length(peps.physical_labels)-1] 
+    z_amplitudes = [peps_tensors[bitstrings[i]...] for i in 1:2^length(peps.physical_labels)]
+    @show length(bitstrings)
+    
+    if basis == :Z
+        amplitudes = z_amplitudes
+    elseif basis == :X
+        hadamard = [1 1; 1 -1] / sqrt(2)
+        amplitudes = zeros(ComplexF64, 512)
+        for i in 1:512
+            for j in 1:512
+                h_factor = 1.0
+                for qubit in 1:9
+                    h_factor *= hadamard[bitstrings[i][qubit], bitstrings[j][qubit]]
+                end
+                amplitudes[i] += z_amplitudes[j] * h_factor
+            end
+        end
+    elseif basis == :Y     
+        y_gate = [0 -im; im 0]
+        amplitudes = zeros(ComplexF64, 512)
+        for i in 1:512
+            for j in 1:512
+                y_factor = 1.0
+                for qubit in 1:9
+                    y_factor *= y_gate[bitstrings[i][qubit], bitstrings[j][qubit]]
+                end
+                amplitudes[i] += z_amplitudes[j] * y_factor
+            end
+        end
+    end
+    norm_factor = sum(abs, amplitudes)
+    return abs.(amplitudes) ./ norm_factor
+end
+
 function Base.conj(peps::PEPS)
     replace_tensors(peps, conj.(alltensors(peps)))
 end
@@ -124,6 +161,14 @@ function dtorus(Lx::Int, Ly::Int)
         bottom = (i-1)*Ly + (j % Ly) + 1
         add_edge!(g, node, bottom)
         
+    end
+    return g
+end
+
+function dcircle(L::Int)
+    g = SimpleDiGraph(L)
+    for i in 1:L
+        add_edge!(g, i, i % L + 1)
     end
     return g
 end

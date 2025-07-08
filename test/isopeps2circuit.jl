@@ -62,6 +62,32 @@ end
     @test size(iter_res) == (nv(g),)
     @test all(x -> x in [0,1], iter_res)
 end
+
+using CairoMakie
+# amplitude of quantum state
+g = dcircle(16)
+peps,_ = isometric_peps(Float64, g, 2, 2, TreeSA(), MergeGreedy())
+peps, pepsu = specific_mps(peps, pi/4, pi/8)
+#pepsu = isometric_peps_to_unitary(peps, g)
+p_exact = pro_amplitude(peps)
+circ, converged, converged_iter, p_all, q_all = iter_sz_convergence(pepsu, g)
+x_axis = 1:length(p_all)
+fig = Figure(size = (1000, 400))
+ax = Axis(fig[1, 1], xlabel="measure results", ylabel="probability")
+lines!(ax, x_axis, p_exact, color=(:red, 0.6), label="p_exact")
+lines!(ax, x_axis, p_all, color=(:blue, 0.6), label="p_all")
+lines!(ax, x_axis, q_all, color=(:orange, 0.5), label="q_all")
+axislegend(ax)
+
+save("probability.png", fig)
+
+
+
+
+
+
+
+
 #=
 @testset "iter_sz_convergence" begin
     g = dtorus(3,3)
