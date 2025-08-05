@@ -57,3 +57,21 @@ end
 
 gate = matblock(rand_unitary(ComplexF64, 4))
 compare(gate)
+
+# first input qubit set to be |0>
+U = reshape(mat(gate), 2, 2, 2, 2)
+A = U[:, :, 1, :]
+P0 = [1., 0.]
+@assert ein"abij, i->abj"(U, P0) ≈ A
+
+
+# ρ by applying channels
+rho = iterate_channel(gate, 100)
+
+# directly solve fixed point ρ
+A = reshape(mat(gate), 2, 2, 2, 2)[:, :, 1, :]
+T = reshape(ein"iab,icd->cadb"(conj(A), A), 4, 4)
+@assert LinearAlgebra.eigen(T).values[end] ≈ 1.
+fixed_point_rho = reshape(LinearAlgebra.eigen(T).vectors[:, end], 2, 2)
+
+@assert rho.state ≈ (fixed_point_rho ./ tr(fixed_point_rho))
