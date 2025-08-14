@@ -237,9 +237,9 @@ end
 function draw_figure2()
     g_list = [0.0, 0.25, 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00]
     p_list = [1,2,3]
-    p1 = [-0.9999999997563389, -1.0156249970365168, -1.0624999968244235, -1.1406249987413477, -1.2499999965650135, -1.3906249993676547, -1.5624999981344312, -1.7656249994209183, -1.9999999510714537]
+    p1 = [-0.9999999999920235, -1.015624999990649, -1.0624999999997, -1.1406249999897835, -1.2499999999990963, -1.3906249999990326, -1.5624999999989426, -1.765624999999983, -1.9999999999999054]
     p2 = [ -0.9999999991992583, -1.0156268712491878, -1.0624538461763937, -1.1407879533141116, -1.2543680873132481, -1.3910471626247445, -1.5787566107430402, -1.818739684731014, -2.0981094737626123]
-    p3 = [ -0.9999999999999999, -1.0156879377212527, -1.063531806128337, -1.1465848784797186, -1.2725840951600263, -1.457071026676012, -1.6720898810656172, -1.8969280500308125, -2.1270280883760127]
+    p3 = [-0.9999999999984439, -1.0156870118440364, -1.0635440740663138, -1.1464647915423072, -1.272542485937369, -1.459172235772457, -1.6717366238936102, -1.8959687944364418, -2.1270514348502796]
     iMPS = [-0.9999999999999999,-1.0156870118440362,-1.0635440740663125,-1.1464647915423063,-1.2725424859373677,-1.459172235772456,-1.6717366238936089,-1.8959687944364405,-2.1270514348502796]
     exact_energies = [int(g,1.0).u for g in g_list]
     
@@ -248,7 +248,7 @@ function draw_figure2()
                      yscale=:log10, 
                      yticks=[1e-15,1e-13, 1e-11, 1e-9, 1e-7, 1e-5, 1e-3, 1e-1,1e1],
                      xticks=[-0.25,0.00, 0.25, 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00])
-    colors = [:red, :green, :orange,:blue]
+    colors = [RGBA(1,0,0,0.5), RGBA(0,1,0,0.7), RGBA(1,0.5,0,0.5), RGBA(0,0,1,0.5)]
     markers = [:+, :x, :star,:diamond]
 
    
@@ -256,9 +256,9 @@ function draw_figure2()
     errors2 = max.(abs.(p2-exact_energies), 1e-15)
     errors3 = max.(abs.(p3-exact_energies), 1e-15)
     errors4 = max.(abs.(iMPS-exact_energies), 1e-15)
-    Plots.plot!(fig, g_list, errors1, label="p=1, $(4) parameters",color=colors[1], marker=markers[1],markersize=4,linewidth=2)
-    Plots.plot!(fig, g_list, errors2, label="p=2, $(8) parameters",color=colors[2], marker=markers[2],markersize=4,linewidth=2)
-    Plots.plot!(fig, g_list, errors3, label="p=3, $(12) parameters",color=colors[3], marker=markers[3],markersize=4,linewidth=2)
+    #Plots.plot!(fig, g_list, errors1, label="iterate_channel",color=colors[1], marker=markers[1],markersize=4,linewidth=2)
+    #Plots.plot!(fig, g_list, errors2, label="p=2, $(8) parameters",color=colors[2], marker=markers[2],markersize=4,linewidth=2)
+    Plots.plot!(fig, g_list, errors3, label="p=3, iterate_channel_exactcontraction",color=colors[3], marker=markers[3],markersize=4,linewidth=2)
     Plots.plot!(fig, g_list, errors4, label="iMPS",color=colors[4], marker=markers[4],markersize=4,linewidth=2)
 
     Plots.plot!(fig, grid=true, gridwidth=1, gridcolor=:gray, gridalpha=0.3)
@@ -286,7 +286,7 @@ using Optim
 
 draw_figure2()
 
-p=3;g=0.25
+p=6;g=0.25
 params = parameter1(p)
 energy = train(params,p,g)
 min_energy = minimum(energy)
