@@ -1,4 +1,4 @@
-
+# Result from MPSKit.jl 
 function exact_energy(d,D,J,g)
     psi0 = InfiniteMPS([ℂ^d], [ℂ^D])
     H0 = transverse_field_ising(;J=J, g=g)
@@ -16,9 +16,7 @@ function exact_echo(d,D,J,g0,g1,dt)
     echo_ = echo(ψ₀, ψₜ)
     return envs
 end
-
 echo(ψ₀::InfiniteMPS, ψₜ::InfiniteMPS) =-2*log(abs(dot(ψ₀, ψₜ)))
-
 
 function iMPS(d,D,J)
     g_list = [0.0, 0.25, 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00]
@@ -40,6 +38,8 @@ function Loschmit_echo(d,D,J,g0,g1)
     return all
 end
 
+
+# Channel iteration
 function iterate_channel(gate, niters)
     rho1 = density_matrix(zero_state(1))  # the state qubit
     for i=1:niters
@@ -50,7 +50,7 @@ function iterate_channel(gate, niters)
     end
     return rho1
 end
-
+# domain eigen of transfer matrix
 function exact_left_environment(gate)
     A = reshape(Matrix(gate), 2, 2, 2, 2)[:, :, 1, :]
     T = reshape(ein"iab,icd->cadb"(conj(A), A), 4, 4)
@@ -60,7 +60,7 @@ function exact_left_environment(gate)
     return rho
 end
 
-
+# local expectation value by exact contraction
 function cost_X(gate; niters=100)
     A = reshape(Matrix(gate), 2, 2, 2, 2)[:,:,1,:]
     @assert ein"iab, iac->bc"(conj(A), A) ≈ I
@@ -68,28 +68,6 @@ function cost_X(gate; niters=100)
 
     return ein"((ba, ica), jcb), ij->"(rho.state, conj(A), A, Matrix(X))[]
 end
-
-function cost_X_circ(gate; niters=100)
-    rho = iterate_channel(gate, niters)
-
-    rho2 = join(rho, density_matrix(zero_state(1)))
-    @assert all(iszero, measure(rho2, 1; nshots=1000))
-    rho2 = apply!(rho2, gate)
-    apply!(rho2, put(2, 1=>H))
-
-    return 1 - 2 * mean(measure(rho2, 1; nshots=500000))
-end
-
-function cost_ZZ_circ(gate; niters=100)
-    rho = iterate_channel(gate, niters)
-
-    rho2 = join(rho, density_matrix(zero_state(1)))
-    @assert all(iszero, measure(rho2, 1; nshots=1000))
-    rho2 = apply!(rho2, gate)
-
-    return 1 - 2 * mean(measure(rho2, 1; nshots=500000))
-end
-
 function cost_ZZ(gate; niters=100)
     A = reshape(Matrix(gate), 2, 2, 2, 2)[:,:,1,:]
 
@@ -98,6 +76,28 @@ function cost_ZZ(gate; niters=100)
     res = ein"((ba, ica), jdb), ij->cd"(rho.state, conj(A), A, Matrix(Z))
     return ein"((ab, ica), jcb), ij->"(res, conj(A), A, Matrix(Z))[]
 end
+
+# local expectation value by measurement
+function cost_X_circ(gate; niters=100)
+    rho = iterate_channel(gate, niters)
+
+    rho2 = join(rho, density_matrix(zero_state(1)))
+    @assert all(iszero, measure(rho2, 1; nshots=1000))
+    rho2 = apply!(rho2, gate)
+    apply!(rho2, put(2, 1=>H))
+
+    return 1 - 2 * mean(measure(rho2, 1; nshots=50000))
+end
+function cost_ZZ_circ(gate; niters=100)
+    rho = iterate_channel(gate, niters)
+
+    rho2 = join(rho, density_matrix(zero_state(1)))
+    @assert all(iszero, measure(rho2, 1; nshots=1000))
+    rho2 = apply!(rho2, gate)
+
+    return 1 - 2 * mean(measure(rho2, 1; nshots=50000))
+end
+
 
 function train_energy(params,g,J,p; maxiter=1000, nbatch=1000)
     X_history = Float64[]
@@ -115,8 +115,8 @@ function train_energy(params,g,J,p; maxiter=1000, nbatch=1000)
         @assert A_matrix * A_matrix' ≈ I atol=1e-5
         @assert A_matrix' * A_matrix ≈ I atol=1e-5
         
-        energy = -g*cost_X(matblock(A_matrix)) - J*cost_ZZ(matblock(A_matrix))
-        #energy = -g*cost_X_circ(matblock(A_matrix)) - J*cost_ZZ_circ(matblock(A_matrix))^2
+        #energy = -g*cost_X(matblock(A_matrix)) - J*cost_ZZ(matblock(A_matrix))
+        energy = -g*cost_X_circ(matblock(A_matrix)) - J*cost_ZZ_circ(matblock(A_matrix))^2
         push!(X_history, real(energy))
         @info "Iter $(length(X_history)), cost: $energy"
         final_A = A_matrix
@@ -124,11 +124,14 @@ function train_energy(params,g,J,p; maxiter=1000, nbatch=1000)
         return real(energy)
     end
     @info "Number of parameters is $(length(params))"
-    optimizer = LBFGS()
+    optimizer = NelderMead(; 
+        parameters = Optim.AdaptiveParameters(),
+        initial_simplex = Optim.AffineSimplexer()
+    )
     Optim.optimize(objective, params, optimizer, Optim.Options(
         iterations=maxiter,
         show_trace=true,
-        f_reltol = 1e-12,  
+        f_reltol = 1e-10,  
         f_abstol = 1e-12,  
         g_tol = 1e-10,     
         x_abstol = 1e-12,  
@@ -259,36 +262,6 @@ function cost_iter(circ0,circ1, reg0,reg1,J,g)
     @show prob_00_x, prob_11_x
     energy = -J*(prob_00_or_11-prob_01_or_10)-g*(prob_00_x-prob_11_x)
     return energy
-end
-
-function get_gradient(params, J, g, niters)
-    nparams = length(params)
-    grad = zeros(Float64, nparams)
-
-    for i in 1:nparams
-        params_plus = copy(params)
-        params_plus[i] += pi/128
-        
-        params_minus = copy(params)
-        params_minus[i] -= pi/128
-
-        circ0_plus = iterate_circuit(params_plus, niters)
-        circ0_minus = iterate_circuit(params_minus, niters)
-        circ1_plus = iterate_circuit_x(params_plus, niters)
-        circ1_minus = iterate_circuit_x(params_minus, niters)
-
-        reg0_plus = zero_state(nqubits(circ0_plus))
-        reg0_minus = zero_state(nqubits(circ0_minus))
-
-        reg1_plus = zero_state(nqubits(circ1_plus))
-        reg1_minus = zero_state(nqubits(circ1_minus))
-
-        cost_plus = cost_iter(circ0_plus, circ1_plus, reg0_plus, reg1_plus, J, g)
-        cost_minus = cost_iter(circ0_minus, circ1_minus, reg0_minus, reg1_minus, J, g)
- 
-        grad[i] = 0.5 * (cost_plus - cost_minus)
-    end
-    return grad
 end
 
 
@@ -437,15 +410,6 @@ g=0.0
 energy = train_iter_circ(params,g,100)
 min_energy = minimum(energy)
 error = minimum(energy)-int(g,1.0).u
-mean(energy[end-20:end])
-fig = Plots.plot(energy, xlabel="Iteration", ylabel="Cost", title="Training Cost vs. Iteration", legend=false)
-
-# train train_with_gradient
-p=6
-params = rand(2*p)
-g=0.0
-energy = train_with_gradient(params,g,20)
-min_energy = minimum(energy)-int(g,1.0).u
 mean(energy[end-20:end])
 fig = Plots.plot(energy, xlabel="Iteration", ylabel="Cost", title="Training Cost vs. Iteration", legend=false)
 

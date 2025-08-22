@@ -178,11 +178,11 @@ function train_no_grad(params, p, g; maxiter=2000, nbatch=1000)
     result = Optim.optimize(objective, params, optimizer, Optim.Options(
         iterations=maxiter,
         show_trace=true,
-        f_tol=1e-12,        
-        g_tol=1e-10,       
-        x_tol=1e-12,       
-        f_abstol=-1.0156870128527515,     
-        time_limit=3600.0  
+        f_reltol = 1e-10,  
+        f_abstol = 1e-12,  
+        g_tol = 1e-10,     
+        x_abstol = 1e-12,  
+        time_limit=3600.0
     ))
     
     @info "Optimization completed. Final energy: $(result.minimum)"
@@ -237,9 +237,10 @@ end
 function draw_figure2()
     g_list = [0.0, 0.25, 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00]
     p_list = [1,2,3]
-    p1 = [-0.9999999999920235, -1.015624999990649, -1.0624999999997, -1.1406249999897835, -1.2499999999990963, -1.3906249999990326, -1.5624999999989426, -1.765624999999983, -1.9999999999999054]
-    p2 = [ -0.9999999991992583, -1.0156268712491878, -1.0624538461763937, -1.1407879533141116, -1.2543680873132481, -1.3910471626247445, -1.5787566107430402, -1.818739684731014, -2.0981094737626123]
-    p3 = [-0.9999999999984439, -1.0156870118440364, -1.0635440740663138, -1.1464647915423072, -1.272542485937369, -1.459172235772457, -1.6717366238936102, -1.8959687944364418, -2.1270514348502796]
+    p1 = [-0.9999999999750825, -1.0156870118440362, -1.0650417283888753, -1.1497702922877653, -1.2553757944705564, -1.4033037279655174, -1.6288857071468366, -1.8959687944364418, -2.12705143485028]
+    p2 = [-1.0000000000000004, -1.0156870118440353, -1.0635440740663136, -1.1464647721241048, -1.272542485937369, -1.4591722357724564, -1.6717364195300457, -1.8959687944364418, -2.1270512772804415]
+    p3 = [-0.9999999999984439, -1.0156870118440364, -1.0635440740663138, -1.164647915423072, -1.272542485937369, -1.459172235772457, -1.6717366238936102, -1.8959687944364418, -2.1270514348502796]
+    p4 = [-1.0, -1.0156220697759997, -1.065353575696, -1.1451930146559999, -1.2554430465439999, -1.3974493609760001, -1.5663455331840002, -1.7731122460959998, -2.0025814069759997]
     iMPS = [-0.9999999999999999,-1.0156870118440362,-1.0635440740663125,-1.1464647915423063,-1.2725424859373677,-1.459172235772456,-1.6717366238936089,-1.8959687944364405,-2.1270514348502796]
     exact_energies = [int(g,1.0).u for g in g_list]
     
@@ -256,11 +257,13 @@ function draw_figure2()
     errors2 = max.(abs.(p2-exact_energies), 1e-15)
     errors3 = max.(abs.(p3-exact_energies), 1e-15)
     errors4 = max.(abs.(iMPS-exact_energies), 1e-15)
-    #Plots.plot!(fig, g_list, errors1, label="iterate_channel",color=colors[1], marker=markers[1],markersize=4,linewidth=2)
-    #Plots.plot!(fig, g_list, errors2, label="p=2, $(8) parameters",color=colors[2], marker=markers[2],markersize=4,linewidth=2)
-    Plots.plot!(fig, g_list, errors3, label="p=3, iterate_channel_exactcontraction",color=colors[3], marker=markers[3],markersize=4,linewidth=2)
+    errors5 = max.(abs.(p4-exact_energies), 1e-15)
+    #Plots.plot!(fig, g_list, errors1, label="p=1, 4 parameters",color=colors[1], marker=markers[1],markersize=4,linewidth=2)
+    #Plots.plot!(fig, g_list, errors2, label="p=2, 8 parameters",color=colors[2], marker=markers[2],markersize=4,linewidth=2)
+    #Plots.plot!(fig, g_list, errors3, label="p=3, 12 parameters",color=colors[3], marker=markers[3],markersize=4,linewidth=2)
     Plots.plot!(fig, g_list, errors4, label="iMPS",color=colors[4], marker=markers[4],markersize=4,linewidth=2)
-
+    Plots.plot!(fig, g_list, errors5, label="p=3, 12 parameters, measurement",color=colors[3], marker=markers[3],markersize=4,linewidth=2)
+    
     Plots.plot!(fig, grid=true, gridwidth=1, gridcolor=:gray, gridalpha=0.3)
     Plots.plot!(fig, legend=:bottomright, legendfontsize=10)
     Plots.savefig(fig, "energy_errorvs_g.png")
