@@ -249,6 +249,7 @@ function draw_figure2()
                      yscale=:log10, 
                      yticks=[1e-15,1e-13, 1e-11, 1e-9, 1e-7, 1e-5, 1e-3, 1e-1,1e1],
                      xticks=[-0.25,0.00, 0.25, 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00])
+    using Colors
     colors = [RGBA(1,0,0,0.5), RGBA(0,1,0,0.7), RGBA(1,0.5,0,0.5), RGBA(0,0,1,0.5)]
     markers = [:+, :x, :star,:diamond]
 
@@ -270,13 +271,7 @@ function draw_figure2()
     Plots.display(fig)
 end
 
-function int(h::Float64, J::Float64)
-    f(u,p) = sqrt((J-h)^2 + 4*J*h*sin(u/2)^2)/ (-2*π)
-    domain= (-π,π)
-    prob = IntegralProblem(f,domain)
-    sol = solve(prob, HCubatureJL(); abstol=1e-10)
-    return sol
-end
+
 
 
 using Yao

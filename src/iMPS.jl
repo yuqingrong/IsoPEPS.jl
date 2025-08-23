@@ -1,3 +1,13 @@
+# analitical result
+function int(h::Float64, J::Float64)
+    f(u,p) = sqrt((J-h)^2 + 4*J*h*sin(u/2)^2)/ (-2*π)
+    domain= (-π,π)
+    prob = IntegralProblem(f,domain)
+    sol = solve(prob, HCubatureJL(); abstol=1e-10)
+    return sol
+end
+
+
 # Result from MPSKit.jl 
 function exact_energy(d,D,J,g)
     psi0 = InfiniteMPS([ℂ^d], [ℂ^D])
@@ -99,24 +109,22 @@ function cost_ZZ_circ(gate; niters=100)
 end
 
 
-function train_energy(params,g,J,p; maxiter=1000, nbatch=1000)
+function train_energy(params,g,J,p; maxiter=10000, nbatch=1000)
     X_history = Float64[]
     final_A = Matrix(I, 4,4)
     final_params = []
     function objective(x)
-        gate1 = kron(Ry(x[1]), Ry(x[2]))
-        gate2 = kron(Ry(x[3]), Ry(x[4]))
-        gate3 = kron(Ry(x[5]), Ry(x[6]))
-        gate4 = kron(Ry(x[7]), Ry(x[8]))
-        gate5 = kron(Ry(x[9]), Ry(x[10]))
-        gate6 = kron(Ry(x[11]), Ry(x[12]))
-        cnot_12 = cnot(2,2,1)
-        A_matrix = Matrix(gate1) * Matrix(cnot_12) * Matrix(gate2)* Matrix(cnot_12) * Matrix(gate3)* Matrix(cnot_12) * Matrix(gate4)* Matrix(cnot_12) * Matrix(gate5) * Matrix(cnot_12)* Matrix(gate6) * Matrix(cnot_12)
+        A_matrix = Matrix(I,4,4)
+        for r in 1:p
+            gate = kron(Ry(x[2*r-1]), Ry(x[2*r]))
+            cnot_12 = cnot(2,2,1)
+            A_matrix *= Matrix(gate) * Matrix(cnot_12)
+        end
         @assert A_matrix * A_matrix' ≈ I atol=1e-5
         @assert A_matrix' * A_matrix ≈ I atol=1e-5
         
-        #energy = -g*cost_X(matblock(A_matrix)) - J*cost_ZZ(matblock(A_matrix))
-        energy = -g*cost_X_circ(matblock(A_matrix)) - J*cost_ZZ_circ(matblock(A_matrix))^2
+        energy = -g*cost_X(matblock(A_matrix)) - J*cost_ZZ(matblock(A_matrix))
+        #energy = -g*cost_X_circ(matblock(A_matrix)) - J*cost_ZZ_circ(matblock(A_matrix))^2
         push!(X_history, real(energy))
         @info "Iter $(length(X_history)), cost: $energy"
         final_A = A_matrix
@@ -124,48 +132,193 @@ function train_energy(params,g,J,p; maxiter=1000, nbatch=1000)
         return real(energy)
     end
     @info "Number of parameters is $(length(params))"
-    optimizer = NelderMead(; 
-        parameters = Optim.AdaptiveParameters(),
-        initial_simplex = Optim.AffineSimplexer()
-    )
+    optimizer = BFGS()
     Optim.optimize(objective, params, optimizer, Optim.Options(
         iterations=maxiter,
         show_trace=true,
-        f_reltol = 1e-10,  
-        f_abstol = 1e-12,  
-        g_tol = 1e-10,     
-        x_abstol = 1e-12,  
+        f_reltol = 1e-9,  
+      
+        g_tol = 1e-9,     
+       
         time_limit=3600.0 
     ))
     return X_history, final_A, final_params
 end
 
-function all_energy(p)
+
+function all_energy(J=1.0)
     g_list = [0.0, 0.25, 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00]
-    energy_list = Float64[]
-    exact_energies = [int(g,1.0).u for g in g_list]
+    p_values = [2,4,6]  # Different p values
+    exact_energies = [int(g, J).u for g in g_list]
+    
+    # Calculate exact energies using exact_energy function for each g value
+    exact_energies_mps = []
+    exact_energies_mps_error = []
+    for (g_idx, g) in enumerate(g_list)
+        _, E_exact = exact_energy(2, 2, J, g)  # d=2, D=2
+        error = max(abs(E_exact - exact_energies[g_idx]), 1e-15)
+        push!(exact_energies_mps, E_exact)
+        push!(exact_energies_mps_error, error)
+        println("Exact energy (MPS) for g=$g: $E_exact")
+    end
+    
+    all_energy_lists = []
+    
+    # Create data directory if it doesn't exist
+    if !isdir("data")
+        mkdir("data")
+    end
+    
+    # Save exact MPS energies to independent file
+    open("data/exact_energies_mps.dat", "w") do file
+        write(file, "# g_value\texact_energy_int\texact_energy_mps\n")
+        for (g_idx, g) in enumerate(g_list)
+            write(file, "$(g)\t$(exact_energies_mps[g_idx])\t$(exact_energies_mps_error[g_idx])\n")
+        end
+    end
+    println("Exact MPS energies saved to data/exact_energies_mps.dat")
+    
+    # Create separate file for each p value
+    for (p_idx, p_val) in enumerate(p_values)
+        filename = "data/energy_results_p=$(p_val).dat"
+        energy_list = Float64[]
+        
+        open(filename, "w") do file
+            # Write header
+            write(file, "# g_value\tenergy\terror\texact_energy\n")
+            
+            # Calculate energies for each g value
+            for (g_idx, g) in enumerate(g_list)
+                params = rand(6*p_val)
+                energy_history, _, _ = train_energy(params, g, J, p_val)
+                energy = energy_history[end]  # Get final energy
+                error = max(abs(energy - exact_energies[g_idx]), 1e-15)
+                
+                # Store energy values
+                push!(energy_list, energy)
+                
+                # Write line to file
+                write(file, "$(g)\t$(energy)\t$(error)\t$(exact_energies[g_idx])\n")
+                
+                println("p=$p_val, g=$g: energy=$(energy), error=$(error)")
+            end
+        end
+        
+        push!(all_energy_lists, energy_list)
+        println("Data for p=$p_val saved to $filename")
+    end
+    
+    return all_energy_lists
+end
+
+function draw_figure()
+    # Read data from .dat files
+    p_values = [2, 4, 6]
+    colors = [RGBA(1,0,0,0.5), RGBA(0,1,0,0.7), RGBA(1,0.5,0,0.5), RGBA(0,0,1,0.5)]
+    markers = [:+, :x, :star,:diamond]
+    
+    # Create the plot
     fig = Plots.plot(xlabel="g", ylabel="ε - ε_exact", title="Energy Error vs Transverse Field", 
                      ylims=(1e-15, 10), xlims=(-0.25, 2), 
                      yscale=:log10, 
-                     yticks=[1e-15,1e-13, 1e-11, 1e-9, 1e-7, 1e-5, 1e-3, 1e-1,1e1],
-                     xticks=[-0.25,0.00, 0.25, 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00])
-    for (g_idx, g) in enumerate(g_list)
-        params = rand(6*p)
-        energy = train_energy(params,g,p)
-        push!(energy_list, energy)
+                     yticks=[1e-15, 1e-13, 1e-11, 1e-9, 1e-7, 1e-5, 1e-3, 1e-1, 1e1],
+                     xticks=[0.00, 0.25, 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00])
+    
+    # Plot data for each p value
+    for (p_idx, p_val) in enumerate(p_values)
+        filename = "data/energy_results_p=$(p_val).dat"
         
+        if isfile(filename)
+            # Read the data file
+            g_values = Float64[]
+            errors = Float64[]
+            
+            open(filename, "r") do file
+                for line in eachline(file)
+                    # Skip empty lines and comments
+                    if !isempty(strip(line)) && !startswith(line, "#")
+                        # Try splitting by tab first, then by spaces
+                        parts_tab = split(line, "\t")
+                        parts_space = split(line)
+                        
+                        # Use the split that gives us at least 4 parts
+                        parts = length(parts_tab) >= 4 ? parts_tab : parts_space
+                        
+                        if length(parts) >= 4
+                            try
+                                g = parse(Float64, parts[1])
+                                error = parse(Float64, parts[3])  # error column
+                                push!(g_values, g)
+                                push!(errors, error)
+                            catch e
+                                println("Warning: Could not parse line: $line")
+                                println("Error: $e")
+                            end
+                        end
+                    end
+                end
+            end
+            
+            # Plot the data
+            if !isempty(g_values)
+                Plots.plot!(fig, g_values, errors,
+                    label="p=$p_val, $(2*p_val) parameters",
+                    color=colors[p_idx],
+                    marker=markers[p_idx],
+                    markersize=4,
+                    linewidth=2)
+                Plots.plot!(fig, legend=:bottomright, legendfontsize=10)
+            end
+            
+            println("Plotted data for p=$p_val from $filename")
+        else
+            println("Warning: File $filename not found")
+        end
     end
-    errors = max.(abs.(energy_list-exact_energies), 1e-15)
-    Plots.plot!(fig, g_list, errors, 
-        label="p=1, 6 parameters",
-        color="red", 
-        marker="o",
-        markersize=4,
-        linewidth=2)
-    Plots.savefig(fig, "classical.png")
+    
+    # Add exact MPS comparison if available
+    mps_filename = "data/exact_energies_mps.dat"
+    if isfile(mps_filename)
+        g_values_mps = Float64[]
+        errors_mps = Float64[]
+        
+        open(mps_filename, "r") do file
+            for line in eachline(file)
+                if !isempty(strip(line)) && !startswith(line, "#")
+                    parts = split(line, "\t")
+                    if length(parts) >= 3
+                        g = parse(Float64, parts[1])
+                        error = parse(Float64, parts[3])  # MPS vs int error
+                        push!(g_values_mps, g)
+                        push!(errors_mps, error)
+                    end
+                end
+            end
+        end
+        
+        if !isempty(g_values_mps)
+            Plots.plot!(fig, g_values_mps, errors_mps,
+                label="iMPS",
+                color=colors[4],
+                marker=markers[4],
+                markersize=4,
+                linewidth=2,
+                linestyle=:dash)
+            println("Added MPS vs Integration comparison")
+        end
+    end
+    
+    # Save and display the plot
+    Plots.savefig(fig, "data/energy_error_plot.png")
     Plots.display(fig)
-    return energy_list
+    
+    println("Plot saved as data/energy_error_plot.png")
+    return fig
 end
+
+draw_figure()
+
+
 
 
 
@@ -374,6 +527,7 @@ end
 
 using TensorKit, MPSKit, MPSKitModels
 using LinearAlgebra,Yao,OMEinsum,Optim,Statistics,Plots
+using Integrals
 
 psi, E = exact_energy(2,2,1.0,0.25)
 @show psi

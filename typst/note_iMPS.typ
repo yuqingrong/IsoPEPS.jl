@@ -425,7 +425,7 @@ The ground state of the transverse field Ising model is obtained through variati
 
 == Quantum Channel
 - Quantum channel representation:
-
+$ Phi(rho_*) = rho_* $
 // 绘制量子通道表示 (大版本)
 #let draw_quantum_channel_large() = {
   canvas({
@@ -930,6 +930,46 @@ or
     )
   }
 ) 
+
+== Construct parameterized quantum circuit
+#import "@preview/quill:0.7.2": *
+#import "@preview/quill:0.7.2" as quill: tequila as tq
+
+(1) get $angle.l X angle.r$ by:
+#quill.quantum-circuit(
+    lstick($|0〉$), $R_z (theta_1)$, $R_x (theta_2)$, ctrl(1),$H$, meter(),midstick($|0 angle.r$), $R_z (theta_1)$, $R_x (theta_2)$, ctrl(1),3,$R_z (theta_1)$, $R_x (theta_2)$, ctrl(1),$H$,meter(),1,rstick("..."),[\ ],
+    lstick($|0〉$), $R_z (theta_3)$, $R_x (theta_4)$, targ(), 3,$R_z (theta_3)$, $R_x (theta_4)$, targ(),$H$,meter(),midstick($|0 angle.r$),$R_z (theta_3)$, $R_x (theta_4)$, targ(),3,
+  rstick("..."),
+  quill.gategroup(x: 1,y:0,2,3,label: (content:$times p$,pos:top)),
+  quill.gategroup(x: 7,y:0,2,3,label: (content:$times p$,pos:top)),
+  quill.gategroup(x: 13,y:0,2,3,label: (content:$times p$,pos:top)),
+ 
+)
+
+(2) get $angle.l Z Z angle.r$ by:
+
+#quill.quantum-circuit(
+    lstick($|0〉$), $R_z (theta_1)$, $R_x (theta_2)$, ctrl(1), 3,meter(),midstick($|0 angle.r$), 3,$R_z (theta_1)$, $R_x (theta_2)$,ctrl(1),1, rstick("..."),[\ ],
+    lstick($|0〉$), $R_z (theta_3)$, $R_x (theta_4)$, targ(), $R_z (theta_1)$, $R_x (theta_2)$, ctrl(1),meter(),midstick($|0 angle.r$),$R_z (theta_1)$, $R_x (theta_2)$, ctrl(1),$R_z (theta_3)$, $R_x (theta_4)$, targ(),meter(),rstick("..."),[\ ],
+    lstick($|0〉$), 3,$R_z (theta_3)$, $R_x (theta_4)$, targ(),2,$R_z (theta_3)$, $R_x (theta_4),$, targ(),3,meter(),rstick("..."),
+
+  quill.gategroup(x: 1,y:0,2,3,label: (content:$times p$,pos:top)),
+  quill.gategroup(x: 4,y:1,2,3,label: (content:$times p$,pos:bottom)),
+  quill.gategroup(x: 9,y:1,2,3,label: (content:$times p$,pos:bottom)),
+  quill.gategroup(x: 12,y:0,2,3,label: (content:$times p$,pos:top)),
+ 
+)
+
+Iterate until $angle.l X(theta) angle.r _n - angle.l X(theta) angle.r _(n-1) <=10^(-5) $ and  $angle.l Z_i (theta) Z_(i+1) (theta) angle.r _n - angle.l Z_i (theta) Z_(i+1) (theta) angle.r _(n-1) <=10^(-5) $, $n$ means the n-th iteration.
+
+#align(center)[
+  #image("images/arrow.png", width: 5%)
+  repeat (1) (2)
+]
+(3) $angle.l H(theta) angle.r = -g angle.l X(theta) angle.r - J angle.l Z_i (theta) Z_(i+1) (theta) angle.r $
+    
+    $partial/(partial theta_i) angle.l H(theta) angle.r => theta->theta+delta theta$ 
+
 
 = Results
 
