@@ -59,7 +59,7 @@ function iterate_channel(gate, niters)
         rho1 = partial_tr(rho2, 1) |> normalize!
     end
     return rho1
-end
+end 
 # domain eigen of transfer matrix
 function exact_left_environment(gate)
     A = reshape(Matrix(gate), 2, 2, 2, 2)[:, :, 1, :]
@@ -315,11 +315,6 @@ function draw_figure()
     println("Plot saved as data/energy_error_plot.png")
     return fig
 end
-
-draw_figure()
-
-
-
 
 
 function get_gate(params,niters)
