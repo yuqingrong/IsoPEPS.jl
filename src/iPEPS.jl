@@ -15,8 +15,8 @@ end
 
 function exact_left_eigen(gate, nsites)
     A = reshape(Matrix(gate), 2, 2, 2, 2, 2, 2)[:, :, :, 1, :, :]
-    E = reshape(ein"iabcd,iefgh -> abefcdgh"(A, conj(A)), 4,4,4,4)
-    _, T = contract_Elist(E, nsites)
+    #E = reshape(ein"iabcd,iefgh -> abefcdgh"(A, conj(A)), 4,4,4,4)
+    _, T = contract_Elist(A, nsites)
     T = reshape(T, 4^(nsites+1), 4^(nsites+1))
     @assert LinearAlgebra.eigen(T).values[end] ≈ 1.
     @show LinearAlgebra.eigen(T).values[end], LinearAlgebra.eigen(T).values[end-1]
@@ -26,36 +26,56 @@ function exact_left_eigen(gate, nsites)
     return rho
 end
 
-# contract the horizontal indices. output: all top*bottom arrays
-function contract_Elist(E, row; optimizer=GreedyMethod())
+# contract list of A and A^dagger to form transfer matrix TODO: rewrite the contraction 
+function contract_Elist(A, row; optimizer=GreedyMethod())
     store = IndexStore()
-    index = Vector{Int}[]
-    first_right = newindex!(store)
-    first_left = newindex!(store)
-    previdx_right = first_right
+    index_bra = Vector{Int}[]
+    index_ket = Vector{Int}[]
+    index_output = Int[]
+    first_down_ket = newindex!(store)
+    first_up_ket = newindex!(store)
+    first_down_bra = newindex!(store)
+    first_up_bra = newindex!(store)
+    previdx_down_ket = first_down_ket
+    previdx_down_bra = first_down_bra
     for i in 1:row
-        topidx = newindex!(store)
-        bottomidx = newindex!(store)
-        next_right = i == 1 ? first_right : newindex!(store)
-        next_left = i == 1 ? first_left : previdx_right
-        push!(index, [next_right, topidx, next_left, bottomidx])
-        previdx_right = next_right
+        phyidx = newindex!(store)
+        left_ket = newindex!(store)
+        right_ket = newindex!(store)
+        left_bra = newindex!(store)
+        right_bra = newindex!(store)
+        next_up_ket = i ==1 ? first_up_ket : previdx_down_ket
+        next_up_bra = i ==1 ? first_up_bra : previdx_down_bra
+        next_down_ket = i == 1 ? first_down_ket : newindex!(store)
+        next_down_bra = i == 1 ? first_down_bra : newindex!(store)
+        push!(index_ket, [phyidx, next_down_ket, right_ket, next_up_ket, left_ket])
+        push!(index_bra, [phyidx, next_down_bra, right_bra, next_up_bra, left_bra])
+        previdx_down_ket = next_down_ket
+        previdx_down_bra = next_down_bra
     end
-    output_indices = Int[]
-    push!(output_indices, index[row][1])
+
+    push!(index_output, index_ket[row][2])
     for i in 1:row
-        topidx = index[i][2]    
-        push!(output_indices, topidx)
+        push!(index_output, index_ket[i][3])
     end
-    push!(output_indices, first_left)
+    push!(index_output, index_bra[row][2])
+    for i in 1:row
+        push!(index_output, index_bra[i][3])
+    end
+
+    push!(index_output, index_ket[1][4])
     for i in 1: row
-        bottomidx = index[i][4] 
-        push!(output_indices,bottomidx)
+        push!(index_output, index_ket[i][end])
     end
-    
-    tensors = [E for _ in 1:row]
-    size_dict = OMEinsum.get_size_dict(index, tensors)
-    code = optimize_code(DynamicEinCode(index, output_indices), size_dict, optimizer)
-    return code, code(tensors...)
+    push!(index_output, index_bra[1][4])
+    for i in 1: row
+        push!(index_output, index_bra[i][end])
+    end
+    index=[index_ket...,index_bra...]
+    tensors_ket = [A for _ in 1:row]
+    tensors_bra = [conj(A) for _ in 1:row]
+    size_dict = OMEinsum.get_size_dict(index, [tensors_ket...,tensors_bra...])
+    code = optimize_code(DynamicEinCode(index, index_output), size_dict, optimizer)
+    return code, code(tensors_ket...,tensors_bra...)
 end
 
