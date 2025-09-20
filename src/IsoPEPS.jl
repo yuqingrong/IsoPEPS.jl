@@ -45,6 +45,7 @@ export ProductManifold, Stiefel, isopeps_optimize_ising, isometric_peps_to_unita
 
 export check_all_sites_convergence, adaptive_all_sites_convergence, monitor_all_sites_iteration_convergence
 export check_convergence_all_sites
+export contract_Elist, exact_left_eigen, iterate_channel_PEPS, one_step_exact
 
 include("LanczosAlgorithm.jl")
 include("KrylovkitYao.jl")
@@ -56,4 +57,5 @@ include("mpsandmpo.jl")
 include("peps.jl")
 include("isometricpeps.jl")
 include("isopeps2circuit.jl")
+include("iPEPS.jl")
 end
