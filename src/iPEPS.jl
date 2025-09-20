@@ -19,14 +19,13 @@ function exact_left_eigen(gate, nsites)
     _, T = contract_Elist(A, nsites)
     T = reshape(T, 4^(nsites+1), 4^(nsites+1))
     @assert LinearAlgebra.eigen(T).values[end] ≈ 1.
-    @show LinearAlgebra.eigen(T).values[end], LinearAlgebra.eigen(T).values[end-1]
     fixed_point_rho = reshape(LinearAlgebra.eigen(T).vectors[:, end], Int(sqrt(4^(nsites+1))), Int(sqrt(4^(nsites+1))))
     rho = fixed_point_rho ./ tr(fixed_point_rho)
     @show isapprox(rho, rho') 
     return rho
 end
 
-# contract list of A and A^dagger to form transfer matrix TODO: rewrite the contraction 
+# contract list of A and A^dagger to form transfer matrix  
 function contract_Elist(A, row; optimizer=GreedyMethod())
     store = IndexStore()
     index_bra = Vector{Int}[]
@@ -54,23 +53,15 @@ function contract_Elist(A, row; optimizer=GreedyMethod())
         previdx_down_bra = next_down_bra
     end
 
-    push!(index_output, index_ket[row][2])
-    for i in 1:row
-        push!(index_output, index_ket[i][3])
-    end
-    push!(index_output, index_bra[row][2])
-    for i in 1:row
-        push!(index_output, index_bra[i][3])
-    end
+    append!(index_output, index_ket[row][2])
+    append!(index_output, [index_ket[i][3] for i in 1:row])
+    append!(index_output, index_bra[row][2])
+    append!(index_output, [index_bra[i][3] for i in 1:row])
 
-    push!(index_output, index_ket[1][4])
-    for i in 1: row
-        push!(index_output, index_ket[i][end])
-    end
-    push!(index_output, index_bra[1][4])
-    for i in 1: row
-        push!(index_output, index_bra[i][end])
-    end
+    append!(index_output, index_ket[1][4])
+    append!(index_output, [index_ket[i][end] for i in 1:row])
+    append!(index_output, index_bra[1][4])
+    append!(index_output, [index_bra[i][end] for i in 1:row])
     index=[index_ket...,index_bra...]
     tensors_ket = [A for _ in 1:row]
     tensors_bra = [conj(A) for _ in 1:row]
