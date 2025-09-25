@@ -19,6 +19,8 @@ using Statistics
 using OMEinsumContractionOrders
 using Manifolds, Manopt
 using RecursiveArrayTools
+using TensorKit, MPSKit, MPSKitModels
+using MPSKitModels: transverse_field_ising, InfiniteStrip
 
 export statevec, vec
 export ising_hamiltonian, ising_hamiltonian_2d,ed_groundstate
@@ -45,7 +47,7 @@ export ProductManifold, Stiefel, isopeps_optimize_ising, isometric_peps_to_unita
 
 export check_all_sites_convergence, adaptive_all_sites_convergence, monitor_all_sites_iteration_convergence
 export check_convergence_all_sites
-export contract_Elist, exact_left_eigen, iterate_channel_PEPS, one_step_exact
+export contract_Elist, exact_left_eigen, iterate_channel_PEPS, exact_energy_PEPS
 
 include("LanczosAlgorithm.jl")
 include("KrylovkitYao.jl")

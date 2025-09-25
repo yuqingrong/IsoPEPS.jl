@@ -26,7 +26,11 @@ end
     @test rho_iter ≈ rho_eigen 
 end
 
-
+@testset "exact_energy_PEPS" begin
+    d = 2; D = 2; g = 0.0; row=3
+    E = exact_energy_PEPS(d, D, g, row)
+    @test E ≈ -1.0
+end
 
 # try GHZ + Toffoli
 Toffoli = Matrix{ComplexF64}(I, 8, 8)  

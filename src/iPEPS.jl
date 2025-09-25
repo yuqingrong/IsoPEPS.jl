@@ -70,3 +70,11 @@ function contract_Elist(A, row; optimizer=GreedyMethod())
     return code, code(tensors_ket...,tensors_bra...)
 end
 
+function exact_energy_PEPS(d::Int,D::Int,g::Float64,row::Int)
+    # Create MPS with 3-site unit cell to match InfiniteStrip(3)
+    mps = InfiniteMPS([ComplexSpace(d) for _ in 1:row], [ComplexSpace(D) for _ in 1:row])
+    H0 = transverse_field_ising(InfiniteStrip(row); g=g)
+    psi,_= find_groundstate(mps, H0, VUMPS())
+    E = real(expectation_value(psi,H0))/row
+    return E
+end
