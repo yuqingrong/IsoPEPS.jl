@@ -21,9 +21,11 @@ using Manifolds, Manopt
 using RecursiveArrayTools
 using TensorKit, MPSKit, MPSKitModels
 using MPSKitModels: transverse_field_ising, InfiniteStrip
+using Plots
+using Colors: RGBA
 
 export statevec, vec
-export ising_hamiltonian, ising_hamiltonian_2d,ed_groundstate
+export ising_hamiltonian, ising_hamiltonian_2d,ed_groundstate, ising_ham_periodic2d
 export itime_groundstate!, lanczos
 export transverse_ising,itime_groundstate!
 #export dagger_mps,inner_product
@@ -47,7 +49,7 @@ export ProductManifold, Stiefel, isopeps_optimize_ising, isometric_peps_to_unita
 
 export check_all_sites_convergence, adaptive_all_sites_convergence, monitor_all_sites_iteration_convergence
 export check_convergence_all_sites
-export contract_Elist, exact_left_eigen, iterate_channel_PEPS, exact_energy_PEPS
+export contract_Elist, exact_left_eigen, iterate_channel_PEPS, exact_energy_PEPS, cost_X_circ, cost_ZZ_circ, train_energy_circ, draw
 
 include("LanczosAlgorithm.jl")
 include("KrylovkitYao.jl")
