@@ -19,8 +19,9 @@ using Statistics
 using OMEinsumContractionOrders
 using Manifolds, Manopt
 using RecursiveArrayTools
-using TensorKit, MPSKit, MPSKitModels
-using MPSKitModels: transverse_field_ising, InfiniteStrip
+using TensorKit, MPSKit, MPSKitModels, PEPSKit 
+using MPSKitModels: transverse_field_ising, InfiniteStrip, InfiniteCylinder
+using PEPSKit: InfiniteSquare
 using Plots
 using Colors: RGBA
 
@@ -49,7 +50,7 @@ export ProductManifold, Stiefel, isopeps_optimize_ising, isometric_peps_to_unita
 
 export check_all_sites_convergence, adaptive_all_sites_convergence, monitor_all_sites_iteration_convergence
 export check_convergence_all_sites
-export contract_Elist, exact_left_eigen, iterate_channel_PEPS, exact_energy_PEPS, cost_X_circ, cost_ZZ_circ, train_energy_circ, draw
+export contract_Elist, exact_left_eigen, iterate_channel_PEPS, exact_energy_PEPS, cost_X_circ, cost_ZZ_circ, train_energy_circ, draw, cost_X, cost_ZZ, train_nocompile, exact_iPEPS
 
 include("LanczosAlgorithm.jl")
 include("KrylovkitYao.jl")
