@@ -1,9 +1,9 @@
 using IsoPEPS
 using Test
-import Yao, YaoBlocks
+using Yao, YaoBlocks
 using LinearAlgebra
 using Optim
-import Manifolds
+using Manifolds
 @testset "contract_Elist" begin
     A = randn(ComplexF64, 2,2,2,2,2)
     nsites = 1
@@ -20,9 +20,9 @@ end
 end
 
 @testset "iterate_channel_PEPS" begin
-    nsites = 3; row = 3; niters = 50
+    nsites = 3; row = 3; niters = 40
     gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nsites))
-    rho_iter = iterate_channel_PEPS(gate, row)
+    rho_iter,_ = iterate_channel_PEPS(gate, row; niters=niters)
     rho_eigen, gap = exact_left_eigen(gate, row)
     re1 = cost_ZZ(rho_iter, row, gate); re2 = cost_X(rho_iter, row, gate)
     @show re1, re2
@@ -87,37 +87,63 @@ rho_iter = iterate_channel_PEPS(gate, 1, 1)
 
 using Plots
 draw() 
+
+
+using Optimization, OptimizationCMAEvolutionStrategy
 using Random
-J=1.0; g=0.00; row=3
+J=1.0; g=1.75; row=3
 d=D=2
 p=3
 #E = exact_energy_PEPS(d, D, g, row)
-Random.seed!(12)
+#Random.seed!(12)
 params = rand(6*p)
-X_history, final_A, final_params, final_cost = train_energy_circ(params, J, g, p, row)
+X_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, params_history = train_energy_circ(params, J, g, p, row)
 _, gap = exact_left_eigen(final_A, row)
 @show gap
+
 @show X_history[end]
-@show final_A
 @show final_params
-final_params ≈ params
+@show mean(X_history[end-100:end])
+@show mean(gap_list[end-1000:end])
 
 
-J = 1.0; g=0.00
-nsites = 3; row = 3; niters = 100
-gate1 = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nsites))
-A =  Matrix(gate1)
-M = Manifolds.Unitary(2^nsites, Manifolds.ℂ)
-result, final_energy, final_p = train_nocompile(gate1, row, M, J, g)
+show(IOContext(stdout, :limit => false), "text/plain", final_params)
+# Save the training datagap
+save_training_data(X_list_list, Z_list_list, gap_list)
+gap_file="data/gap_list_g=1.25.dat"
+open(gap_file, "w") do io
+    println(io, "# energy_list data from iPEPS optimization")
+    println(io, "# Number of iterations: $(length(Z_list_list))")
+    if !isempty(gap_list)
+        println(io, "# Length of each Z_list: $(length(Z_list_list[1]))")
+    end
+    println(io, "# Format: Each line contains one gaZp (space-separated values)")
+    println(io, "#")
+    for energy in gap_list
+        println(io, join(energy, " "))
+    end
+end
 
-@show final_energy
-_, gap = exact_left_eigen(gate1, nsites)
-@show final_p
-gate = YaoBlocks.matblock(final_p)
-_, gap = exact_left_eigen(gate, row)
-@show gap
-final_A ≈ final_p
-tr(final_A' * final_p)
 
-d=D=2; J=1.0; g=1.00
-E = exact_iPEPS(d, D, J, g)
+vcat(Z_list_list...)
+if !isempty(X_history)
+    Plots.plot(
+        vcat(gap_list),
+        xlabel="Iteration",
+        ylabel="gap",
+        title="gap vs parameter iteration",
+        ylims=(-0.0,10.0),
+        legend=false,
+        size=(900,300)  
+    )
+else
+    @warn "Z_list is empty, nothing to plot."
+end
+
+
+draw_X_from_file(g,[1,10,15,20,26])
+
+check_gap_sensitivity(final_params, 18, g, row, p)
+
+check_all_gap_sensitivity_combined(final_params, g, row, p)
+
