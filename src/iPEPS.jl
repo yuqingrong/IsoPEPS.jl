@@ -116,9 +116,9 @@ function cost_ZZ_circ(rho, row, gate; niters=50)
 end
 
 function cost_X(rho, row, gate)
-    nqubits = Int(log2(size(rho.state, 1)))
+    nqubits = Int(log2(size(rho, 1))) # TODO: rho -> rho.state
     shape = ntuple(_ -> 2, 2 * nqubits)
-    rho = reshape(rho.state, shape...)
+    rho = reshape(rho, shape...)
     A = reshape(Matrix(gate), 2, 2, 2, 2, 2, 2)[:, :, :, 1, :, :]
     AX = ein"iabcd,ij -> jabcd"(A, Matrix(X))
     tensor_ket = [AX, A, A]
@@ -130,9 +130,9 @@ function cost_X(rho, row, gate)
 end
 
 function cost_ZZ(rho, row, gate)
-    nqubits = Int(log2(size(rho.state, 1)))
+    nqubits = Int(log2(size(rho, 1)))
     shape = ntuple(_ -> 2, 2 * nqubits)
-    rho = reshape(rho.state, shape...)
+    rho = reshape(rho, shape...)
     A = reshape(Matrix(gate), 2, 2, 2, 2, 2, 2)[:, :, :, 1, :, :]
     AZ = ein"iabcd,ij -> jabcd"(A, Matrix(Z))
     tensor_ket = [AZ, AZ, A]
@@ -143,7 +143,6 @@ function cost_ZZ(rho, row, gate)
     result2 = ein"abcdefgh,ijklijklabcdefgh ->"(rho, list2)
     _, list3 = contract_Elist([AZ, A, AZ], tensor_bra, row)
     result3 = ein"abcdefgh,ijklijklabcdefgh ->"(rho, list3)
-    @show result1[], result2[]
     return 2*(result1[]+result2[]+result3[])/3
 end
 
@@ -251,26 +250,10 @@ function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int; max
     return X_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, params_history
 end
 
-
+# check convergence
 function draw_X_from_file(g::Float64, n::Vector{Int}; data_dir="data", save_path=nothing, block_size=1000)
-    """
-    Read specific lines from X_list_g data file, calculate block variance, and plot.
-    
-    Block variance analysis: divides data into blocks, computes variance of block means
-    to determine thermalization and autocorrelation time.
-    
-    Parameters:
-    - g: g value (e.g., 0.0, 0.25, 0.5, etc.)
-    - n: Vector of line numbers to plot (e.g., [1, 5, 10])
-    - data_dir: Directory containing the data files (default: "data")
-    - save_path: Path to save the figure (default: nothing, will auto-generate if not provided)
-                If set to false, no file will be saved
-    - block_size: Size of each block for variance calculation (default: 1000)
-    """
-
     g_str = string(g)
 
-    
     filename = joinpath(data_dir, "X_list_g=$g.dat") 
     if !isfile(filename)
         @error "File not found: $filename"
@@ -333,7 +316,7 @@ function draw_X_from_file(g::Float64, n::Vector{Int}; data_dir="data", save_path
             end
             
             # Plot block variance
-            Plots.plot!(p, 2:length(block_means), block_var, label="Line $line_idx", linewidth=2, marker=:circle, markersize=3)
+            Plots.plot!(p, 2:length(block_means), block_var, label="params_group $line_idx", linewidth=2, marker=:circle, markersize=3)
             @info "Plotted line $line_idx: $(n_blocks) blocks, final variance = $(block_var[end])"
             
         catch e
@@ -347,7 +330,7 @@ function draw_X_from_file(g::Float64, n::Vector{Int}; data_dir="data", save_path
         if save_path === nothing
             # Auto-generate filename
             lines_str = join(n, "_")
-            save_path = "X_block_var_g=$(g_str)_lines_$(lines_str).png"
+            save_path = "X_block_var_g=$(g_str)_lines_$(lines_str).pdf"
         end
         savefig(p, save_path)
         @info "Figure saved to: $save_path"
@@ -398,10 +381,11 @@ function check_gap_sensitivity(params::Vector{Float64}, param_idx::Int, g::Float
         gate_block = matblock(A_matrix)
         
         # Compute spectral gap
-        _, gap = exact_left_eigen(gate_block, row)
+        rho, gap = exact_left_eigen(gate_block, row)
         push!(gap_values, gap)
         
         # Optionally compute energy
+        #==
         rho, Z_list, X_list = iterate_channel_PEPS(gate_block, row; niters=10000)
         Z1_list = Z_list[1:2*row:end]
         Z2_list = Z_list[2:2*row:end]  
@@ -410,15 +394,16 @@ function check_gap_sensitivity(params::Vector{Float64}, param_idx::Int, g::Float
         Z5_list = Z_list[5:2*row:end]
         Z6_list = Z_list[6:2*row:end]
         
-        #==
+        
         energy = -g*mean(X_list[end-7500:end]) -     
                  J*mean(Z1_list[1:2*row:end] .* Z2_list[1:2*row:end] + 
                         Z2_list[1:2*row:end] .* Z3_list[1:2*row:end] + 
                         Z1_list[1:2*row:end] .* Z3_list[1:2*row:end] + 
                         Z1_list[1:2*row:end] .* Z4_list[1:2*row:end] + 
                         Z2_list[1:2*row:end] .* Z5_list[1:2*row:end] + 
-                        Z3_list[1:2*row:end] .* Z6_list[1:2*row:end])/row ==#
-        energy = -g*cost_X(rho, row, gate) - J*cost_ZZ(rho, row, gate)
+                        Z3_list[1:2*row:end] .* Z6_list[1:2*row:end])/row 
+        ==#
+        energy = -g*cost_X(rho, row, gate_block) - J*cost_ZZ(rho, row, gate_block)
         push!(energy_values, real(energy))
         
         if i % 10 == 0
@@ -427,18 +412,18 @@ function check_gap_sensitivity(params::Vector{Float64}, param_idx::Int, g::Float
     end
     # Plot results
     p1 = Plots.plot(param_values, gap_values, 
-                    xlabel="Parameter $param_idx Value", 
+                    xlabel="Parameter_idx= $param_idx Value", 
                     ylabel="Spectral Gap",
                     ylims=(0,10.0),
-                    title="Gap Sensitivity (g=$g, param=$param_idx)",
+                    title="Gap Sensitivity (g=$g, param_idx=$param_idx)",
                     linewidth=2, marker=:circle, markersize=3,
                     legend=false)
     
     p2 = Plots.plot(param_values, energy_values,
-                    xlabel="Parameter $param_idx Value",
+                    xlabel="Parameter_idx $param_idx Value",
                     ylabel="Energy",
                     ylims=(-3.0,7.0),
-                    title="Energy vs Parameter $param_idx",
+                    title="Energy (g=$g, param_idx=$param_idx)",
                     linewidth=2, marker=:circle, markersize=3,
                     legend=false)
     
@@ -470,132 +455,10 @@ function check_gap_sensitivity(params::Vector{Float64}, param_idx::Int, g::Float
 end
 
 
-
-function check_all_parameters_sensitivity(params::Vector{Float64}, g::Float64, row::Int, p::Int;
-                                         param_range=range(0, 2π, length=30),
-                                         output_dir="data/sensitivity_analysis")
-    """
-    Check spectral gap sensitivity for all parameters.
-    
-    This function systematically varies each of the 18 parameters one at a time
-    while keeping others fixed, and analyzes the impact on spectral gap.
-    
-    Parameters:
-    - params: Vector of 18 parameters
-    - g: Transverse field strength
-    - row: Number of rows in PEPS
-    - p: Number of layers (should be 3 for 18 parameters)
-    - param_range: Range to test each parameter
-    - output_dir: Directory to save results
-    
-    Returns:
-    - results: Dictionary mapping parameter index to (param_values, gaps, energies)
-    """
-    
-    if !isdir(output_dir)
-        mkpath(output_dir)
-        @info "Created output directory: $output_dir"
-    end
-    
-    results = Dict{Int, Tuple{Vector{Float64}, Vector{Float64}, Vector{Float64}}}()
-    
-    # Store sensitivity metrics
-    gap_sensitivities = Float64[]  # Standard deviation of gaps for each parameter
-    
-    for param_idx in 1:length(params)
-        @info "\n" * "="^60
-        @info "Analyzing parameter $param_idx of $(length(params))"
-        @info "="^60
-        
-        save_path = joinpath(output_dir, "sensitivity_param_$(param_idx)_g=$(g).png")
-        
-        param_vals, gaps, energies = check_gap_sensitivity(
-            params, param_idx, g, row, p;
-            param_range=param_range,
-            save_path=save_path
-        )
-        
-        results[param_idx] = (param_vals, gaps, energies)
-        
-        # Calculate sensitivity metric (standard deviation of gaps)
-        gap_std = std(gaps)
-        push!(gap_sensitivities, gap_std)
-        
-        @info "Parameter $param_idx: Gap std = $gap_std"
-    end
-    
-    # Create summary plot showing which parameters are most sensitive
-    summary_fig = Plots.bar(1:length(params), gap_sensitivities,
-                            xlabel="Parameter Index",
-                            ylabel="Gap Standard Deviation",
-                            title="Spectral Gap Sensitivity Summary (g=$g)",
-                            legend=false,
-                            color=:steelblue)
-    
-    summary_path = joinpath(output_dir, "sensitivity_summary_g=$(g).png")
-    Plots.savefig(summary_fig, summary_path)
-    @info "Summary figure saved to: $summary_path"
-    
-    # Save summary data
-    summary_data_path = joinpath(output_dir, "sensitivity_summary_g=$(g).dat")
-    open(summary_data_path, "w") do io
-        println(io, "# Spectral gap sensitivity summary")
-        println(io, "# Transverse field g: $g")
-        println(io, "# Columns: parameter_index gap_std")
-        println(io, "#")
-        for i in 1:length(gap_sensitivities)
-            println(io, "$i $(gap_sensitivities[i])")
-        end
-    end
-    @info "Summary data saved to: $summary_data_path"
-    
-    # Print most sensitive parameters
-    sorted_indices = sortperm(gap_sensitivities, rev=true)
-    @info "\nMost sensitive parameters (top 5):"
-    for i in 1:min(5, length(sorted_indices))
-        idx = sorted_indices[i]
-        @info "  Parameter $idx: std = $(gap_sensitivities[idx])"
-    end
-    
-    Plots.display(summary_fig)
-    
-    return results, gap_sensitivities
-end
-
-
-
-function train_nocompile(gate, row, M::AbstractManifold, J::Float64, g::Float64; maxiter=3000)
-    
-    function f(M, gate)
-        gate = matblock(gate)
-        rho = iterate_channel_PEPS(gate, row)
-        energy = -g*cost_X(rho, row, gate) - J*cost_ZZ(rho, row, gate)
-        return real(energy)
-    end
-
-    @assert is_point(M, Matrix(gate))
-
-    result = Manopt.NelderMead(
-        M, 
-        f,
-        population=NelderMeadSimplex(M);
-        stopping_criterion = StopAfterIteration(maxiter) | StopWhenPopulationConcentrated(1e-4, 1e-4), # StopWhenPopulationConcentrated(tol_f::Real=1e-8, tol_x::Real=1e-8)
-        record = [:Iteration, :Cost],
-        return_state = true
-    )
-    
-    final_p = get_solver_result(result)
-    final_energy = f(M, final_p)
-   
-    @show final_energy
-    return result, final_energy, final_p
-end
-
-
 function check_all_gap_sensitivity_combined(params::Vector{Float64}, g::Float64, row::Int, p::Int;
                                             param_range=range(0, 2π, length=50),
                                             save_path=nothing,
-                                            plot_energy=false)
+                                            plot_energy=true)
 
     n_params = length(params)
     @info "Computing gap sensitivity for all $n_params parameters"
@@ -643,12 +506,13 @@ function check_all_gap_sensitivity_combined(params::Vector{Float64}, g::Float64,
             gate_block = matblock(A_matrix)
             
             # Compute spectral gap
-            _, gap = exact_left_eigen(gate_block, row)
+            rho, gap = exact_left_eigen(gate_block, row)
             push!(gap_values, gap)
             
             # Optionally compute energy
+            #==
             if plot_energy
-                rho, Z_list, X_list = iterate_channel_PEPS(gate_block, row; niters=1000)
+                rho, Z_list, X_list = iterate_channel_PEPS(gate_block, row; niters=10000)
                 Z1_list = Z_list[1:2*row:end]
                 Z2_list = Z_list[2:2*row:end]  
                 Z3_list = Z_list[3:2*row:end]
@@ -656,17 +520,18 @@ function check_all_gap_sensitivity_combined(params::Vector{Float64}, g::Float64,
                 Z5_list = Z_list[5:2*row:end]
                 Z6_list = Z_list[6:2*row:end]
                 
-                n_samples = min(1000, length(X_list))
-                energy = -g*mean(X_list[end-n_samples+1:end]) - 
-                         J*mean(Z1_list[end-div(n_samples, 2*row)+1:end] .* Z2_list[end-div(n_samples, 2*row)+1:end] + 
-                                Z2_list[end-div(n_samples, 2*row)+1:end] .* Z3_list[end-div(n_samples, 2*row)+1:end] + 
-                                Z1_list[end-div(n_samples, 2*row)+1:end] .* Z3_list[end-div(n_samples, 2*row)+1:end] + 
-                                Z1_list[end-div(n_samples, 2*row)+1:end] .* Z4_list[end-div(n_samples, 2*row)+1:end] + 
-                                Z2_list[end-div(n_samples, 2*row)+1:end] .* Z5_list[end-div(n_samples, 2*row)+1:end] + 
-                                Z3_list[end-div(n_samples, 2*row)+1:end] .* Z6_list[end-div(n_samples, 2*row)+1:end])/row
+                energy = -g*mean(X_list[end-7500:end]) -     
+                J*mean(Z1_list[1:2*row:end] .* Z2_list[1:2*row:end] + 
+                       Z2_list[1:2*row:end] .* Z3_list[1:2*row:end] + 
+                       Z1_list[1:2*row:end] .* Z3_list[1:2*row:end] + 
+                       Z1_list[1:2*row:end] .* Z4_list[1:2*row:end] + 
+                       Z2_list[1:2*row:end] .* Z5_list[1:2*row:end] + 
+                       Z3_list[1:2*row:end] .* Z6_list[1:2*row:end])/row 
                 push!(energy_values, real(energy))
             end
-            
+            ==#
+            energy = -g*cost_X(rho, row, gate_block) - J*cost_ZZ(rho, row, gate_block)
+            push!(energy_values, real(energy))
             if i % 10 == 0
                 @info "  Parameter $param_idx: $i/$(length(param_values)) points completed"
             end
@@ -786,10 +651,124 @@ function check_all_gap_sensitivity_combined(params::Vector{Float64}, g::Float64,
     return all_param_values, all_gap_values, all_energy_values, gap_sensitivities
 end
 
-
-function all_simulation()
-
+function draw_gap()
+    
+    # Define g values to search for
+    g_values = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+    
+    # Store results
+    valid_g_values = Float64[]
+    average_gaps = Float64[]
+    
+    # Process each g value
+    for g in g_values
+        # Try both formats: "g=X.X" and "g=X.XX"
+        filenames = ["data/gap_list_g=$(g).dat", "data/gap_list_g=$(round(g, digits=2)).dat"]
+        
+        gap_data = nothing
+        for filename in filenames
+            if isfile(filename)
+                try
+                    # Read the file
+                    lines = readlines(filename)
+                    
+                    # Skip comment lines (starting with #)
+                    data_lines = filter(line -> !startswith(strip(line), "#") && !isempty(strip(line)), lines)
+                    
+                    if !isempty(data_lines)
+                        # Parse the gap values (assuming one value per line or space-separated)
+                        gap_values_list = Float64[]
+                        for line in data_lines
+                            # Try to parse as a single number or take the first number if space-separated
+                            parts = split(strip(line))
+                            if !isempty(parts)
+                                val = parse(Float64, parts[1])
+                                push!(gap_values_list, val)
+                            end
+                        end
+                        
+                        if !isempty(gap_values_list)
+                            gap_data = gap_values_list
+                            break
+                        end
+                    end
+                catch e
+                    @warn "Error reading file $filename: $e"
+                end
+            end
+        end
+        
+        # Calculate average of last 50 elements if data was found
+        if gap_data !== nothing && length(gap_data) >= 50
+            last_50 = gap_data[end-9:end]
+            avg_gap = mean(last_50)
+            push!(valid_g_values, g)
+            push!(average_gaps, avg_gap)
+            @info "g = $g: average gap (last 50) = $avg_gap"
+        elseif gap_data !== nothing
+            # If less than 50 elements, use all available data
+            avg_gap = mean(gap_data)
+            push!(valid_g_values, g)
+            push!(average_gaps, avg_gap)
+            @info "g = $g: average gap (all $(length(gap_data)) points) = $avg_gap"
+        else
+            @warn "No data found for g = $g"
+        end
+    end
+    
+    # Create the plot
+    if !isempty(valid_g_values)
+        p = Plots.plot(
+            valid_g_values,
+            average_gaps,
+            xlabel="g",
+            ylabel="Spectral Gap",
+            title="Spectral Gap vs g (averaged over last 50 iterations)",
+            legend=false,
+            marker=:circle,
+            markersize=6,
+            linewidth=2,
+            size=(800, 600)
+        )
+        
+        # Save the plot
+        savefig(p, "spectral gap_vs_g.pdf")
+        @info "Plot saved as 'spectral gap_vs_g.png'"
+        
+        return p
+    else
+        @error "No valid data found to plot"
+        return nothing
+    end
 end
+
+function train_nocompile(gate, row, M::AbstractManifold, J::Float64, g::Float64; maxiter=3000)
+    
+    function f(M, gate)
+        gate = matblock(gate)
+        rho = iterate_channel_PEPS(gate, row)
+        energy = -g*cost_X(rho, row, gate) - J*cost_ZZ(rho, row, gate)
+        return real(energy)
+    end
+
+    @assert is_point(M, Matrix(gate))
+
+    result = Manopt.NelderMead(
+        M, 
+        f,
+        population=NelderMeadSimplex(M);
+        stopping_criterion = StopAfterIteration(maxiter) | StopWhenPopulationConcentrated(1e-4, 1e-4), # StopWhenPopulationConcentrated(tol_f::Real=1e-8, tol_x::Real=1e-8)
+        record = [:Iteration, :Cost],
+        return_state = true
+    )
+    
+    final_p = get_solver_result(result)
+    final_energy = f(M, final_p)
+   
+    @show final_energy
+    return result, final_energy, final_p
+end
+
 
 function save_training_data(Z_list_list, X_list_list, gap_list; 
                            z_file="data/z_list_list_data.dat",

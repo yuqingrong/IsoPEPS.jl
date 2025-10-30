@@ -51,7 +51,7 @@ export ProductManifold, Stiefel, isopeps_optimize_ising, isometric_peps_to_unita
 
 export check_all_sites_convergence, adaptive_all_sites_convergence, monitor_all_sites_iteration_convergence
 export check_convergence_all_sites
-export contract_Elist, exact_left_eigen, iterate_channel_PEPS, exact_energy_PEPS, cost_X_circ, cost_ZZ_circ, train_energy_circ, draw, cost_X, cost_ZZ, train_nocompile, exact_iPEPS, save_training_data, draw_X_from_file, check_gap_sensitivity,check_all_gap_sensitivity_combined
+export contract_Elist, exact_left_eigen, iterate_channel_PEPS, exact_energy_PEPS, cost_X_circ, cost_ZZ_circ, train_energy_circ, draw, cost_X, cost_ZZ, train_nocompile, exact_iPEPS, save_training_data, draw_X_from_file, check_gap_sensitivity,check_all_gap_sensitivity_combined,draw_gap
 
 include("LanczosAlgorithm.jl")
 include("KrylovkitYao.jl")

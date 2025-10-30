@@ -91,11 +91,11 @@ draw()
 
 using Optimization, OptimizationCMAEvolutionStrategy
 using Random
-J=1.0; g=1.75; row=3
+J=1.0; g=0.0; row=3
 d=D=2
 p=3
 #E = exact_energy_PEPS(d, D, g, row)
-#Random.seed!(12)
+Random.seed!(12)
 params = rand(6*p)
 X_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, params_history = train_energy_circ(params, J, g, p, row)
 _, gap = exact_left_eigen(final_A, row)
@@ -110,7 +110,7 @@ _, gap = exact_left_eigen(final_A, row)
 show(IOContext(stdout, :limit => false), "text/plain", final_params)
 # Save the training datagap
 save_training_data(X_list_list, Z_list_list, gap_list)
-gap_file="data/gap_list_g=1.25.dat"
+gap_file="data/params_list_g=1.75.dat"
 open(gap_file, "w") do io
     println(io, "# energy_list data from iPEPS optimization")
     println(io, "# Number of iterations: $(length(Z_list_list))")
@@ -119,7 +119,7 @@ open(gap_file, "w") do io
     end
     println(io, "# Format: Each line contains one gaZp (space-separated values)")
     println(io, "#")
-    for energy in gap_list
+    for energy in params_history
         println(io, join(energy, " "))
     end
 end
@@ -140,10 +140,12 @@ else
     @warn "Z_list is empty, nothing to plot."
 end
 
-
+g=0.0
+final_params = [0.5853313274828805, 1.3221182398953806, 0.5870239199007706, 1.6493164670031948, 0.006467861307395547, 1.5440504250265632, 0.0028286948235898834, 0.7491018190850874, 0.0016330941515845588, 0.37818070322012504, 0.0002828854638718699, 0.43774879243693443, 0.010527141466183934, 0.0596061656172594, 0.00012856349358425536, 0.5729865546127543, 0.004902198156040871, 0.03810612518307743]
 draw_X_from_file(g,[1,10,15,20,26])
 
-check_gap_sensitivity(final_params, 18, g, row, p)
+check_gap_sensitivity(final_params, 13, g, row, p)
 
 check_all_gap_sensitivity_combined(final_params, g, row, p)
 
+draw_gap()
