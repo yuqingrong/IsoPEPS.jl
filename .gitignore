@@ -8,3 +8,7 @@
 Manifest.toml
 .vscode/
 .DS_Store
+
+# Data and image files
+/data/
+/image/
