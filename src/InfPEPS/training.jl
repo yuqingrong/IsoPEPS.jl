@@ -67,12 +67,12 @@ function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int; mea
         push!(Z_list_list, Z_list)
         push!(X_list_list, X_list)
         
-        Z_list = Z_list[1+end-3/4*niters:end]
+        Z_list = Z_list[Int(1+end-3/4*niters):end]
         Z_configs = extract_Z_configurations(Z_list, row)
-        energy = energy_measure(X_list, Z_configs, g, J, row)
+        energy = energy_measure(X_list, Z_configs, g, J, row; niters=niters)
         
         push!(energy_history, real(energy))
-        @info "TFIM J=$J g=$g $row × ∞ PEPS, Iter $(length(energy_history)), energy: $energy, gap: $gap"
+        @info "TFIM J=$J g=$g $row × ∞ PEPS, $measure_first first, Iter $(length(energy_history)), energy: $energy, gap: $gap"
 
         return real(energy)
     end

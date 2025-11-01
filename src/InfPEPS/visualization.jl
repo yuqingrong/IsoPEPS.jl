@@ -36,9 +36,9 @@ function _save_training_data(g::Float64, energy_history, params_history, Z_list_
 end
 
 
-function dynamics_X(g::Float64; data_dir="data")
+function dynamics_observables(g::Float64; data_dir="data", measure_first=:X)
     # Construct filename
-    filename = joinpath(data_dir, "X_list_list_g=$(g).dat")
+    filename = joinpath(data_dir, "$(measure_first)_first_$(measure_first)_list_list_g=$(g).dat")
     
     if !isfile(filename)
         @error "File not found: $filename"
@@ -91,7 +91,7 @@ function dynamics_X(g::Float64; data_dir="data")
             size=(800, 600)
         )
     
-        save_path = "image/dynamics_X_g=$(g).pdf"
+        save_path = "image/dynamics_$(measure_first)_g=$(g).pdf"
         savefig(p, save_path)
         @info "Figure saved to: $save_path"
         

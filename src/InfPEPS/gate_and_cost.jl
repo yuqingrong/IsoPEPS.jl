@@ -83,7 +83,7 @@ function extract_Z_configurations(Z_list, row)
     return Z_configs
 end
 
-function energy_measure(X_list, separ_Z_lists, g, J, row) 
+function energy_measure(X_list, separ_Z_lists, g, J, row; niters=niters) 
     interaction_pairs = Vector{Tuple{Int,Int}}(undef, row)
     @inbounds for i in 1:row
         j = (i % row) + 1
@@ -91,7 +91,7 @@ function energy_measure(X_list, separ_Z_lists, g, J, row)
     
     end
 
-    X_mean = mean(@view X_list[1+end-3/4*niters:end])
+    X_mean = mean(@view X_list[Int(1+end-3/4*niters):end])
     
     # interaction within row
     ZZ_wr_mean = mean(separ_Z_lists[i][k] * separ_Z_lists[j][k] for (i, j) in interaction_pairs for k in 1:length(separ_Z_lists[1]))
