@@ -51,8 +51,8 @@ export ProductManifold, Stiefel, isopeps_optimize_ising, isometric_peps_to_unita
 
 export check_all_sites_convergence, adaptive_all_sites_convergence, monitor_all_sites_iteration_convergence
 export check_convergence_all_sites
-export contract_Elist, exact_left_eigen, iterate_channel_PEPS, exact_energy_PEPS, cost_X_circ, cost_ZZ_circ, train_energy_circ, draw, cost_X, cost_ZZ, train_nocompile, exact_iPEPS, save_training_data, draw_X_from_file, check_gap_sensitivity,check_all_gap_sensitivity_combined,draw_gap
 
+# Core includes
 include("LanczosAlgorithm.jl")
 include("KrylovkitYao.jl")
 include("ImTebd.jl")
@@ -63,5 +63,16 @@ include("mpsandmpo.jl")
 include("peps.jl")
 include("isometricpeps.jl")
 include("isopeps2circuit.jl")
-include("iPEPS.jl")
+
+# Include InfPEPS submodule (Infinite PEPS)
+include("InfPEPS/InfPEPS.jl")
+
+# Re-export InfPEPS functions (for backward compatibility)
+using .InfPEPS
+export contract_Elist, exact_left_eigen, iterate_channel_PEPS, exact_energy_PEPS
+export cost_X_circ, cost_ZZ_circ, cost_X, cost_ZZ
+export train_energy_circ, train_nocompile
+export draw, draw_X_from_file, draw_gap, check_gap_sensitivity, check_all_gap_sensitivity_combined
+export save_training_data, exact_iPEPS
+
 end

@@ -15,8 +15,8 @@ end
 @testset "left_eigen" begin
     nsites = 3; row = 1
     gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nsites))
-    rho = exact_left_eigen(gate, row)
-    @test tr(rho) ≈ 1.
+    rho,_ = exact_left_eigen(gate, row)
+    @test LinearAlgebra.tr(rho) ≈ 1.
 end
 
 @testset "iterate_channel_PEPS" begin
@@ -105,9 +105,9 @@ _, gap = exact_left_eigen(final_A, row)
 @show final_params
 @show mean(X_history[end-100:end])
 @show mean(gap_list[end-1000:end])
-
-
 show(IOContext(stdout, :limit => false), "text/plain", final_params)
+
+
 # Save the training datagap
 save_training_data(X_list_list, Z_list_list, gap_list)
 gap_file="data/params_list_g=1.75.dat"

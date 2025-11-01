@@ -143,7 +143,7 @@ function cost_ZZ(rho, row, gate)
     result2 = ein"abcdefgh,ijklijklabcdefgh ->"(rho, list2)
     _, list3 = contract_Elist([AZ, A, AZ], tensor_bra, row)
     result3 = ein"abcdefgh,ijklijklabcdefgh ->"(rho, list3)
-    return 2*(result1[]+result2[]+result3[])/3
+    return (result1[]+result2[]+result3[])/3
 end
 
 function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int; maxiter=5000)

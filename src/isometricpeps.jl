@@ -207,7 +207,6 @@ function isometric_peps_to_unitary(peps::PEPS, g)
     return ugates
 end
 
-
 function point(peps::PEPS, matrix_dims::Vector)
     point = []
     for i in peps.physical_labels
@@ -215,15 +214,6 @@ function point(peps::PEPS, matrix_dims::Vector)
     end
     return point
 end
-
-function point(peps::PEPS, matrix_dims::Vector)
-    point = []
-    for i in peps.physical_labels
-        push!(point, reshape(peps.vertex_tensors[i], matrix_dims[i]))
-    end
-    return point
-end
-
 
 function point2vector(point, matrix_dims)
     return vcat([vec(p) for p in point]...) 
