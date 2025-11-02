@@ -84,8 +84,8 @@ function dynamics_observables(g::Float64; data_dir="data", measure_first=:X)
             1:n_values,
             cumulative_means,
             xlabel="iteration time",
-            ylabel="⟨X⟩",
-            title="Dynamics of X (g=$(g))",
+            ylabel="⟨$(measure_first)⟩",
+            title="Dynamics of $(measure_first) (g=$(g))",
             legend=false,
             linewidth=2,
             size=(800, 600)

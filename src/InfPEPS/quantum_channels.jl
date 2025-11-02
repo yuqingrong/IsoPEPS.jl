@@ -15,13 +15,14 @@ Iterate a quantum channel defined by `gate` on a system with `row` rows.
 
 # Returns
 - `rho`: Final density matrix
-- `first_list`: List of measurements for the first observable (3/4 of iterations)
-- `second_list`: List of measurements for the second observable (last 1/4 of iterations)
+- `X_list`: List of X measurements (3/4 of iterations if X first, 1/4 if Z first)
+- `Z_list`: List of Z measurements (1/4 of iterations if X first, 3/4 if Z first)
 
 # Description
 Applies the gate repeatedly while measuring observables.
 - If `measure_first=:X`: First 3/4 measure X, last 1/4 measure Z
 - If `measure_first=:Z`: First 3/4 measure Z, last 1/4 measure X
+Always returns (rho, X_list, Z_list) in that order regardless of measure_first.
 """
 function iterate_channel_PEPS(gate, row; niters=10000, measure_first=:X)
     if measure_first ∉ (:X, :Z)
@@ -29,8 +30,8 @@ function iterate_channel_PEPS(gate, row; niters=10000, measure_first=:X)
     end
     
     rho = zero_state(row+1)
-    first_list = Float64[]
-    second_list = Float64[]
+    X_list = Float64[]
+    Z_list = Float64[]
     
     for i in 1:niters
         for j in 1:row
@@ -39,26 +40,28 @@ function iterate_channel_PEPS(gate, row; niters=10000, measure_first=:X)
             rho = Yao.apply!(rho, put(2+row,(1, 2, j+2)=>gate)) 
 
             if i > niters*3 ÷ 4
+                # Last 1/4 of iterations: measure the second observable
                 if measure_first == :X
                     Z = 1-2*measure!(RemoveMeasured(), rho, 1)
-                    push!(second_list, Z.buf)
+                    push!(Z_list, Z.buf)
                 else
                     Yao.apply!(rho, put(2+row, 1=>H))
                     X = 1-2*measure!(RemoveMeasured(), rho, 1)
-                    push!(second_list, X.buf)
+                    push!(X_list, X.buf)
                 end
             else
+                # First 3/4 of iterations: measure the first observable
                 if measure_first == :X
                     Yao.apply!(rho, put(2+row, 1=>H))
                     X = 1-2*measure!(RemoveMeasured(), rho, 1)
-                    push!(first_list, X.buf)
+                    push!(X_list, X.buf)
                 else
                     Z = 1-2*measure!(RemoveMeasured(), rho, 1)
-                    push!(first_list, Z.buf)
+                    push!(Z_list, Z.buf)
                 end
             end
         end
     end
     
-    return rho, first_list, second_list
+    return rho, Z_list, X_list
 end
