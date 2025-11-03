@@ -6,7 +6,7 @@ using Plots
 function simulation(J::Float64, g::Float64, row::Int, p::Int; maxiter=5000, measure_first=:X)
     Random.seed!(12)
     params = rand(6*p)
-    energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, params_history = train_energy_circ(params, J, g, p, row; maxiter=maxiter,measure_first=measure_first)
+    energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, params_history = train_energy_circ_gradient(params, J, g, p, row; maxiter=maxiter,measure_first=measure_first)
     return energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, params_history
 end
 
@@ -56,7 +56,7 @@ end
 J=1.0; g=1.0; g_values=[0.0, 0.25,0.5,0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5]; row=3
 d=D=2
 p=3
-#simulation(J, g, row, p; maxiter=5000, measure_first=:X)
+simulation(J, g, row, p; maxiter=5000, measure_first=:Z)
 parallel_simulation_threaded(J, g_values, row, p; maxiter=5000, measure_first=:Z)
 
 dynamics_observables(g; measure_first=:X)

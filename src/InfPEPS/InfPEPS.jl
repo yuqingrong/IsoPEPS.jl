@@ -49,7 +49,7 @@ export iterate_channel_PEPS, exact_left_eigen
 export contract_Elist
 export cost_X, cost_ZZ, cost_X_circ, cost_ZZ_circ
 export build_gate_from_params, energy_measure, extract_Z_configurations
-export train_energy_circ, train_nocompile
+export train_energy_circ, train_energy_circ_gradient, train_nocompile
 export check_gap_sensitivity, check_all_gap_sensitivity_combined
 export block_variance, dynamics_observables, draw_gap, draw
 export save_training_data
