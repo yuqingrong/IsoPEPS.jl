@@ -27,8 +27,7 @@ function parallel_simulation_threaded(J::Float64, g_values::Vector{Float64}, row
         g = g_values[i]
         println("Thread $(Threads.threadid()): Starting simulation for g = $(g)")
         
-        # Each thread gets its own random seed to ensure reproducibility
-        Random.seed!(12 + i)
+        Random.seed!(12)
         params = rand(6*p)
         
         energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, params_history = 
@@ -58,7 +57,7 @@ J=1.0; g=1.0; g_values=[0.0, 0.25,0.5,0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5
 d=D=2
 p=3
 #simulation(J, g, row, p; maxiter=5000, measure_first=:X)
-parallel_simulation_threaded(J, g_values, row, p; maxiter=5000, measure_first=:X)
+parallel_simulation_threaded(J, g_values, row, p; maxiter=5000, measure_first=:Z)
 
 dynamics_observables(g; measure_first=:X)
 
