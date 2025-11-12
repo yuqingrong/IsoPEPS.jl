@@ -26,13 +26,15 @@ using Statistics
 using Yao, Yao.EasyBuild
 using OMEinsum
 using OMEinsumContractionOrders
-using TensorKit, MPSKit, MPSKitModels, PEPSKit
+using ITensors,TensorKit, MPSKit, MPSKitModels, PEPSKit
 using MPSKitModels: transverse_field_ising, InfiniteStrip, InfiniteCylinder
 using PEPSKit: InfiniteSquare
-using Optimization, OptimizationCMAEvolutionStrategy
+using Optimization, OptimizationCMAEvolutionStrategy, OptimizationOptimisers
 using Manifolds, Manopt
+using Optim
 using Plots
 using Colors: RGBA
+using BinningAnalysis, LsqFit
 
 # Import parent module utilities
 import ..IsoPEPS: IndexStore, newindex!
@@ -45,15 +47,15 @@ include("visualization.jl")
 include("refer.jl")
 include("exact.jl")
 # Re-export main functions
-export iterate_channel_PEPS, exact_left_eigen
+export iterate_channel_PEPS, iterate_dm,exact_left_eigen
 export contract_Elist
 export cost_X, cost_ZZ, cost_X_circ, cost_ZZ_circ
 export build_gate_from_params, energy_measure, extract_Z_configurations
-export train_energy_circ, train_energy_circ_gradient, train_nocompile
+export train_energy_circ, train_exact, train_energy_circ_gradient, train_hybrid, train_nocompile
 export check_gap_sensitivity, check_all_gap_sensitivity_combined
-export block_variance, dynamics_observables, draw_gap, draw
+export block_variance, dynamics_observables, dynamics_observables_all, eigenvalues,gap, ACF, correlation
 export save_training_data
 export exact_energy_PEPS, exact_iPEPS
-
+export result_MPSKit, result_PEPSKit, chain_result
 end 
 

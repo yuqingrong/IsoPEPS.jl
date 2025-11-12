@@ -11,4 +11,5 @@ Manifest.toml
 
 # Data and image files
 /data/
+/data_exact/
 /image/

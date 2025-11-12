@@ -1,63 +1,43 @@
-"""
-Gate construction utilities for parameterized quantum circuits.
 
-Provides functions for building quantum gates from variational parameters.
-"""
-
-"""
-    build_parameterized_gate(params, r, p)
-
-Build a single layer gate from parameters.
-
-# Arguments
-- `params`: Parameter vector
-- `r`: Layer index
-- `p`: Total number of layers
-
-# Returns
-Quantum gate for the specified layer
-
-# Description
-Constructs a gate using RX and RZ rotations followed by CNOTs.
-Each layer uses 6 parameters (2 per qubit for a 3-qubit gate).
-"""
 function _build_parameterized_gate(params, r)
     gate = kron(
         Yao.Rx(params[6*r-5]) * Yao.Rz(params[6*r-4]), 
         Yao.Rx(params[6*r-3]) * Yao.Rz(params[6*r-2]), 
         Yao.Rx(params[6*r-1]) * Yao.Rz(params[6*r])
     )
-    cnot_12 = cnot(3, 2, 1)
-    cnot_23 = cnot(3, 3, 2)
-    cnot_31 = cnot(3, 1, 3)
+
+    cnot_12 = cnot(3, 2,1)
+    cnot_23 = cnot(3, 3,2)
+    cnot_31 = cnot(3, 1,3)
     return Matrix(gate) * Matrix(cnot_12) * Matrix(cnot_23) * Matrix(cnot_31)
 end
-
-"""
-    build_gate_from_params(params, p)
-
-Build complete unitary gate from all parameters.
-
-# Arguments
-- `params`: Full parameter vector
-- `p`: Number of layers
-
-# Returns
-Complete unitary matrix
-
-# Description
-Constructs the full gate by composing all layers. The resulting gate
-should be unitary within numerical precision.
-"""
 function build_gate_from_params(params, p)
-    A_matrix = Matrix(I, 8, 8)
+    A_matrix = Vector{}(undef, 3)
+    for i in 1:3
+        A_matrix[i] = Matrix(Array{ComplexF64}(I, 8, 8))
+    end
+    # A_matrix[1] uses params 1-12 (indices 1:6*p)
+    params_1 = params[1:6*p]
     for r in 1:p
-        A_matrix *= _build_parameterized_gate(params, r)
+        A_matrix[1] *= _build_parameterized_gate(params_1, r)
     end
     
-    # Verify unitarity
-    @assert A_matrix * A_matrix' ≈ I atol=1e-5
-    @assert A_matrix' * A_matrix ≈ I atol=1e-5
+    # A_matrix[2] uses params 13-24 (indices 6*p+1:12*p)
+    params_2 = params[6*p+1:12*p]
+    for r in 1:p
+        A_matrix[2] *= _build_parameterized_gate(params_2, r)
+    end
+    
+    # A_matrix[3] uses params 25-36 (indices 12*p+1:18*p)
+    params_3 = params[12*p+1:18*p]
+    for r in 1:p
+        A_matrix[3] *= _build_parameterized_gate(params_3, r)
+    end
+    
+    for i in 1:3
+        @assert A_matrix[i] * A_matrix[i]' ≈ I atol=1e-5
+        @assert A_matrix[i]' * A_matrix[i] ≈ I atol=1e-5
+    end
 
     return A_matrix
 end
@@ -103,5 +83,7 @@ function energy_measure(X_list, separ_Z_lists, g, J, row; niters=niters)
     
     return energy
 end
+
+
 
 

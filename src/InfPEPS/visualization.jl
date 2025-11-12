@@ -1,4 +1,4 @@
-function _save_training_data(g::Float64, energy_history, params_history, Z_list_list, X_list_list, gap_list; data_dir="data", measure_first=measure_first)
+function _save_training_data(g::Float64, energy_history, params_history, Z_list_list, X_list_list, gap_list, eigenvalues_list; data_dir="data", measure_first=measure_first)
     if !isdir(data_dir)
         mkdir(data_dir)
     end
@@ -32,9 +32,52 @@ function _save_training_data(g::Float64, energy_history, params_history, Z_list_
             println(io, gap)
         end
     end
+
+    open(joinpath(data_dir, "$(measure_first)_first_eigenvalues_list_g=$(g).dat"), "w") do io
+        for eigenvalues in eigenvalues_list
+            println(io, join(eigenvalues, " "))
+        end
+    end
     @info "Training data saved to $(data_dir)/ with g=$(g)"
 end
 
+function _save_training_data_exact(g::Float64, energy_history, X_list, ZZ_list, gap_list, eigenvalues_list; data_dir="data_exact")
+    if !isdir(data_dir)
+        mkdir(data_dir)
+    end
+    # Save energy history
+    open(joinpath(data_dir, "nocompile_energy_history_g=$(g)_.dat"), "w") do io
+        for energy in energy_history
+            println(io, energy)
+        end
+    end
+
+    # Save Z_list_list (each row is one Z_list)
+    open(joinpath(data_dir, "nocompile_ZZ_list_list_g=$(g).dat"), "w") do io
+        for Z_list in ZZ_list
+            println(io, join(Z_list, " "))
+        end
+    end
+    # Save X_list_list (each row is one X_list)
+    open(joinpath(data_dir, "nocompile_X_list_g=$(g).dat"), "w") do io
+        for X in X_list
+            println(io, X)
+        end
+    end
+    # Save gap list
+    open(joinpath(data_dir, "nocompile_gap_list_g=$(g).dat"), "w") do io
+        for gap in gap_list
+            println(io, gap)
+        end
+    end
+
+    open(joinpath(data_dir, "nocompile_eigenvalues_list_g=$(g).dat"), "w") do io
+        for eigenvalues in eigenvalues_list
+            println(io, join(eigenvalues, " "))
+        end
+    end
+    @info "Training data saved to $(data_dir)/ with g=$(g)"
+end
 
 function dynamics_observables(g::Float64; data_dir="data", measure_first=:X)
     # Construct filename
@@ -102,6 +145,601 @@ function dynamics_observables(g::Float64; data_dir="data", measure_first=:X)
         return nothing
     end
 end
+
+"""
+    dynamics_observables_all(g_values::Vector{Float64}; data_dir="data", measure_first=:X)
+
+Plot dynamics of observables for multiple g values in a single figure.
+
+# Arguments
+- `g_values`: Vector of g values to plot
+- `data_dir`: Directory containing the data files (default: "data")
+- `measure_first`: Observable to plot (default: :X)
+
+# Returns
+Plot object (or nothing if data not found)
+
+# Description
+Reads dynamics data from multiple files (one per g value) and creates a
+combined plot showing how the observable evolves over time for different
+transverse field strengths.
+"""
+function dynamics_observables_all(g_values::Vector{Float64}; data_dir="data", measure_first=:X)
+    
+    # Initialize plot
+    p = Plots.plot(
+        xlabel="iteration time",
+        ylabel="⟨$(measure_first)⟩",
+        title="Dynamics of $(measure_first) for different g values",
+        legend=:best,
+        linewidth=2,
+        size=(1000, 700)
+    )
+    
+    # Track if any data was successfully plotted
+    data_found = false
+    
+    # Process each g value
+    for g in g_values
+        # Construct filename
+        filename = joinpath(data_dir, "$(measure_first)_first_$(measure_first)_list_list_g=$(g).dat")
+        
+        if !isfile(filename)
+            @warn "File not found: $filename"
+            continue
+        end
+        
+        @info "Reading $filename..."
+        
+        # Read data lines
+        data_lines = []
+        try
+            open(filename, "r") do file
+                for line in eachline(file)
+                    if !startswith(strip(line), "#") && !isempty(strip(line))
+                        push!(data_lines, line)
+                    end
+                end
+            end
+        catch e
+            @warn "Error reading file $filename: $e"
+            continue
+        end
+        
+        if isempty(data_lines)
+            @warn "No data lines found in $filename"
+            continue
+        end
+        
+        @info "Found $(length(data_lines)) data lines for g=$g"
+        
+        # Get the last line
+        last_line = data_lines[end]
+        
+        # Parse the values from the last line
+        try
+            values = parse.(Float64, split(last_line))
+            n_values = length(values[1:5000])
+            @info "Last line contains $n_values values for g=$g"
+            
+            # Calculate cumulative means
+            cumulative_means = Float64[]
+            for i in 1:n_values
+                cumul_mean = mean(values[1:i])
+                push!(cumulative_means, cumul_mean)
+            end
+            
+            # Add to plot
+            Plots.plot!(p, 1:n_values, cumulative_means, 
+                       label="g=$(g)", 
+                       linewidth=2)
+            
+            data_found = true
+            @info "Successfully plotted data for g=$g"
+            
+        catch e
+            @warn "Error processing data for g=$g: $e"
+            continue
+        end
+    end
+    
+    if !data_found
+        @error "No valid data found for any g value"
+        return nothing
+    end
+    
+    # Save the plot
+    save_path = "image/dynamics_$(measure_first)_all_g.pdf"
+    
+    # Create image directory if it doesn't exist
+    if !isdir("image")
+        mkdir("image")
+    end
+    
+    savefig(p, save_path)
+    @info "Combined figure saved to: $save_path"
+    
+    return p
+end
+
+function eigenvalues(g_values::Vector{Float64}; data_dir="data_exact")
+    # If g is a vector, plot spectrum for each g on the same figure.
+    p = Plots.plot(title="Spectrum vs Eigenvalue Index", xlabel="Index", ylabel="Eigenvalue")
+    for gi in g_values
+        filename = joinpath(data_dir, "nocompile_eigenvalues_list_g=$(gi).dat")
+        if !isfile(filename)
+            @warn "File not found: $filename"
+            continue
+        end
+        # Read non-comment, non-empty lines
+        data_lines = String[]
+        open(filename, "r") do file
+            for line in eachline(file)
+                if !startswith(strip(line), "#") && !isempty(strip(line))
+                    push!(data_lines, line)
+                end
+            end
+        end
+        if isempty(data_lines)
+            @warn "No valid lines found in $filename"
+            continue
+        end
+        last_line = data_lines[end]
+        eigvals = parse.(Float64, split(strip(last_line)))
+        @show length(eigvals)
+        plot!(1:length(eigvals), eigvals, label="spectrum g=$(gi)", linewidth=2)
+    end
+
+    # Save the plot
+    save_path = "image/spectrum.pdf"
+    if !isdir("image")
+        mkdir("image")
+    end
+    savefig(p, save_path)
+    @info "Spectrum figure saved to: $save_path"
+
+    return nothing
+   
+end
+
+function gap(g_values; data_dir="data")
+    
+    # Store results
+    valid_g_values = Float64[]
+    average_gaps = Float64[]
+    
+    # Process each g value
+    for g in g_values
+        filename = joinpath(data_dir, "nocompile_gap_list_g=$(g).dat")
+        
+        gap_data = nothing
+        if isfile(filename)
+            try
+                # Read the file
+                lines = readlines(filename)
+                
+                # Skip comment lines (starting with #) and empty lines
+                data_lines = filter(line -> !startswith(strip(line), "#") && !isempty(strip(line)), lines)
+                
+                if !isempty(data_lines)
+                    # Parse the gap values (assuming one value per line)
+                    gap_values_list = Float64[]
+                    for line in data_lines
+                        # Try to parse as a single number or take the first number if space-separated
+                        parts = split(strip(line))
+                        if !isempty(parts)
+                            val = parse(Float64, parts[1])
+                            push!(gap_values_list, val)
+                        end
+                    end
+                    
+                    if !isempty(gap_values_list)
+                        gap_data = gap_values_list
+                    end
+                end
+            catch e
+                @warn "Error reading file $filename: $e"
+            end
+        else
+            @warn "File not found: $filename"
+        end
+        
+        # Calculate average of last 50 elements if data was found
+        if gap_data !== nothing && length(gap_data) >= 50
+            last_50 = gap_data[end-50:end]
+            avg_gap = mean(last_50)
+            push!(valid_g_values, g)
+            push!(average_gaps, avg_gap)
+            @info "g = $g: average gap (last 50) = $avg_gap"
+        elseif gap_data !== nothing && length(gap_data) > 0
+            # If less than 50 elements, use all available data
+            avg_gap = mean(gap_data)
+            push!(valid_g_values, g)
+            push!(average_gaps, avg_gap)
+            @info "g = $g: average gap (all $(length(gap_data)) points) = $avg_gap"
+        else
+            @warn "No data found for g = $g"
+        end
+    end
+    
+    # Create the plot
+    if !isempty(valid_g_values)
+        p = Plots.plot(
+            valid_g_values,
+            average_gaps,
+            xlabel="g",
+            ylabel="Spectral Gap",
+            title="Spectral Gap vs g (averaged over last 50 iterations)",
+            legend=:topright,
+            marker=:circle,
+            markersize=6,
+            label="-ln|λ_1|, λ_1 is the 2th largest eigenvalue",
+            linewidth=2,
+            size=(800, 600),
+
+        )
+        
+        # Save the plot
+        save_path = "image/gap_vs_g.pdf"
+        savefig(p, save_path)
+        @info "Plot saved as '$save_path'"
+        
+        return p
+    else
+        @error "No valid data found to plot"
+        return nothing
+    end
+end
+
+
+"""
+    ACF(g::Float64; data_dir="data", save_path=nothing, max_lag=nothing)
+
+Calculate and plot the autocorrelation function for a given g value.
+
+# Arguments
+- `g`: The g value to analyze
+- `data_dir`: Directory containing the data files (default: "data")
+- `save_path`: Path to save the plot (default: "ACF_g={g}.pdf")
+- `max_lag`: Maximum lag to calculate (default: min(500, N/2))
+
+# Returns
+Tuple of (acf, plot) where acf is the autocorrelation function array
+
+# Description
+Reads Z_first_Z_list_list_g={g}.dat file, extracts the last line,
+calculates the autocorrelation function where:
+- acf[1] = 1 (zero lag, perfect correlation)
+- acf[k] = correlation between O[i] and O[i+k-1]
+"""
+function ACF(g::Float64; measure_first=:X, data_dir="data", save_path=nothing, max_lag=nothing)
+    
+    filename = joinpath(data_dir, "$(measure_first)_first_$(measure_first)_list_list_g=$(g).dat")
+    
+    if !isfile(filename)
+        @error "File not found: $filename"
+        return nothing
+    end
+    
+    @info "Reading $filename..."
+    
+    # Read the last line
+    try
+        data_lines = []
+        open(filename, "r") do file
+            for line in eachline(file)
+                if !startswith(strip(line), "#") && !isempty(strip(line))
+                    push!(data_lines, line)
+                end
+            end
+        end
+        
+        if isempty(data_lines)
+            @error "No data lines found in $filename"
+            return nothing
+        end
+        
+        # Get the last line
+        last_line = data_lines[end]
+        
+        # Parse the Z values from the last line
+               # Parse the Z values from the last line (excluding indices that are multiples of 3)
+        #O = [parse(Float64, x) for (i, x) in enumerate(split(last_line)) if i % 3 != 0]
+        #O = [parse(Float64, x) for (i, x) in enumerate(split(last_line)) if i % 4 == 0]
+        O = parse.(Float64, split(last_line))
+        N = length(O)
+        @info "g=$g: Found $N observable values in last line"
+        
+        if N < 10
+            @error "g=$g: Too few data points ($N) for autocorrelation analysis"
+            return nothing
+        end
+        
+        # Determine maximum lag
+        if max_lag === nothing
+            max_lag = min(500, div(N, 2))
+        else
+            max_lag = min(max_lag, div(N, 2))
+        end
+        
+        @info "Calculating autocorrelation function up to lag $max_lag"
+        
+        # Calculate mean and variance (using every other point: 1, 3, 5, ...)
+        O_mean = mean(O)
+        O_centered = O .- O_mean
+        C0 = sum(O_centered[i]^2 for i in 1:N)  # Variance using every other point
+        
+        # Get autocorrelation from BinningAnalysis for comparison
+        LB = BinningAnalysis.LogBinner(O)
+        acf_BA = BinningAnalysis.all_autocorrelations(LB)
+        @info "BinningAnalysis autocorrelations (first 10): $(acf_BA[1:min(10, length(acf_BA))])"
+        tau_BA = BinningAnalysis.tau(LB)
+        @info "BinningAnalysis integrated autocorrelation time: τ = $tau_BA"
+        
+        # Calculate autocorrelation function manually
+        acf = zeros(max_lag)
+        
+        for k in 1:max_lag
+            lag = k - 1
+            
+          
+            # Calculate C(lag) = mean((O[i] - mean) * (O[i+lag] - mean))
+            n_pairs = N - lag
+            sum_prod = 0.0
+            for i in 1:n_pairs
+                sum_prod += O_centered[i] * O_centered[i + lag]
+                #sum_prod += O[i] * O[i + lag]
+            end
+            acf[k] = abs(sum_prod / C0)
+        end
+        
+        @info "ACF calculated. acf[1] = $(acf[1]) (should be 1.0)"
+        @info "First few ACF values: $(acf[1:min(10, length(acf))])"
+        
+        # Fit exponential model: exp(-x / ξ)
+        model(x, p) = exp.(-x ./ p[1])  # p = [ξ]
+        
+        # Use data from lag=1 onwards for fitting (skip lag=0 which is always 1.0)
+        lags_for_fit = collect(1:(max_lag-1))
+        acf_for_fit = acf[2:end]  # Skip first point (lag=0)
+        
+        # Initial guess: A ≈ acf[2], ξ ≈ 1/log(acf[2]/acf[1])
+        #A_init = acf[2]
+        xi_init = 1.0 / (-log(abs(acf[2])))
+        xi_init = max(0.1, min(xi_init, 100.0))  # Bound initial guess
+        p0 = [xi_init]
+        
+        # Fit the model
+        fit_result = nothing
+        A_fit = NaN
+        xi_fit = NaN
+        try
+            fit_result = curve_fit(model, lags_for_fit, acf_for_fit, p0)
+            fitted_params = coef(fit_result)
+            xi_fit = fitted_params[1]
+            
+            @info "Exponential fit results:"
+            @info "  ξ (correlation length) = $(round(xi_fit, digits=4))"
+            
+            # Compare with gap prediction
+            gap_file = joinpath(dirname(filename), "$(measure_first)_first_gap_list_g=$(g).dat")
+            if isfile(gap_file)
+                gap_lines = readlines(gap_file)
+                if !isempty(gap_lines)
+                    gap = parse(Float64, gap_lines[end])
+                    xi_predicted = 1.0 / gap
+                    @info "  Predicted ξ from gap: $(round(xi_predicted, digits=4))"
+                    @info "  Ratio ξ_fit/ξ_predicted: $(round(xi_fit/xi_predicted, digits=4))"
+                end
+            end
+        catch e
+            @warn "Exponential fit failed: $e"
+        end
+        
+        # Create the plot
+        lags = 0:(max_lag-1)
+        p = Plots.plot(
+            lags,
+            acf,
+            xlabel="Lag k",
+            ylabel="Autocorrelation C(k)",
+            title="$(measure_first) Autocorrelation for g=$g, τ_c_fit =$(round(xi_fit, digits=2))",
+            legend=:topright,
+            linewidth=2,
+            size=(800, 600),
+            marker=:circle,
+            markersize=3,
+            label="ACF (data)"
+        )
+        
+        # Add fitted curve if fit succeeded
+        if fit_result !== nothing
+            fitted_params = coef(fit_result)
+            xi_fit = fitted_params[1]
+            fitted_curve = model(lags, fitted_params)
+            Plots.plot!(p, lags, fitted_curve, 
+                linewidth=2, 
+                linestyle=:dash, 
+                color=:red,
+                label="Fit: exp(-k/$(round(xi_fit, digits=2))); Binnng: τ = $tau_BA"
+        )
+        end
+        
+        # Add horizontal line at 0
+        Plots.hline!(p, [0], linestyle=:dot, color=:gray, linewidth=1, label="")
+        
+        # Save the plot
+        if save_path === nothing
+            save_path = "image/$(measure_first)_ACF_g=$(g).pdf"
+        end
+        savefig(p, save_path)
+        @info "Plot saved as '$save_path'"
+        
+        return (acf, p, fit_result)
+        
+    catch e
+        @error "Error processing file $filename: $e"
+        return nothing
+    end
+end
+
+function correlation(g::Float64; measure_first=:X, data_dir="data", save_path=nothing, max_lag=nothing)
+    
+    filename = joinpath(data_dir, "$(measure_first)_first_X_list_list_g=$(g).dat")
+    
+    if !isfile(filename)
+        @error "File not found: $filename"
+        return nothing
+    end
+    
+    @info "Reading $filename..."
+    
+    # Read the last line
+    try
+        data_lines = []
+        open(filename, "r") do file
+            for line in eachline(file)
+                if !startswith(strip(line), "#") && !isempty(strip(line))
+                    push!(data_lines, line)
+                end
+            end
+        end
+        
+        if isempty(data_lines)
+            @error "No data lines found in $filename"
+            return nothing
+        end
+        
+        # Get the last line
+        last_line = data_lines[end]
+        
+        O = [parse(Float64, x) for (i, x) in enumerate(split(last_line)) if i % 3 != 0]
+        #O = [parse(Float64, x) for (i, x) in enumerate(split(last_line)) if i % 4 == 0]
+        #O = parse.(Float64, split(last_line))
+        O1 = O[1:2:end]
+        O2 = O[2:2:end]
+       N = length(O)
+        @info "g=$g: Found $(length(O1)) and $(length(O2)) observable values in last line"
+        
+        if N < 10
+            @error "g=$g: Too few data points ($N) for autocorrelation analysis"
+            return nothing
+        end
+        
+        # Determine maximum lag
+        if max_lag === nothing
+            max_lag = min(500, div(N, 2))
+        else
+            max_lag = min(max_lag, div(N, 2))
+        end
+        
+        @info "Calculating autocorrelation function up to lag $max_lag"
+        
+        # Calculate mean and variance (using every other point: 1, 3, 5, ...)
+        O_mean = mean(O)
+        O_centered = O .- O_mean
+
+        
+        # Calculate autocorrelation function manually
+        acf = zeros(max_lag)
+        
+        for k in 1:max_lag
+            lag = k - 1
+            acf[1] = (abs(mean(O1 .^2) - mean(O1)^2) + abs(mean(O2 .^2) - mean(O2)^2))/2
+            acf[2] = abs(mean(O1 .* O2) - mean(O1) * mean(O2))
+        end
+    
+        @info "First few ACF values: $(acf[1:min(10, length(acf))])"
+        
+        # Fit exponential model: exp(-x / ξ)
+        model(x, p) = p[1] .* exp.(-x ./ p[2])
+        
+        # Use lags >= 0 for fitting
+        lags_for_fit = collect(0:(max_lag-1))
+        acf_for_fit = acf
+        
+        # Initial guess: A ≈ acf[1], ξ ≈ -1/log(|acf[2]/acf[1]|)
+        A_init = acf[1]
+        ratio_raw = length(acf) >= 2 && abs(A_init) > eps() ? abs(acf[2] / A_init) : 0.5
+        ratio = clamp(ratio_raw, 1e-6, 0.999)
+        xi_init = -1.0 / log(ratio)
+        xi_init = max(0.1, min(xi_init, 100.0))  # Bound initial guess
+        p0 = [A_init, xi_init]
+        
+        # Fit the model
+        fit_result = nothing
+        try
+            fit_result = curve_fit(model, lags_for_fit, acf_for_fit, p0)
+            fitted_params = coef(fit_result)
+            A_fit, xi_fit = fitted_params
+            
+            @info "Exponential fit results:"
+            @info "  ξ (correlation length) = $(round(xi_fit, digits=4))"
+            
+            # Compare with gap prediction
+            gap_file = joinpath(dirname(filename), "$(measure_first)_first_gap_list_g=$(g).dat")
+            if isfile(gap_file)
+                gap_lines = readlines(gap_file)
+                if !isempty(gap_lines)
+                    gap = parse(Float64, gap_lines[end])
+                    xi_predicted = 1.0 / gap
+                    @info "  Predicted ξ from gap: $(round(xi_predicted, digits=4))"
+                    @info "  Ratio ξ_fit/ξ_predicted: $(round(xi_fit/xi_predicted, digits=4))"
+                end
+            end
+        catch e
+            @warn "Exponential fit failed: $e"
+        end
+        
+        # Create the plot
+        lags = 0:(max_lag-1)
+        xi_str = isnan(xi_fit) ? "n/a" : string(round(xi_fit, digits=2))
+        p = Plots.plot(
+            lags,
+            acf,
+            xlabel="Lag k",
+            ylabel="Autocorrelation C(k)",
+            title="$(measure_first) Autocorrelation for g=$g, ξ_fit=$(xi_str)",
+            legend=:topright,
+            linewidth=2,
+            size=(800, 600),
+            marker=:circle,
+            markersize=3,
+            label="ACF (data)"
+        )
+        
+        # Add fitted curve if fit succeeded
+        if fit_result !== nothing
+            fitted_params = coef(fit_result)
+            A_fit, xi_fit = fitted_params
+            fitted_curve = model(lags, fitted_params)
+            Plots.plot!(p, lags, fitted_curve, 
+                linewidth=2, 
+                linestyle=:dash, 
+                color=:red,
+                label="Fit: $(round(A_fit, digits=2))·exp(-k/$(round(xi_fit, digits=2)))"
+        )
+        end
+        
+        # Add horizontal line at 0
+        Plots.hline!(p, [0], linestyle=:dot, color=:gray, linewidth=1, label="")
+        
+        # Save the plot
+        if save_path === nothing
+            save_path = "image/$(measure_first)_ACF_g=$(g).pdf"
+        end
+        savefig(p, save_path)
+        @info "Plot saved as '$save_path'"
+        
+        return (acf, p, fit_result)
+        
+    catch e
+        @error "Error processing file $filename: $e"
+        return nothing
+    end
+end
+
+
 
 function block_variance(g::Float64, n::Vector{Int}; data_dir="data", save_path=nothing, block_size=1000)
     g_str = string(g)
@@ -184,7 +822,7 @@ function block_variance(g::Float64, n::Vector{Int}; data_dir="data", save_path=n
         if save_path === nothing
             # Auto-generate filename
             lines_str = join(n, "_")
-            save_path = "X_block_var_g=$(g_str)_lines_$(lines_str).pdf"
+            save_path = "image/X_block_var_g=$(g_str)_lines_$(lines_str).pdf"
         end
         savefig(p, save_path)
         @info "Figure saved to: $save_path"

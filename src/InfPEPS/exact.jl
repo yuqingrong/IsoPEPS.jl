@@ -15,24 +15,22 @@ Compute the left eigenvector and spectral gap of the transfer matrix.
 Constructs the transfer matrix from the gate and computes its spectral properties.
 The spectral gap quantifies how quickly the channel approaches its fixed point.
 """
-function exact_left_eigen(gate, nsites)
-    A = reshape(Matrix(gate), 2, 2, 2, 2, 2, 2)[:, :, :, 1, :, :]
+function exact_left_eigen(A_matrix, nsites)
+    for i in 1:3
+        A_matrix[i] = reshape(A_matrix[i], 2, 2, 2, 2, 2, 2)[:, :, :, 1, :, :]
+    end
     
-    _, T = contract_Elist([A for _ in 1:nsites], [conj(A) for _ in 1:nsites], nsites)
+    _, T = contract_Elist([A_matrix[i] for i in 1:nsites], [conj(A_matrix[i]) for i in 1:nsites], nsites)
     T = reshape(T, 4^(nsites+1), 4^(nsites+1))
-    
-    # Get second largest eigenvalue for gap
     λ₁ = partialsort(abs.(LinearAlgebra.eigen(T).values), 2; rev=true)
     gap = -log(abs(λ₁))
-    
+    eigenvalues = sort(abs.(LinearAlgebra.eigen(T).values))
     # Verify normalization
     @assert LinearAlgebra.eigen(T).values[end] ≈ 1.0
-    
     # Extract fixed point density matrix
     fixed_point_rho = reshape(LinearAlgebra.eigen(T).vectors[:, end], Int(sqrt(4^(nsites+1))), Int(sqrt(4^(nsites+1))))
     rho = fixed_point_rho ./ tr(fixed_point_rho)
-    
-    return rho, gap
+    return rho, gap, eigenvalues
 end
 
 """
@@ -139,13 +137,20 @@ function cost_X(rho, row, gate)
     
     A = reshape(Matrix(gate), 2, 2, 2, 2, 2, 2)[:, :, :, 1, :, :]
     AX = ein"iabcd,ij -> jabcd"(A, Matrix(X))
-    
-    tensor_ket = [AX, A, A]
-    tensor_bra = [conj(A), conj(A), conj(A)]
-    _, list = contract_Elist(tensor_ket, tensor_bra, row)
-    result = ein"abcdefgh,ijklijklabcdefgh ->"(rho, list)
 
-    return result[]
+    tensor_bra = [conj(A), conj(A), conj(A)]
+    tensor_ket1 = [AX, A, A]
+    _, list1 = contract_Elist(tensor_ket1, tensor_bra, row)
+    result1 = ein"abcdefgh,ijklijklabcdefgh ->"(rho, list1)
+
+    tensor_ket2 = [A, AX, A]
+    _, list2 = contract_Elist(tensor_ket2, tensor_bra, row)
+    result2 = ein"abcdefgh,ijklijklabcdefgh ->"(rho, list2)
+
+    tensor_ket3 = [A, A, AX]
+    _, list3 = contract_Elist(tensor_ket3, tensor_bra, row)
+    result3 = ein"abcdefgh,ijklijklabcdefgh ->"(rho, list3)
+    return (result1[] + result2[] + result3[]) / 3
 end
 
 """
@@ -177,6 +182,9 @@ function cost_ZZ(rho, row, gate)
     # Compute three different configurations
     tensor_bra = [conj(A), conj(A), conj(A)]
     
+    _, list = contract_Elist([AZ, AZ, A], tensor_bra, row)
+    Z_value = ein"abcdefgh,ijklijklabcdefgh ->"(rho, list)
+
     _, list1 = contract_Elist([AZ, AZ, A], tensor_bra, row)
     result1 = ein"abcdefgh,ijklijklabcdefgh ->"(rho, list1)
     
@@ -186,5 +194,20 @@ function cost_ZZ(rho, row, gate)
     _, list3 = contract_Elist([AZ, A, AZ], tensor_bra, row)
     result3 = ein"abcdefgh,ijklijklabcdefgh ->"(rho, list3)
     
-    return 2*(result1[] + result2[] + result3[]) / 3
+    _, list4 = contract_Elist([AZ, A, A], tensor_bra, row)
+    rho2 = ein"abcdefgh,ijklmnopabcdefgh ->ijklmnop"(rho, list4)
+    _, list5 = contract_Elist([AZ, A, A], tensor_bra, row)
+    result4 = ein"abcdefgh,ijklijklabcdefgh ->"(rho2, list5)
+
+    _, list6 = contract_Elist([A, AZ, A], tensor_bra, row)
+    rho2 = ein"abcdefgh,ijklmnopabcdefgh ->ijklmnop"(rho, list6)
+    _, list7 = contract_Elist([A, AZ, A], tensor_bra, row)
+    result5 = ein"abcdefgh,ijklijklabcdefgh ->"(rho2, list7)
+
+    _, list8 = contract_Elist([A, A, AZ], tensor_bra, row)
+    rho2 = ein"abcdefgh,ijklmnopabcdefgh ->ijklmnop"(rho, list8)
+    _, list9 = contract_Elist([A, A, AZ], tensor_bra, row)
+    result6 = ein"abcdefgh,ijklijklabcdefgh ->"(rho2, list9)
+
+    return real(Z_value[]), (result1[] + result2[] + result3[] + result4[] + result5[] + result6[]) / 3
 end
