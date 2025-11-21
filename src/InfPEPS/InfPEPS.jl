@@ -27,7 +27,7 @@ using Yao, Yao.EasyBuild
 using OMEinsum
 using OMEinsumContractionOrders
 using ITensors,TensorKit, MPSKit, MPSKitModels, PEPSKit
-using MPSKitModels: transverse_field_ising, InfiniteStrip, InfiniteCylinder
+using MPSKitModels: transverse_field_ising, InfiniteStrip, InfiniteCylinder, @mpoham, InfiniteChain, nearest_neighbours, vertices
 using PEPSKit: InfiniteSquare
 using Optimization, OptimizationCMAEvolutionStrategy, OptimizationOptimisers
 using Manifolds, Manopt
@@ -47,15 +47,17 @@ include("visualization.jl")
 include("refer.jl")
 include("exact.jl")
 # Re-export main functions
-export iterate_channel_PEPS, iterate_dm,exact_left_eigen
-export contract_Elist
-export cost_X, cost_ZZ, cost_X_circ, cost_ZZ_circ
-export build_gate_from_params, energy_measure, extract_Z_configurations
+export iterate_channel_PEPS, iterate_dm
+export contract_Elist, exact_left_eigen, single_transfer
+export cost_X, cost_ZZ, cost_X_single, cost_ZZ_single, cost_X_circ, cost_ZZ_circ
+export build_gate_from_params, energy_measure
 export train_energy_circ, train_exact, train_energy_circ_gradient, train_hybrid, train_nocompile
 export check_gap_sensitivity, check_all_gap_sensitivity_combined
-export block_variance, dynamics_observables, dynamics_observables_all, eigenvalues,gap, ACF, correlation
+# visualization
+export block_variance, dynamics_observables, dynamics_observables_all, eigenvalues,gap, ACF, correlation, energy_converge
 export save_training_data
 export exact_energy_PEPS, exact_iPEPS
-export result_MPSKit, result_PEPSKit, chain_result
+# refer.jl
+export result_MPSKit, result_PEPSKit, result_1d
 end 
 

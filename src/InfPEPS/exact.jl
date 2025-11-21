@@ -9,36 +9,66 @@ Compute the left eigenvector and spectral gap of the transfer matrix.
 
 # Returns
 - `rho`: Normalized density matrix (fixed point)
-- `gap`: Spectral gap (-log|λ₂|)
+- `gap`: Spectral gap (-log|λ₂|) where λ₂ is the second largest eigenvalue
 
 # Description
 Constructs the transfer matrix from the gate and computes its spectral properties.
 The spectral gap quantifies how quickly the channel approaches its fixed point.
 """
-function exact_left_eigen(A_matrix, nsites)
-    for i in 1:3
-        A_matrix[i] = reshape(A_matrix[i], 2, 2, 2, 2, 2, 2)[:, :, :, 1, :, :]
+
+#index of single A:
+#          4  5
+#           \ |
+#         6 -|A|- 3
+#             | \
+#             2  1
+
+function exact_left_eigen(A_matrix, row)
+    A_tensors = Vector{Array{ComplexF64, 5}}(undef, row)
+    for i in 1:row
+        A_tensors[i] = reshape(A_matrix[i], (2, 2, 2, 2, 2, 2))[:, :, :, 1, :, :]   # TODO:not suits for arbitrary nqubits
     end
     
-    _, T = contract_Elist([A_matrix[i] for i in 1:nsites], [conj(A_matrix[i]) for i in 1:nsites], nsites)
-    T = reshape(T, 4^(nsites+1), 4^(nsites+1))
-    λ₁ = partialsort(abs.(LinearAlgebra.eigen(T).values), 2; rev=true)
-    gap = -log(abs(λ₁))
+    _, T = contract_Elist([A_tensors[i] for i in 1:row], [conj(A_tensors[i]) for i in 1:row], row)
+    T = reshape(T, 4^(row+1), 4^(row+1))    # D=2
     eigenvalues = sort(abs.(LinearAlgebra.eigen(T).values))
-    # Verify normalization
-    @assert LinearAlgebra.eigen(T).values[end] ≈ 1.0
-    # Extract fixed point density matrix
-    fixed_point_rho = reshape(LinearAlgebra.eigen(T).vectors[:, end], Int(sqrt(4^(nsites+1))), Int(sqrt(4^(nsites+1))))
+    gap = -log(eigenvalues[end-1])  # Second largest eigenvalue
+    @assert eigenvalues[end] ≈ 1.0
+    fixed_point_rho = reshape(LinearAlgebra.eigen(T).vectors[:, end], Int(sqrt(4^(row+1))), Int(sqrt(4^(row+1))))
     rho = fixed_point_rho ./ tr(fixed_point_rho)
     return rho, gap, eigenvalues
 end
 
-"""
-Transfer matrix contraction for tensor networks.
+function single_transfer(A_matrix, nqubits)
+    A_single = reshape(A_matrix[1], (2, 2, 2, 2))[:, :, 1, :]   # TODO:not suits for arbitrary nqubits
+    T = ein"iab,icd-> acbd"(A_single, conj(A_single))
+    T = reshape(T, 4, 4)    # D=2
+    eigenvalues = sort(abs.(LinearAlgebra.eigen(T).values))
+    gap = -log(eigenvalues[end-1])  # Second largest eigenvalue
+    @assert eigenvalues[end] ≈ 1.0
+    fixed_point_rho = reshape(LinearAlgebra.eigen(T).vectors[:, end], Int(sqrt(4)), Int(sqrt(4)))
+    rho = fixed_point_rho ./ tr(fixed_point_rho)
+    return rho, gap, eigenvalues
+end
 
-Provides efficient tensor network contraction routines for computing
-transfer matrices in infinite PEPS.
-"""
+function cost_X_single(rho, A_matrix)
+    A = reshape(A_matrix[1], (2, 2, 2, 2))[:, :, 1, :]
+    X_exp = ein"bd, iab, ij, jad ->"(rho, A, Matrix(X), conj(A))
+    return X_exp[]
+end
+
+function cost_ZZ_single(rho, A_matrix)
+    A = reshape(A_matrix[1], (2, 2, 2, 2))[:, :, 1, :]
+    mid_res1 = ein"bd, iab, ij, jcd -> ac"(rho, A, Matrix(Z), conj(A))
+    ZZ_exp1 = ein"bd, iab, ij, jad ->"(mid_res1, A, Matrix(Z), conj(A))
+
+    mid_res2 = ein"bd, iab, icd -> ac"(mid_res1, A, conj(A))
+    mid_res3 = ein"bd, iab, icd -> ac"(mid_res2, A, conj(A))
+    mid_res4 = ein"bd, iab, icd -> ac"(mid_res3, A, conj(A))    #TODO: relation with row
+    ZZ_exp2 = ein"bd, iab, ij, jad ->"(mid_res4, A, Matrix(Z), conj(A))
+
+    return ZZ_exp1[], ZZ_exp2[]
+end
 
 """
     contract_Elist(tensor_ket, tensor_bra, row; optimizer=GreedyMethod())
@@ -115,8 +145,7 @@ function contract_Elist(tensor_ket, tensor_bra, row; optimizer=GreedyMethod())
 end
 
 """
-    cost_X(rho, row, gate)
-
+cost_X(rho, row, gate)
 Compute X observable expectation by direct tensor contraction.
 
 # Arguments

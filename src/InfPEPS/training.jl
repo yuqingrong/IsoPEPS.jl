@@ -1,6 +1,5 @@
 """
 Training and optimization routines for variational iPEPS.
-
 Provides high-level optimization functions for finding ground states
 of quantum many-body systems using variational iPEPS ansatz.
 """
@@ -33,7 +32,7 @@ Optimizes the variational circuit using CMA-ES to minimize the ground state
 energy of the transverse field Ising model. Tracks various observables and
 convergence metrics during training.
 """
-function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int; measure_first=:X, niters=10000, maxiter=5000, abstol=1e-6)
+function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int; measure_first=:X, share_params=true, niters=10000, maxiter=5000, abstol=1e-6)
     energy_history = Float64[]
     params_history = Vector{Float64}[]
     final_A = Matrix(I, 8, 8)
@@ -59,19 +58,20 @@ function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int; mea
         
         current_params .= x
         push!(params_history, copy(x))
-        A_matrix = build_gate_from_params(x, p)
-        #gate = matblock(A_matrix)    
+        A_matrix = build_gate_from_params(x, p, row, nqubits; share_params=share_params)
     
-        rho, Z_list, X_list = iterate_channel_PEPS(A_matrix, row; measure_first=measure_first)
-        #rho, Z_list, X_list = iterate_dm(gate, row; measure_first=measure_first)
+        #rho, Z_list, X_list = iterate_channel_PEPS(A_matrix, row; measure_first=measure_first)
+        rho, Z_list, X_list = iterate_dm(A_matrix, row; measure_first=measure_first)
         _, gap, eigenvalues = exact_left_eigen(A_matrix, row)
         push!(gap_list, gap)
         push!(Z_list_list, Z_list)
         push!(X_list_list, X_list)
-        
-        Z_list = Z_list[Int(1+end-3/4*niters):end]
-        Z_configs = extract_Z_configurations(Z_list, row)
-        energy = energy_measure(X_list, Z_configs, g, J, row; niters=niters)
+    
+        if measure_first == :X
+            energy = energy_measure(X_list[Int(1+end-3/4*niters):end], Z_list, g, J, row)
+        else
+            energy = energy_measure(Z_list[Int(1+end-3/4*niters):end], X_list, g, J, row)
+        end
         
         push!(energy_history, real(energy))
         push!(eigenvalues_list, eigenvalues)
@@ -114,12 +114,13 @@ function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int; mea
     return energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, params_history, eigenvalues_list
 end
 
-function train_exact(params, J::Float64, g::Float64, p::Int, row::Int; measure_first=:X, niters=10000, maxiter=5000, abstol=1e-6)
+function train_exact(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int; measure_first=:X, niters=10000, maxiter=5000, abstol=1e-8)
     energy_history = Float64[]
     params_history = Vector{Float64}[]
     final_A = Matrix(I, 8, 8)
     X_list = Float64[]
-    ZZ_list = Float64[]
+    ZZ_list1 = Float64[]
+    ZZ_list2 = Float64[]
     gap_list = Float64[]
     eigenvalues_list = Vector{Float64}[]
     current_params = copy(params)
@@ -140,17 +141,19 @@ function train_exact(params, J::Float64, g::Float64, p::Int, row::Int; measure_f
         
         current_params .= x
         push!(params_history, copy(x))
-        A_matrix = build_gate_from_params(x, p)
-        gate = matblock(A_matrix)    
+        A_matrix = build_gate_from_params(x, p, row, nqubits)
+        rho, gap, eigenvalues = single_transfer(A_matrix, nqubits)
+        X_cost = real(cost_X_single(rho, A_matrix))
+        ZZ_exp1, ZZ_exp2 = cost_ZZ_single(rho, A_matrix)
+        ZZ_exp1 = real(ZZ_exp1)
+        ZZ_exp2 = real(ZZ_exp2)
+        energy = -g*X_cost - J*(ZZ_exp1)    
     
-        rho, gap, eigenvalues = exact_left_eigen(gate, row)
+        push!(X_list, X_cost)
+        push!(ZZ_list1, ZZ_exp1)
+        push!(ZZ_list2, ZZ_exp2)
         push!(gap_list, gap)
         push!(eigenvalues_list, eigenvalues)
-        X_cost = real(cost_X(rho, row, gate))
-        ZZ_cost = real(cost_ZZ(rho, row, gate))
-        energy = -g*X_cost - J*ZZ_cost
-        push!(X_list, X_cost)
-        push!(ZZ_list, ZZ_cost)
         push!(energy_history, real(energy))
         @info "TFIM J=$J g=$g $row × ∞ PEPS, Iter $(length(energy_history)), energy: $energy, gap: $gap"
 
@@ -184,11 +187,11 @@ function train_exact(params, J::Float64, g::Float64, p::Int, row::Int; measure_f
     end   
     
     # Build final gate
-    final_A = build_gate_from_params(final_params, p)
+    final_A = build_gate_from_params(final_params, p, row, nqubits)
     
-    _save_training_data(g, energy_history, params_history, X_list, ZZ_list, gap_list, eigenvalues_list; measure_first=measure_first)
+    _save_training_data(g, energy_history, params_history, X_list, ZZ_list1, ZZ_list2, gap_list, eigenvalues_list; measure_first=measure_first)
    
-    return energy_history, final_A, final_params, final_cost, X_list, ZZ_list, gap_list, params_history, eigenvalues_list
+    return energy_history, final_A, final_params, final_cost, X_list, ZZ_list1, ZZ_list2, gap_list, params_history, eigenvalues_list
 end
 
 function train_energy_circ_gradient(params, J::Float64, g::Float64, p::Int, row::Int; 
@@ -471,20 +474,24 @@ Uses Manopt's Nelder-Mead on a manifold for optimization without
 recompiling the gate at each step. Useful for constrained optimization
 on unitary groups or other manifolds.
 """
-function train_nocompile(gate, row, M::AbstractManifold, J::Float64, g::Float64; maxiter=3000)
+function train_nocompile(gate, row::Int, nqubits::Int, M::AbstractManifold, J::Float64, g::Float64; maxiter=3000)
     energy_history = Float64[]
     gap_list = Float64[]
     eigenvalues_list = Vector{Float64}[]
     X_list = Float64[]
-    ZZ_list = Float64[]
+    ZZ_list1 = Float64[]
+    ZZ_list2 = Float64[]
     function f(M, gate)
-        gate = matblock(gate)
-        rho, gap, eigenvalues = exact_left_eigen(gate, row)
-        X_cost = real(cost_X(rho, row, gate))
-        Z_value, ZZ_cost = cost_ZZ(rho, row, gate)
-        energy = -g*X_cost - J*real(ZZ_cost)
+        A_matrix = [Matrix(gate) for _ in 1:row]
+        rho, gap, eigenvalues = single_transfer(A_matrix, nqubits)
+        X_cost = real(cost_X_single(rho, A_matrix))
+        ZZ_exp1, ZZ_exp2 = cost_ZZ_single(rho, A_matrix)
+        ZZ_exp1 = real(ZZ_exp1)
+        ZZ_exp2 = real(ZZ_exp2)
+        energy = -g*X_cost - J*(ZZ_exp1)
         push!(X_list, X_cost)
-        push!(ZZ_list, Z_value)
+        push!(ZZ_list1, ZZ_exp1)
+        push!(ZZ_list2, ZZ_exp2)
         push!(gap_list, gap)
         push!(eigenvalues_list, eigenvalues)
         push!(energy_history, real(energy))
@@ -499,7 +506,7 @@ function train_nocompile(gate, row, M::AbstractManifold, J::Float64, g::Float64;
         f,
         population=NelderMeadSimplex(M);
         stopping_criterion = StopAfterIteration(maxiter) | 
-                           StopWhenPopulationConcentrated(1e-3, 1e-3),
+                           StopWhenPopulationConcentrated(1e-8, 1e-8),
         record = [:Iteration, :Cost],
         return_state = true
     )
@@ -507,8 +514,8 @@ function train_nocompile(gate, row, M::AbstractManifold, J::Float64, g::Float64;
     final_p = get_solver_result(result)
     final_energy = f(M, final_p)
    @show result
-    _save_training_data_exact(g, energy_history, X_list, ZZ_list, gap_list, eigenvalues_list)
+    _save_training_data_exact(g, energy_history, X_list, ZZ_list1, ZZ_list2, gap_list, eigenvalues_list, final_p)
     
-    return result, final_energy, final_p, X_list, ZZ_list, energy_history, gap_list, eigenvalues_list
+    return result, final_energy, final_p, X_list, ZZ_list1, ZZ_list2, energy_history, gap_list, eigenvalues_list
 end
 

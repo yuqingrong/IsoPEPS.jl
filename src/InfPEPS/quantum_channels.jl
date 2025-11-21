@@ -24,7 +24,7 @@ Applies the gate repeatedly while measuring observables.
 - If `measure_first=:Z`: First 3/4 measure Z, last 1/4 measure X
 Always returns (rho, X_list, Z_list) in that order regardless of measure_first.
 """
-function iterate_channel_PEPS(gate, row; niters=10000, measure_first=:X)
+function iterate_channel_PEPS(A_matrix, row; conv_step=1000, samples=10000,measure_first=:X)
     if measure_first ∉ (:X, :Z)
         throw(ArgumentError("measure_first must be either :X or :Z, got $measure_first"))
     end
@@ -33,13 +33,14 @@ function iterate_channel_PEPS(gate, row; niters=10000, measure_first=:X)
     X_list = Float64[]
     Z_list = Float64[]
     
+    niters = ceil(Int, (conv_step + 2*samples)/ row)
     for i in 1:niters
         for j in 1:row
             rho_p = zero_state(1)
             rho = join(rho, rho_p)
-            rho = Yao.apply!(rho, put(2+row,(1, 2, j+2)=>gate)) 
+            rho = Yao.apply!(rho, put(2+row,(1, 2, j+2)=>matblock(A_matrix[j]))) 
 
-            if i > niters*3 ÷ 4
+            if i > (conv_step + samples)/ row
                 # Last 1/4 of iterations: measure the second observable
                 if measure_first == :X
                     Z = 1-2*measure!(RemoveMeasured(), rho, 1)
@@ -80,7 +81,7 @@ function iterate_dm(gate, row; niters=10000, measure_first=:X)
         for j in 1:row
             rho_p = density_matrix(zero_state(1))   
             rho = join(rho, rho_p)
-            rho = Yao.apply!(rho, put(2+row,(1, 2, j+2)=>gate)) 
+            rho = Yao.apply!(rho, put(2+row,(1, 2, j+2)=>matblock(gate[j]))) 
 
             if i > niters*3 ÷ 4
                 # Last 1/4 of iterations: compute expectation value of second observable

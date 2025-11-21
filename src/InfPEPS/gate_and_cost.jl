@@ -1,40 +1,69 @@
 
-function _build_parameterized_gate(params, r)
-    gate = kron(
-        Yao.Rx(params[6*r-5]) * Yao.Rz(params[6*r-4]), 
-        Yao.Rx(params[6*r-3]) * Yao.Rz(params[6*r-2]), 
-        Yao.Rx(params[6*r-1]) * Yao.Rz(params[6*r])
-    )
-
-    cnot_12 = cnot(3, 2,1)
-    cnot_23 = cnot(3, 3,2)
-    cnot_31 = cnot(3, 1,3)
-    return Matrix(gate) * Matrix(cnot_12) * Matrix(cnot_23) * Matrix(cnot_31)
+function _build_parameterized_gate(params, r, nqubits)
+    single_qubit_gates = []  
+    for i in 1:nqubits
+        idx = 2*nqubits*r - 2*nqubits + 2*i - 1   # 2 means 2 parameters for Rx and Rz
+        push!(single_qubit_gates, Yao.Rx(params[idx]) * Yao.Rz(params[idx+1]))
+    end
+    gate = kron(single_qubit_gates...)
+    
+    # Build CNOT gates in a ring: 2->1, 3->2, ..., row->(row-1), 1->row TODO: check if no 1 -> row
+    
+    cnot_gates = Matrix{ComplexF64}(I, 2^nqubits, 2^nqubits)
+    for i in 1:nqubits
+        target = i
+        control = (i % nqubits) + 1  
+        cnot_gates *= Matrix(cnot(nqubits, control, target))
+    end
+  
+    return Matrix(gate) * Matrix(cnot_gates)
 end
-function build_gate_from_params(params, p)
-    A_matrix = Vector{}(undef, 3)
-    for i in 1:3
-        A_matrix[i] = Matrix(Array{ComplexF64}(I, 8, 8))
-    end
-    # A_matrix[1] uses params 1-12 (indices 1:6*p)
-    params_1 = params[1:6*p]
-    for r in 1:p
-        A_matrix[1] *= _build_parameterized_gate(params_1, r)
+
+"""
+    build_gate_from_params(params, p, row; share_params=true)
+
+Build multiple parameterized gates from parameters.
+
+# Arguments
+- `params`: Parameter vector
+- `p`: Number of layers per gate
+- `row`: Number of gates to generate
+- `share_params`: If true, all gates use the same parameters; if false, each gate uses different parameters (default: true)
+
+# Returns
+- Vector of gate matrices, each of size 2^row × 2^row
+
+# Notes
+- When `share_params=true`: requires `2*row*p` parameters total (all gates share the same parameters), A-A-A structure
+- When `share_params=false`: requires `2*row*p*row` parameters total (each gate has independent parameters), A-B-C structure
+"""
+function build_gate_from_params(params, p, row, nqubits; share_params=true)
+    A_matrix = Vector{Matrix{ComplexF64}}(undef, row)
+    dim = 2^nqubits
+    for i in 1:row
+        A_matrix[i] = Matrix(Array{ComplexF64}(I, dim, dim))
     end
     
-    # A_matrix[2] uses params 13-24 (indices 6*p+1:12*p)
-    params_2 = params[6*p+1:12*p]
-    for r in 1:p
-        A_matrix[2] *= _build_parameterized_gate(params_2, r)
+    if share_params
+        @assert length(params) >= 2*nqubits*p "Need at least $(2*nqubits*p) parameters for shar ed parameters mode"
+        shared_params = params[1:2*nqubits*p]
+        for i in 1:row
+            for r in 1:p
+                A_matrix[i] *= _build_parameterized_gate(shared_params, r, nqubits)
+            end
+        end
+    else
+        @assert length(params) >= 2*nqubits*p*row "Need at least $(2*nqubits*p*row) parameters for independent parameters mode"
+        for i in 1:row
+            # Gate i uses params from indices (2*row*p*(i-1)+1):(2*row*p*i)
+            params_i = params[2*nqubits*p*(i-1)+1:2*nqubits*p*i]
+            for r in 1:p
+                A_matrix[i] *= _build_parameterized_gate(params_i, r, nqubits)
+            end
+        end
     end
     
-    # A_matrix[3] uses params 25-36 (indices 12*p+1:18*p)
-    params_3 = params[12*p+1:18*p]
-    for r in 1:p
-        A_matrix[3] *= _build_parameterized_gate(params_3, r)
-    end
-    
-    for i in 1:3
+    for i in 1:row
         @assert A_matrix[i] * A_matrix[i]' ≈ I atol=1e-5
         @assert A_matrix[i]' * A_matrix[i] ≈ I atol=1e-5
     end
@@ -43,44 +72,26 @@ function build_gate_from_params(params, p)
 end
 
 
-
 """
-    extract_Z_configurations(Z_list, row): seperate the Z_list to row sublists, here row=3
-
-    --| A_1 |--| A_4 |--
+    --| A_1 |--| A_1 |--
          |        |
-    --| A_2 |--| A_5 |--
+    --| A_2 |--| A_2 |--
          |        |
-    --| A_3 |--| A_6 |--
-    
-    energy_measure(X_list, separ_Z_lists, g, J, row): ⟨H⟩ = -g ∑ᵢ⟨Xᵢ⟩ - J∑ᵢⱼ⟨ZᵢZⱼ⟩
+    --| A_3 |--| A_3 |--
+                                                              __________________________
+                                           __________________|________                  |
+                                          |                  |        |                 |
+MPS string + long range interaction: --| A_1 |--| A_2 |--| A_3 |--| A_1 |--| A_2 |--| A_3 |--
+                                                   |                           |
+                                                    ___________________________
 
-    ⟨ZᵢZⱼ⟩ includes vertical and horizontal interactions, mean(⟨Z₁Z₂⟩ + ⟨Z₂Z₃⟩ + ⟨Z₃Z₁⟩ + ⟨Z₁Z₄⟩ + ⟨Z₂Z₅⟩ + ⟨Z₃Z₆⟩)
+H = -g ∑ᵢ Xᵢ - J ∑ᵢ ZᵢZᵢ₊₁ - J ∑ᵢ ZᵢZᵢ₊ᵣₒᵥ
 """
-function extract_Z_configurations(Z_list, row)
-    @assert length(Z_list) % row == 0 
-    Z_configs = ntuple(i -> Z_list[i:row:end], row)
-    return Z_configs
-end
 
-function energy_measure(X_list, separ_Z_lists, g, J, row; niters=niters) 
-    interaction_pairs = Vector{Tuple{Int,Int}}(undef, row)
-    @inbounds for i in 1:row
-        j = (i % row) + 1
-        interaction_pairs[i] = (i, j)
-    
-    end
-
-    X_mean = mean(@view X_list[Int(1+end-3/4*niters):end])
-    
-    # interaction within row
-    ZZ_wr_mean = mean(separ_Z_lists[i][k] * separ_Z_lists[j][k] for (i, j) in interaction_pairs for k in 1:length(separ_Z_lists[1]))
-    
-    # interaction between rows
-    ZZ_br_mean = mean(separ_Z_lists[i][j] * separ_Z_lists[i][j+1] for i in 1:row for j in 1:(length(separ_Z_lists[i])-1))
-    
-    energy = -g * X_mean - J * (ZZ_wr_mean + ZZ_br_mean)
-    
+function energy_measure(X_list, Z_list, g, J, row) 
+    X_mean = mean(X_list)
+    Z_mean = mean(Z_list[i]*Z_list[i+1] + Z_list[i]*Z_list[i+row] for i in 1:length(Z_list)-row)
+    energy = -g * X_mean - J * Z_mean
     return energy
 end
 

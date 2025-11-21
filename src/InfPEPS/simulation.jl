@@ -2,18 +2,19 @@ using IsoPEPS.InfPEPS
 using Optimization, OptimizationCMAEvolutionStrategy
 using Random
 using Plots
-using Yao,Manifolds
-using ITensors
+using Yao, Manifolds
+using LinearAlgebra, OMEinsum
 
-function simulation(J::Float64, g::Float64, row::Int, p::Int; maxiter=5000, measure_first=:X)
-    #Random.seed!(12)
-    params = rand(row*6*p)
-    energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, params_history, eigenvalues_list = train_energy_circ(params, J, g, p, row; maxiter=maxiter, measure_first=measure_first)
-    #gate = Yao.matblock(rand_unitary(ComplexF64, 2^row))
-    #M = Manifolds.Unitary(2^row, Manifolds.ℂ)
-    #result, final_energy, final_p, X_list, ZZ_list, energy_history, gap_list, eigenvalues_list = train_nocompile(gate, row, M, J, g; maxiter=maxiter)
-    return energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, params_history, eigenvalues_list
-    #return final_energy, final_p, X_list, ZZ_list, energy_history, gap_list, eigenvalues_list
+function simulation(J::Float64, g::Float64, row::Int, p::Int, nqubits::Int; maxiter=5000, measure_first=:X)
+    #Random.seed!(1234)
+    params = rand(4*p)
+    #energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, params_history, eigenvalues_list = train_energy_circ(params, J, g, p, row, nqubits; maxiter=maxiter, measure_first=measure_first)
+    #gate = Yao.matblock(rand_unitary(ComplexF64, 4))
+    #M = Manifolds.Unitary(4, Manifolds.ℂ)
+    #result, final_energy, final_p, X_list, ZZ_list1, ZZ_list2, energy_history, gap_list, eigenvalues_list = train_nocompile(gate, row, nqubits,M, J, g; maxiter=maxiter)
+    #return result, final_energy, final_p, X_list, ZZ_list1, ZZ_list2, energy_history, gap_list, eigenvalues_list
+    energy_history, final_A, final_params, final_cost, X_list, ZZ_list1, ZZ_list2, gap_list, params_history, eigenvalues_list = train_exact(params, J, g, p, row, nqubits; maxiter=maxiter, measure_first=measure_first)
+    return energy_history, final_A, final_params, final_cost, X_list, ZZ_list1, ZZ_list2, gap_list, params_history, eigenvalues_list
 end
 
 """
@@ -88,13 +89,13 @@ function parallel_simulation_threaded(J::Float64, g_values::Vector{Float64}, row
 end
 
 
-J=1.0; g=1.0; g_values=[0.0, 0.25,0.5,0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5]; row=3
-d=2; D=2
-p=3
+J=1.0; g=0.1; g_values=[0.0, 0.25,0.5,0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5]; row=3
+d=2; D=2; nqubits=2
+p=4
 
 #E, ξ_h, ξ_v, λ_h, λ_v = result_PEPSKit(d, D, J, g; χ=20, ctmrg_tol=1e-10, grad_tol=1e-4, maxiter=1000)
 #E, len_gapped, entrop_gapped = result_MPSKit(d, D, g, row)
-#simulation(J, g, row, p; maxiter=5000, measure_first=:Z)
+simulation(J, g, row, p, nqubits; maxiter=50000, measure_first=:Z)
 g_values = [0.0,0.5,1.0, 1.5, 2.0, 2.5, 3.0, 3.5]
 eigenvalues(g_values; data_dir="data_exact")
 gap(g_values; data_dir="data_exact")
@@ -104,9 +105,9 @@ ACF(0.0; measure_first=:X, data_dir="data_exact",max_lag=100)
 #dynamics_observables(g; measure_first=:Z)
 #dynamics_observables_all(g_values; measure_first=:Z)
 #block_variance(g,[1,5000])
-
+draw()
 chain_result(J::Float64, g::Float64, row::Int, d::Int, D::Int)
-
+energy_converge([0.25, 0.5, 1.25, 1.5])
 
 
 function analyze_trained_gate(g::Float64, row::Int, p::Int; 
@@ -160,9 +161,21 @@ end
 #==
 gate = Yao.matblock(rand_unitary(ComplexF64, 2^row))
 rho, gap, gap_h, eigenvalues = exact_left_eigen(gate, row)
+=#
+# Read the last line from the data file
+data_file = "data/exact/compile_params_history_g=$(g).dat"
+lines = readlines(data_file)
+non_empty_lines = filter(line -> !isempty(strip(line)), lines)
+last_line = non_empty_lines[end]
+params = parse.(Float64, split(last_line))
 
+A_matrix = build_gate_from_params(params, p, row, nqubits; share_params=true)
+rho, gap, eigenvalues = single_transfer(A_matrix, nqubits)
+A = reshape(A_matrix[1], (2, 2, 2, 2))[:,:,1,:]
 
-# Analyze trained gate from parameter history file
-gate, rho, gap, gap_h, eigenvalues, params = analyze_trained_gate(g, row, p; measure_first=:X, data_dir="data")
-@show gap, gap_h
-==#
+rho1 = ein"ce,abc,dbe -> ad"(rho, A, conj(A))
+LinearAlgebra.eigen(rho1).values
+
+rho2 = ein"cf,abc,def,ghb,ije ->agdi"(rho, A, conj(A),A, conj(A))
+rho2 = reshape(rho2, 4,4)
+LinearAlgebra.eigen(rho2).values

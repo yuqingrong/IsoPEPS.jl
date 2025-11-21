@@ -1,39 +1,45 @@
-function _save_training_data(g::Float64, energy_history, params_history, Z_list_list, X_list_list, gap_list, eigenvalues_list; data_dir="data", measure_first=measure_first)
+function _save_training_data(g::Float64, energy_history, params_history, ZZ_list1, ZZ_list2, X_list_list, gap_list, eigenvalues_list; data_dir="data/exact", measure_first=measure_first)
     if !isdir(data_dir)
         mkdir(data_dir)
     end
     # Save energy history
-    open(joinpath(data_dir, "$(measure_first)_first_energy_history_g=$(g)_.dat"), "w") do io
+    open(joinpath(data_dir, "compile_energy_history_g=$(g)_.dat"), "w") do io
         for energy in energy_history
             println(io, energy)
         end
     end
     # Save params history (each row is one parameter set)
-    open(joinpath(data_dir, "$(measure_first)_first_params_history_g=$(g).dat"), "w") do io
+    open(joinpath(data_dir, "compile_params_history_g=$(g).dat"), "w") do io
         for params in params_history
             println(io, join(params, " "))
         end
     end
     # Save Z_list_list (each row is one Z_list)
-    open(joinpath(data_dir, "$(measure_first)_first_Z_list_list_g=$(g).dat"), "w") do io
-        for Z_list in Z_list_list
+    open(joinpath(data_dir, "compile_ZZ_list1_g=$(g).dat"), "w") do io
+        for Z_list in ZZ_list1
+            println(io, join(Z_list, " "))
+        end
+    end
+
+    open(joinpath(data_dir, "compile_ZZ_list2_g=$(g).dat"), "w") do io
+        for Z_list in ZZ_list2
             println(io, join(Z_list, " "))
         end
     end
     # Save X_list_list (each row is one X_list)
-    open(joinpath(data_dir, "$(measure_first)_first_X_list_list_g=$(g).dat"), "w") do io
+    open(joinpath(data_dir, "compile_X_list_list_g=$(g).dat"), "w") do io
         for X_list in X_list_list
             println(io, join(X_list, " "))
         end
     end
     # Save gap list
-    open(joinpath(data_dir, "$(measure_first)_first_gap_list_g=$(g).dat"), "w") do io
+    open(joinpath(data_dir, "compile_gap_list_g=$(g).dat"), "w") do io
         for gap in gap_list
             println(io, gap)
         end
     end
 
-    open(joinpath(data_dir, "$(measure_first)_first_eigenvalues_list_g=$(g).dat"), "w") do io
+    open(joinpath(data_dir, "compile_eigenvalues_list_g=$(g).dat"), "w") do io
         for eigenvalues in eigenvalues_list
             println(io, join(eigenvalues, " "))
         end
@@ -41,7 +47,7 @@ function _save_training_data(g::Float64, energy_history, params_history, Z_list_
     @info "Training data saved to $(data_dir)/ with g=$(g)"
 end
 
-function _save_training_data_exact(g::Float64, energy_history, X_list, ZZ_list, gap_list, eigenvalues_list; data_dir="data_exact")
+function _save_training_data_exact(g::Float64, energy_history, X_list, ZZ_list1, ZZ_list2, gap_list, eigenvalues_list, final_p; data_dir="data_exact")
     if !isdir(data_dir)
         mkdir(data_dir)
     end
@@ -53,9 +59,15 @@ function _save_training_data_exact(g::Float64, energy_history, X_list, ZZ_list, 
     end
 
     # Save Z_list_list (each row is one Z_list)
-    open(joinpath(data_dir, "nocompile_ZZ_list_list_g=$(g).dat"), "w") do io
-        for Z_list in ZZ_list
-            println(io, join(Z_list, " "))
+    open(joinpath(data_dir, "nocompile_ZZ_list1_g=$(g).dat"), "w") do io
+        for Z in ZZ_list1
+            println(io, Z)
+        end
+    end
+
+    open(joinpath(data_dir, "nocompile_ZZ_list2_g=$(g).dat"), "w") do io
+        for Z in ZZ_list2
+            println(io, Z)
         end
     end
     # Save X_list_list (each row is one X_list)
@@ -74,6 +86,11 @@ function _save_training_data_exact(g::Float64, energy_history, X_list, ZZ_list, 
     open(joinpath(data_dir, "nocompile_eigenvalues_list_g=$(g).dat"), "w") do io
         for eigenvalues in eigenvalues_list
             println(io, join(eigenvalues, " "))
+        end
+    end
+    open(joinpath(data_dir, "nocompile_final_p_g=$(g).dat"), "w") do io
+        for p in final_p
+            println(io, join(p, " "))
         end
     end
     @info "Training data saved to $(data_dir)/ with g=$(g)"
@@ -949,48 +966,43 @@ contraction methods) for computing ground state energy of the transverse
 field Ising model. Uses hardcoded benchmark data.
 """
 function draw()
-    g_list = [0.0, 0.25, 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00]
-    MPSKit_list = [ -1.9999999999999971,  -2.0078141005791723, -2.031275809659576, 
-                    -2.0704448852547266, -2.125426272074635, -2.1963790626176034, 
-                    -2.283531518020085, -2.3872064546848364,  -2.507866896802187]
+    g_list = [0.01, 0.25, 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00]
+    MPSKit_list = [1/0.09938670503395748, 1/0.2767186242180228, 1/0.4558293623207221, 1/0.7611451195884831, 1/1.7296475381670806, 1/2.0838447345246576, 1/1.4864869208462, 1/1.2008972020030175, 1/1.0310843874420765]
     PEPSKitlist = [-1.999999610358945, -2.007814504995826, -2.0312864807194675, 
                    -2.0705176991971634, -2.1256518211812336, -2.1969439738505, 
                    -2.2846818634108392, -2.389277196571146, -2.511299175269]
-    nocompile_list = [-1.9999999831857058, -2.0075969924758588, -2.031231043061209, 
-                      -2.073959788377221, -2.1257631690404013,-2.1954253120312677,
-                      -2.2854081065855065,-2.388889424534069, -2.5077622489855362]
+    nocompile_list = [10.0617079483451, 3.6138131708760275, 2.193803922262251, 1.3138101013460692, 0.5781525165137043, 0.4798822256011485, 0.6727270481199901, 0.8327107524053712, 0.9698526492947356]
     contract_list = [-1.9999998917735167, -2.0078191059955737, -2.0312516166482886, 
                      -2.0703162733046936, -2.1268495602624498, -2.197127459624827, 
                      -2.287280846863297, -2.3905645948990832,  -2.505084442515908]
-    measure_list = [ -1.999536026912,  -2.00675968,  -2.030210653512, -2.0682195200000004, 
-                     -2.1223441800000002, -2.19005, -2.2829,  -2.3856532799999997,  
-                     -2.5062471200000003]
+    compile_list = [10.840122867995094, 3.4380187943307026, 2.2297162969555773, 1.436068361228758, 0.5780242148899613, 0.47981080364804873, 0.6726520227106328, 0.8325439670588666, 0.9701494798268981]
     
-    fig = Plots.plot(xlabel="g", ylabel="energy density", 
-                     title="energy density vs Transverse Field", 
-                     ylims=(-2.6,-1.9), xlims=(-0.25, 2.5), 
+    fig = Plots.plot(xlabel="g", ylabel="spectral gap: -ln |λ_1|)", 
+                     title="spectral gap vs Transverse Field (1D)", 
+                     ylims=(0.0,11.0), xlims=(0.00, 2.25), 
                      yscale=:linear, 
-                     yticks=[-3.0, -2.5, -2.0, -1.5],
-                     xticks=[0.00, 0.25, 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00, 2.25])
+                     yticks=[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0],
+                     xticks=[0.00, 0.25, 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00, 2.25], size=(800, 600))
 
     colors = [RGBA(1,0,0,0.5), RGBA(0,1,0,0.7), RGBA(1,0.5,0,0.5), 
               RGBA(0,0,1,0.5), RGBA(0,0,0,0.5)]
     markers = [:+, :x, :star, :diamond, :circle]
     
     Plots.plot!(fig, g_list, MPSKit_list, label="MPSKit",
-               color=colors[1], marker=markers[1], markersize=4, linewidth=2)
-    Plots.plot!(fig, g_list, PEPSKitlist, label="PEPSKit",
-               color=colors[2], marker=markers[2], markersize=4, linewidth=2)
-    Plots.plot!(fig, g_list, contract_list, label="contract_directly",
-               color=colors[3], marker=markers[3], markersize=4, linewidth=2)
-    Plots.plot!(fig, g_list, measure_list, label="measure",
-               color=colors[4], marker=markers[4], markersize=4, linewidth=2)
+              color=colors[1], marker=markers[1], markersize=4, linewidth=2)
+    #Plots.plot!(fig, g_list, PEPSKitlist, label="PEPSKit",
+                #color=colors[2], marker=markers[2], markersize=4, linewidth=2)
+    #Plots.plot!(fig, g_list, contract_list, label="contract_directly",
+                  #color=colors[3], marker=markers[3], markersize=4, linewidth=2)
+    
     Plots.plot!(fig, g_list, nocompile_list, label="nocompile",
                color=colors[5], marker=markers[5], markersize=4, linewidth=2)
-    
+    Plots.plot!(fig, g_list, compile_list, label="compile",
+               color=colors[4], marker=markers[4], markersize=4, linewidth=2)
+
     Plots.plot!(fig, grid=true, gridwidth=1, gridcolor=:gray, gridalpha=0.3)
     Plots.plot!(fig, legend=:topright, legendfontsize=10)
-    Plots.savefig(fig, "energy density_vs_g.png")
+    Plots.savefig(fig, "spectral gap_vs_g4.pdf")
     Plots.display(fig)
     
     return fig
@@ -1314,3 +1326,49 @@ function check_all_gap_sensitivity_combined(params::Vector{Float64}, g::Float64,
     return all_param_values, all_gap_values, all_energy_values, gap_sensitivities
 end
 
+function energy_converge(g_values::Vector{Float64}; data_dir="data_exact")
+    # Initialize plot
+    p = Plots.plot(xlabel="Iteration", ylabel="Energy", 
+                   title="Energy Convergence to  vs Iteration",
+                   legend=:best,
+                   size=(1000, 600),
+                   grid=true,
+                   gridwidth=1,
+                   gridcolor=:gray,
+                   gridalpha=0.3)
+    
+    # Read and plot data for each g value
+    for g in g_values
+        filename = joinpath(data_dir, "nocompile_energy_history_g=$(g)_.dat")
+        
+        if !isfile(filename)
+            @warn "File not found: $filename, skipping g=$g"
+            continue
+        end
+        
+        # Read energy history
+        energy_history = Float64[]
+        open(filename, "r") do io
+            for line in eachline(io)
+                push!(energy_history, parse(Float64, strip(line)))
+            end
+        end
+        
+        # Plot energy vs iteration
+        iterations = 1:length(energy_history)
+        Plots.plot!(p, iterations, energy_history, 
+                   label="g = $g",
+                   linewidth=2,
+                   alpha=0.8)
+    end
+    
+  
+    Plots.savefig(p, "image/energyconverge_g=$(g_values).pdf")
+
+    
+    # Display and return plot
+    Plots.display(p)
+    @info "Energy convergence plot generated for g values: $g_values"
+    
+    return p
+end
