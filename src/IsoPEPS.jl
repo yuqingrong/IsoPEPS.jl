@@ -19,9 +19,15 @@ using Statistics
 using OMEinsumContractionOrders
 using Manifolds, Manopt
 using RecursiveArrayTools
+using TensorKit, MPSKit, MPSKitModels, PEPSKit 
+using MPSKitModels: transverse_field_ising, InfiniteStrip, InfiniteCylinder
+using PEPSKit: InfiniteSquare
+using Plots
+using Colors: RGBA
+using Optimization, OptimizationCMAEvolutionStrategy
 
 export statevec, vec
-export ising_hamiltonian, ising_hamiltonian_2d,ed_groundstate
+export ising_hamiltonian, ising_hamiltonian_2d,ed_groundstate, ising_ham_periodic2d
 export itime_groundstate!, lanczos
 export transverse_ising,itime_groundstate!
 #export dagger_mps,inner_product
@@ -46,6 +52,7 @@ export ProductManifold, Stiefel, isopeps_optimize_ising, isometric_peps_to_unita
 export check_all_sites_convergence, adaptive_all_sites_convergence, monitor_all_sites_iteration_convergence
 export check_convergence_all_sites
 
+# Core includes
 include("LanczosAlgorithm.jl")
 include("KrylovkitYao.jl")
 include("ImTebd.jl")
@@ -56,4 +63,16 @@ include("mpsandmpo.jl")
 include("peps.jl")
 include("isometricpeps.jl")
 include("isopeps2circuit.jl")
+
+# Include InfPEPS submodule (Infinite PEPS)
+include("InfPEPS/InfPEPS.jl")
+
+# Re-export InfPEPS functions (for backward compatibility)
+using .InfPEPS
+export contract_Elist, exact_left_eigen, iterate_channel_PEPS, exact_energy_PEPS
+export cost_X_circ, cost_ZZ_circ, cost_X, cost_ZZ
+export train_energy_circ, train_nocompile
+export draw, draw_X_from_file, draw_gap, check_gap_sensitivity, check_all_gap_sensitivity_combined
+export save_training_data, exact_iPEPS
+
 end

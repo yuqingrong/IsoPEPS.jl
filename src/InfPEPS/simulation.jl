@@ -1,0 +1,181 @@
+using IsoPEPS.InfPEPS
+using Optimization, OptimizationCMAEvolutionStrategy
+using Random
+using Plots
+using Yao, Manifolds
+using LinearAlgebra, OMEinsum
+
+function simulation(J::Float64, g::Float64, row::Int, p::Int, nqubits::Int; maxiter=5000, measure_first=:X)
+    #Random.seed!(1234)
+    params = rand(4*p)
+    #energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, params_history, eigenvalues_list = train_energy_circ(params, J, g, p, row, nqubits; maxiter=maxiter, measure_first=measure_first)
+    #gate = Yao.matblock(rand_unitary(ComplexF64, 4))
+    #M = Manifolds.Unitary(4, Manifolds.ℂ)
+    #result, final_energy, final_p, X_list, ZZ_list1, ZZ_list2, energy_history, gap_list, eigenvalues_list = train_nocompile(gate, row, nqubits,M, J, g; maxiter=maxiter)
+    #return result, final_energy, final_p, X_list, ZZ_list1, ZZ_list2, energy_history, gap_list, eigenvalues_list
+    energy_history, final_A, final_params, final_cost, X_list, ZZ_list1, ZZ_list2, gap_list, params_history, eigenvalues_list = train_exact(params, J, g, p, row, nqubits; maxiter=maxiter, measure_first=measure_first)
+    return energy_history, final_A, final_params, final_cost, X_list, ZZ_list1, ZZ_list2, gap_list, params_history, eigenvalues_list
+end
+
+"""
+    parallel_simulation_threaded(J::Float64, g_values::Vector{Float64}, row::Int, p::Int; maxiter=5000, measure_first=:X)
+
+Run simulations for multiple g values in parallel using multi-threading.
+Returns a dictionary with g values as keys and simulation results as values.
+
+"""
+function parallel_simulation_threaded(J::Float64, g_values::Vector{Float64}, row::Int, p::Int; maxiter=5000, measure_first=:X)
+    n = length(g_values)
+    results = Vector{Any}(undef, n)
+    
+    println("Running $(n) simulations in parallel with $(Threads.nthreads()) threads...")
+    #==
+    Threads.@threads for i in 1:n
+        g = g_values[i]
+        println("Thread $(Threads.threadid()): Starting simulation for g = $(g)")
+        
+        # Each thread gets its own random seed for thread safety
+        Random.seed!(1234 + i)
+        gate = Yao.matblock(rand_unitary(ComplexF64, 2^row))
+        M = Manifolds.Unitary(2^row, Manifolds.ℂ)
+        
+        result, final_energy, final_p, X_list, ZZ_list, energy_history, gap_list, eigenvalues_list = 
+            train_nocompile(gate, row, M, J, g; maxiter=maxiter)
+        
+        results[i] = (
+            g = g,
+            result = result,
+            final_energy = final_energy,
+            final_p = final_p,
+            X_list = X_list,
+            ZZ_list = ZZ_list,
+            energy_history = energy_history,
+            gap_list = gap_list,
+            eigenvalues_list = eigenvalues_list
+        )
+        
+        println("Thread $(Threads.threadid()): Completed simulation for g = $(g), final_energy = $(final_energy)")
+    end
+    ==#
+    #Old version using train_energy_circ
+    Threads.@threads for i in 1:n
+        g = g_values[i]
+        println("Thread $(Threads.threadid()): Starting simulation for g = $(g)")
+        
+        #Random.seed!(12)
+        params = rand(6*p*row)
+        
+        energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, params_history = 
+            train_energy_circ(params, J, g, p, row; maxiter=maxiter, measure_first=measure_first)
+        
+        results[i] = (
+            g = g,
+            energy_history = energy_history,
+            final_A = final_A,
+            final_params = final_params,
+            final_cost = final_cost,
+            Z_list_list = Z_list_list,
+            X_list_list = X_list_list,
+            gap_list = gap_list,
+            params_history = params_history
+        )
+        
+        println("Thread $(Threads.threadid()): Completed simulation for g = $(g)")
+    end
+    
+    
+    # Convert to dictionary for easier access
+    return Dict(results[i].g => results[i] for i in 1:n)
+end
+
+
+J=1.0; g=0.1; g_values=[0.0, 0.25,0.5,0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5]; row=3
+d=2; D=2; nqubits=2
+p=4
+
+#E, ξ_h, ξ_v, λ_h, λ_v = result_PEPSKit(d, D, J, g; χ=20, ctmrg_tol=1e-10, grad_tol=1e-4, maxiter=1000)
+#E, len_gapped, entrop_gapped = result_MPSKit(d, D, g, row)
+simulation(J, g, row, p, nqubits; maxiter=50000, measure_first=:Z)
+g_values = [0.0,0.5,1.0, 1.5, 2.0, 2.5, 3.0, 3.5]
+eigenvalues(g_values; data_dir="data_exact")
+gap(g_values; data_dir="data_exact")
+parallel_simulation_threaded(J, g_values, row, p; maxiter=2000, measure_first=:Z)
+correlation(g; measure_first=:Z, data_dir="data",max_lag=2)
+ACF(0.0; measure_first=:X, data_dir="data_exact",max_lag=100)
+#dynamics_observables(g; measure_first=:Z)
+#dynamics_observables_all(g_values; measure_first=:Z)
+#block_variance(g,[1,5000])
+draw()
+chain_result(J::Float64, g::Float64, row::Int, d::Int, D::Int)
+energy_converge([0.25, 0.5, 1.25, 1.5])
+
+
+function analyze_trained_gate(g::Float64, row::Int, p::Int; 
+                              measure_first=:Z, data_dir="data")
+    # Construct filename
+    prefix = measure_first == :X ? "X" : "Z"
+    filename = joinpath(data_dir, "$(prefix)_first_params_history_g=$(g).dat")
+    
+    if !isfile(filename)
+        error("File not found: $filename")
+    end
+    
+    # Read the last line
+    lines = readlines(filename)
+    # Filter out empty lines
+    non_empty_lines = filter(line -> !isempty(strip(line)), lines)
+    
+    if isempty(non_empty_lines)
+        error("File is empty: $filename")
+    end
+    
+    last_line = non_empty_lines[end]
+    
+    # Parse parameters
+    params = parse.(Float64, split(last_line))
+    
+    # Verify we have the right number of parameters
+    expected_params = 6 * p
+    if length(params) != expected_params
+        @warn "Expected $expected_params parameters but got $(length(params)). Using first $expected_params."
+        params = params[1:expected_params]
+    end
+    
+    @info "Loaded $(length(params)) parameters from $filename"
+    @info "Parameter range: [$(minimum(params)), $(maximum(params))]"
+    
+    # Build gate from parameters
+    A_matrix = build_gate_from_params(params, p)
+    gate = Yao.matblock(A_matrix)
+    
+    # Compute spectral properties
+    rho, gap,gap_h, eigenvalues = exact_left_eigen(gate, row)
+    
+    @info "Spectral gap: $gap"
+    @info "Horizontal spectral gap: $gap_h"
+    @info "Largest eigenvalue: $(maximum(abs.(eigenvalues)))"
+    
+    return gate, rho, gap, gap_h, eigenvalues, params
+end
+
+#==
+gate = Yao.matblock(rand_unitary(ComplexF64, 2^row))
+rho, gap, gap_h, eigenvalues = exact_left_eigen(gate, row)
+=#
+# Read the last line from the data file
+data_file = "data/exact/compile_params_history_g=$(g).dat"
+lines = readlines(data_file)
+non_empty_lines = filter(line -> !isempty(strip(line)), lines)
+last_line = non_empty_lines[end]
+params = parse.(Float64, split(last_line))
+
+A_matrix = build_gate_from_params(params, p, row, nqubits; share_params=true)
+rho, gap, eigenvalues = single_transfer(A_matrix, nqubits)
+A = reshape(A_matrix[1], (2, 2, 2, 2))[:,:,1,:]
+
+rho1 = ein"ce,abc,dbe -> ad"(rho, A, conj(A))
+LinearAlgebra.eigen(rho1).values
+
+rho2 = ein"cf,abc,def,ghb,ije ->agdi"(rho, A, conj(A),A, conj(A))
+rho2 = reshape(rho2, 4,4)
+LinearAlgebra.eigen(rho2).values
