@@ -52,7 +52,7 @@ function result_1d(d::Int, D::Int, g::Float64)
     end
     
     entrop_gapped = MPSKit.entropy(psi)
-    return E, len_gapped, entrop_gapped, spectrum
+    return E, len_gapped, entrop_gapped, spectrum, psi
 end
 """
     result_PEPSKit(d::Int, D::Int, J::Float64, g::Float64; χ ::Int= 20, ctmrg_tol::Float64= 1e-10, grad_tol::Float64= 1e-4, maxiter::Int=1000)

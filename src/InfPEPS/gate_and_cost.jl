@@ -90,8 +90,8 @@ H = -g ∑ᵢ Xᵢ - J ∑ᵢ ZᵢZᵢ₊₁ - J ∑ᵢ ZᵢZᵢ₊ᵣₒᵥ
 
 function energy_measure(X_list, Z_list, g, J, row) 
     X_mean = mean(X_list)
-    Z_mean = mean(Z_list[i]*Z_list[i+1] + Z_list[i]*Z_list[i+row] for i in 1:length(Z_list)-row)
-    energy = -g * X_mean - J * Z_mean
+    ZZ_mean = row == 1 ? mean(Z_list[i]*Z_list[i+1] for i in 1:length(Z_list)-1) : mean(Z_list[i]*Z_list[i+1] + Z_list[i]*Z_list[i+row] for i in 1:length(Z_list)-row)
+    energy = -g * X_mean - J * ZZ_mean
     return energy
 end
 

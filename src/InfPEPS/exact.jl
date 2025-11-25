@@ -23,41 +23,64 @@ The spectral gap quantifies how quickly the channel approaches its fixed point.
 #             | \
 #             2  1
 
-function exact_left_eigen(A_matrix, row)
-    A_tensors = Vector{Array{ComplexF64, 5}}(undef, row)
+function exact_left_eigen(A_matrix, row, nqubits)
+    total_qubits = Int((row+1)*(nqubits-1)/2)
+    A_size = ntuple(i -> 2, 2*nqubits)
+    indices = (ntuple(_ -> Colon(), nqubits)..., 1, ntuple(_ -> Colon(), nqubits-1)...)
+    A_tensors = Vector{Array{ComplexF64, 2*nqubits-1}}(undef, row)
     for i in 1:row
-        A_tensors[i] = reshape(A_matrix[i], (2, 2, 2, 2, 2, 2))[:, :, :, 1, :, :]   # TODO:not suits for arbitrary nqubits
+        A_tensors[i] = reshape(A_matrix[i], A_size)[indices...]
     end
     
     _, T = contract_Elist([A_tensors[i] for i in 1:row], [conj(A_tensors[i]) for i in 1:row], row)
-    T = reshape(T, 4^(row+1), 4^(row+1))    # D=2
+    T = reshape(T, 4^total_qubits, 4^(total_qubits))    # D=2
     eigenvalues = sort(abs.(LinearAlgebra.eigen(T).values))
     gap = -log(eigenvalues[end-1])  # Second largest eigenvalue
     @assert eigenvalues[end] ≈ 1.0
-    fixed_point_rho = reshape(LinearAlgebra.eigen(T).vectors[:, end], Int(sqrt(4^(row+1))), Int(sqrt(4^(row+1))))
+    fixed_point_rho = reshape(LinearAlgebra.eigen(T).vectors[:, end], Int(sqrt(4^total_qubits)), Int(sqrt(4^total_qubits)))
     rho = fixed_point_rho ./ tr(fixed_point_rho)
     return rho, gap, eigenvalues
 end
 
 function single_transfer(A_matrix, nqubits)
-    A_single = reshape(A_matrix[1], (2, 2, 2, 2))[:, :, 1, :]   # TODO:not suits for arbitrary nqubits
-    T = ein"iab,icd-> acbd"(A_single, conj(A_single))
-    T = reshape(T, 4, 4)    # D=2
+    A_size = ntuple(i -> 2, 2*nqubits)
+    indices = (ntuple(_ -> Colon(), nqubits)..., 1, ntuple(_ -> Colon(), nqubits-1)...)
+    A_single = reshape(A_matrix[1], A_size)[indices...]
+    T = ein"iabcd,iefgh-> abefcdgh"(A_single, conj(A_single))
+    T = reshape(T, 4^(nqubits-1), 4^(nqubits-1))    # D=2
     eigenvalues = sort(abs.(LinearAlgebra.eigen(T).values))
     gap = -log(eigenvalues[end-1])  # Second largest eigenvalue
     @assert eigenvalues[end] ≈ 1.0
-    fixed_point_rho = reshape(LinearAlgebra.eigen(T).vectors[:, end], Int(sqrt(4)), Int(sqrt(4)))
+    fixed_point_rho = reshape(LinearAlgebra.eigen(T).vectors[:, end], Int(sqrt(4^(nqubits-1))), Int(sqrt(4^(nqubits-1))))
     rho = fixed_point_rho ./ tr(fixed_point_rho)
     return rho, gap, eigenvalues
 end
 
-function cost_X_single(rho, A_matrix)
-    A = reshape(A_matrix[1], (2, 2, 2, 2))[:, :, 1, :]
-    X_exp = ein"bd, iab, ij, jad ->"(rho, A, Matrix(X), conj(A))
-    return X_exp[]
+function cost_singleop(rho, A_matrix, nqubits, op)
+    A_size = ntuple(i -> 2, 2*nqubits)
+    env_size = ntuple(i -> 2, 2*(nqubits-1))
+    indices = (ntuple(_ -> Colon(), nqubits)..., 1, ntuple(_ -> Colon(), nqubits-1)...)
+    A = reshape(A_matrix[1], A_size)[indices...]
+    rho = reshape(rho, env_size)
+    R = reshape(Matrix(I,4^(nqubits-1),4^(nqubits-1)), env_size)
+
+    store = IndexStore()
+    index_A = [newindex!(store) for _ in 1:2*nqubits-1]
+    index_conjA = [newindex!(store) for i in 1:2*nqubits-1]
+    index_op = [index_A[1], index_conjA[1]]
+    index_rho = [index_A[Int(end+1)/2+1:end]..., index_conjA[Int(end+1)/2+1:end]...]
+    index_R = [index_A[2:Int(end+1)/2]..., index_conjA[2:Int(end+1)/2]...]
+
+    index = [index_A..., index_conjA..., index_op..., index_rho..., index_R...]
+
+    # Optimize contraction order
+    size_dict = OMEinsum.get_size_dict(index, [A, conj(A), op, rho, R])
+    code = optimize_code(DynamicEinCode(index, Int[]), size_dict, optimizer)
+    
+    return code, code(A, conj(A), op, rho, R)[]
 end
 
-function cost_ZZ_single(rho, A_matrix)
+function cost_doubleop_ver(rho, A_matrix)
     A = reshape(A_matrix[1], (2, 2, 2, 2))[:, :, 1, :]
     mid_res1 = ein"bd, iab, ij, jcd -> ac"(rho, A, Matrix(Z), conj(A))
     ZZ_exp1 = ein"bd, iab, ij, jad ->"(mid_res1, A, Matrix(Z), conj(A))
@@ -159,84 +182,77 @@ Expectation value ⟨X⟩
 # Description
 More accurate than measurement-based approach, uses exact tensor contraction.
 """
-function cost_X(rho, row, gate)
-    nqubits = Int(log2(size(rho, 1)))
-    shape = ntuple(_ -> 2, 2 * nqubits)
-    rho = reshape(rho, shape...)
+function cost_X(rho, A_matrix, row, nqubits; optimizer=GreedyMethod())
+    # Setup: reshape density matrix and A tensors
+    total_qubits = Int((row+1)*(nqubits-1)/2)
+    env_size = ntuple(i -> 2, 2*total_qubits)
+    A_size = ntuple(i -> 2, 2 * nqubits)
+    indices = (ntuple(_ -> Colon(), nqubits)..., 1, ntuple(_ -> Colon(), nqubits-1)...)
     
-    A = reshape(Matrix(gate), 2, 2, 2, 2, 2, 2)[:, :, :, 1, :, :]
-    AX = ein"iabcd,ij -> jabcd"(A, Matrix(X))
-
-    tensor_bra = [conj(A), conj(A), conj(A)]
-    tensor_ket1 = [AX, A, A]
-    _, list1 = contract_Elist(tensor_ket1, tensor_bra, row)
-    result1 = ein"abcdefgh,ijklijklabcdefgh ->"(rho, list1)
-
-    tensor_ket2 = [A, AX, A]
-    _, list2 = contract_Elist(tensor_ket2, tensor_bra, row)
-    result2 = ein"abcdefgh,ijklijklabcdefgh ->"(rho, list2)
-
-    tensor_ket3 = [A, A, AX]
-    _, list3 = contract_Elist(tensor_ket3, tensor_bra, row)
-    result3 = ein"abcdefgh,ijklijklabcdefgh ->"(rho, list3)
-    return (result1[] + result2[] + result3[]) / 3
+    rho = reshape(rho, env_size...)
+    R = reshape(Matrix(I,Int(sqrt(4^total_qubits)),Int(sqrt(4^total_qubits))), env_size)
+    A_tensors = [reshape(A_matrix[i], A_size)[indices...] for i in 1:row]
+    
+    # Prepare AX tensors for each position (apply X operator)
+    AX_tensors = [ein"iabcd,ij -> jabcd"(A_tensors[i], Matrix(X)) for i in 1:row]   #TODO: still 3 qubits per gate
+    tensor_bra = [conj(A_tensors[i]) for i in 1:row]
+    
+    # Compute expectation value at each position and average
+    results = map(1:row) do pos
+        tensor_ket = [i == pos ? AX_tensors[i] : A_tensors[i] for i in 1:row]
+        _, list = contract_Elist(tensor_ket, tensor_bra, row)
+        store = IndexStore()
+        index_list = [newindex!(store) for _ in 1:4*total_qubits]
+        index_rho = index_list[2*total_qubits+1:4*total_qubits] 
+        index_R = index_list[1:2*total_qubits]
+        index = [index_list, index_rho, index_R]
+        size_dict = OMEinsum.get_size_dict(index, [list, rho, R])
+        code = optimize_code(DynamicEinCode(index, Int[]), size_dict, optimizer)
+        code(list, rho, R)[]
+    end
+    return sum(results) / row
 end
 
-"""
-    cost_ZZ(rho, row, gate)
-
-Compute ZZ correlation by direct tensor contraction.
-
-# Arguments
-- `rho`: Density matrix
-- `row`: Number of rows
-- `gate`: Quantum gate
-
-# Returns
-ZZ correlation value ⟨Z₁Z₂⟩
-
-# Description
-Computes the expectation value by contracting the tensor network with
-Z operators applied at different positions. Averages over all possible
-nearest-neighbor configurations.
-"""
-function cost_ZZ(rho, row, gate)
-    nqubits = Int(log2(size(rho, 1)))
-    shape = ntuple(_ -> 2, 2 * nqubits)
-    rho = reshape(rho, shape...)
+function _compute_ZZ_contraction(tensor_ket_a, tensor_ket_b, tensor_bra, rho, R, row, total_qubits, optimizer)
+    # Helper function to compute ZZ contraction for a pair of tensor kets.
+    _, list1 = contract_Elist(tensor_ket_a, tensor_bra, row)
+    _, list2 = contract_Elist(tensor_ket_b, tensor_bra, row)
     
-    A = reshape(Matrix(gate), 2, 2, 2, 2, 2, 2)[:, :, :, 1, :, :]
-    AZ = ein"iabcd,ij -> jabcd"(A, Matrix(Z))
+    store = IndexStore()
+    index_list1 = [newindex!(store) for _ in 1:4*total_qubits]
+    index_list2 = [[newindex!(store) for _ in 1:2*total_qubits]..., index_list1[1:2*total_qubits]...]
     
-    # Compute three different configurations
-    tensor_bra = [conj(A), conj(A), conj(A)]
+    index_rho = index_list1[2*total_qubits+1:4*total_qubits]  # Last half of list1
+    index_R = index_list2[1:2*total_qubits]  # First half of list2
+    index = [index_list1, index_list2, index_rho, index_R]
     
-    _, list = contract_Elist([AZ, AZ, A], tensor_bra, row)
-    Z_value = ein"abcdefgh,ijklijklabcdefgh ->"(rho, list)
+    size_dict = OMEinsum.get_size_dict(index, [list1, list2, rho, R])
+    code = optimize_code(DynamicEinCode(index, Int[]), size_dict, optimizer)
+    return code(list1, list2, rho, R)[]
+end
 
-    _, list1 = contract_Elist([AZ, AZ, A], tensor_bra, row)
-    result1 = ein"abcdefgh,ijklijklabcdefgh ->"(rho, list1)
+function cost_ZZ(rho, A_matrix, row, nqubits; optimizer=GreedyMethod())
+    # Setup: reshape density matrix and A tensors
+    total_qubits = Int((row+1)*(nqubits-1)/2)
+    env_size = ntuple(i -> 2, 2*total_qubits)
+    A_size = ntuple(i -> 2, 2 * nqubits)
+    indices = (ntuple(_ -> Colon(), nqubits)..., 1, ntuple(_ -> Colon(), nqubits-1)...)
     
-    _, list2 = contract_Elist([A, AZ, AZ], tensor_bra, row)
-    result2 = ein"abcdefgh,ijklijklabcdefgh ->"(rho, list2)
+    rho = reshape(rho, env_size...)
+    R = reshape(Matrix(I,Int(sqrt(4^total_qubits)),Int(sqrt(4^total_qubits))), env_size)
+    A_tensors = [reshape(A_matrix[i], A_size)[indices...] for i in 1:row]
     
-    _, list3 = contract_Elist([AZ, A, AZ], tensor_bra, row)
-    result3 = ein"abcdefgh,ijklijklabcdefgh ->"(rho, list3)
+    # Prepare AZ tensors for each position (apply Z operator)
+    AZ_tensors = [ein"iabcd,ij -> jabcd"(A_tensors[i], Matrix(Z)) for i in 1:row]
+    tensor_ket = A_tensors
+    tensor_bra = [conj(A_tensors[i]) for i in 1:row]
+
+    tensor_ket1 = [i == 1 || i == 2 ? AZ_tensors[i] : A_tensors[i] for i in 1:row]
+    tensor_ket2 = [i == 1 ? AZ_tensors[i] : A_tensors[i] for i in 1:row]
+
+    # Compute ZZ expectation values
+    ZZ_ver = _compute_ZZ_contraction(tensor_ket1, tensor_ket, tensor_bra, rho, R, row, total_qubits, optimizer)
+    ZZ_hor = _compute_ZZ_contraction(tensor_ket2, tensor_ket2, tensor_bra, rho, R, row, total_qubits, optimizer)
     
-    _, list4 = contract_Elist([AZ, A, A], tensor_bra, row)
-    rho2 = ein"abcdefgh,ijklmnopabcdefgh ->ijklmnop"(rho, list4)
-    _, list5 = contract_Elist([AZ, A, A], tensor_bra, row)
-    result4 = ein"abcdefgh,ijklijklabcdefgh ->"(rho2, list5)
-
-    _, list6 = contract_Elist([A, AZ, A], tensor_bra, row)
-    rho2 = ein"abcdefgh,ijklmnopabcdefgh ->ijklmnop"(rho, list6)
-    _, list7 = contract_Elist([A, AZ, A], tensor_bra, row)
-    result5 = ein"abcdefgh,ijklijklabcdefgh ->"(rho2, list7)
-
-    _, list8 = contract_Elist([A, A, AZ], tensor_bra, row)
-    rho2 = ein"abcdefgh,ijklmnopabcdefgh ->ijklmnop"(rho, list8)
-    _, list9 = contract_Elist([A, A, AZ], tensor_bra, row)
-    result6 = ein"abcdefgh,ijklijklabcdefgh ->"(rho2, list9)
-
-    return real(Z_value[]), (result1[] + result2[] + result3[] + result4[] + result5[] + result6[]) / 3
+    return ZZ_ver, ZZ_hor
 end

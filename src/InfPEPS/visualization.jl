@@ -1,49 +1,45 @@
-function _save_training_data(g::Float64, energy_history, params_history, ZZ_list1, ZZ_list2, X_list_list, gap_list, eigenvalues_list; data_dir="data/exact", measure_first=measure_first)
+function _save_training_data(g::Float64, row::Int, energy_history, params_history, Z_list_list, X_list_list, gap_list, eigenvalues_list; data_dir="data", measure_first=measure_first)
     if !isdir(data_dir)
         mkdir(data_dir)
     end
     # Save energy history
-    open(joinpath(data_dir, "compile_energy_history_g=$(g)_.dat"), "w") do io
+    open(joinpath(data_dir, "compile_energy_history_row=$(row)_g=$(g)_.dat"), "w") do io
         for energy in energy_history
             println(io, energy)
         end
     end
     # Save params history (each row is one parameter set)
-    open(joinpath(data_dir, "compile_params_history_g=$(g).dat"), "w") do io
+    open(joinpath(data_dir, "compile_params_history_row=$(row)_g=$(g).dat"), "w") do io
         for params in params_history
             println(io, join(params, " "))
         end
     end
     # Save Z_list_list (each row is one Z_list)
-    open(joinpath(data_dir, "compile_ZZ_list1_g=$(g).dat"), "w") do io
-        for Z_list in ZZ_list1
+    open(joinpath(data_dir, "compile_Z_list_list_row=$(row)_g=$(g).dat"), "w") do io
+        for Z_list in Z_list_list
             println(io, join(Z_list, " "))
         end
     end
 
-    open(joinpath(data_dir, "compile_ZZ_list2_g=$(g).dat"), "w") do io
-        for Z_list in ZZ_list2
-            println(io, join(Z_list, " "))
-        end
-    end
     # Save X_list_list (each row is one X_list)
-    open(joinpath(data_dir, "compile_X_list_list_g=$(g).dat"), "w") do io
+    open(joinpath(data_dir, "compile_X_list_list_row=$(row)_g=$(g).dat"), "w") do io
         for X_list in X_list_list
             println(io, join(X_list, " "))
         end
     end
     # Save gap list
-    open(joinpath(data_dir, "compile_gap_list_g=$(g).dat"), "w") do io
+    open(joinpath(data_dir, "compile_gap_list_row=$(row)_g=$(g).dat"), "w") do io
         for gap in gap_list
             println(io, gap)
         end
     end
-
-    open(joinpath(data_dir, "compile_eigenvalues_list_g=$(g).dat"), "w") do io
+    # Save eigenvalues list
+    open(joinpath(data_dir, "compile_eigenvalues_list_row=$(row)_g=$(g).dat"), "w") do io
         for eigenvalues in eigenvalues_list
             println(io, join(eigenvalues, " "))
         end
     end
+    
     @info "Training data saved to $(data_dir)/ with g=$(g)"
 end
 

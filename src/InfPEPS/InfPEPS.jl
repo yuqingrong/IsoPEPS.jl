@@ -48,8 +48,9 @@ include("refer.jl")
 include("exact.jl")
 # Re-export main functions
 export iterate_channel_PEPS, iterate_dm
+# exact
 export contract_Elist, exact_left_eigen, single_transfer
-export cost_X, cost_ZZ, cost_X_single, cost_ZZ_single, cost_X_circ, cost_ZZ_circ
+export cost_X, cost_ZZ, cost_singleop, cost_ZZ_single, cost_X_circ, cost_ZZ_circ
 export build_gate_from_params, energy_measure
 export train_energy_circ, train_exact, train_energy_circ_gradient, train_hybrid, train_nocompile
 export check_gap_sensitivity, check_all_gap_sensitivity_combined

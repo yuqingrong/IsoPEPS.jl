@@ -2,7 +2,7 @@ using Test
 using IsoPEPS.InfPEPS  
 using Yao, Optim, Manifolds, Statistics
 using LinearAlgebra
-
+using MPSKit
 @testset "exact" begin
     @testset "contract_Elist" begin
         A = randn(ComplexF64, 2,2,2,2,2)
@@ -14,35 +14,44 @@ using LinearAlgebra
 
     @testset "left_eigen" begin
         nqubits = 3;
-        for row in [1]
+        for row in [1,2,3]
             gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
             A_matrix = [Matrix(gate) for _ in 1:row]
-            rho, gap, eigenvalues = exact_left_eigen(A_matrix, row)
+            rho, gap, eigenvalues = exact_left_eigen(A_matrix, row, nqubits)
+            @show length(eigenvalues)
             @test LinearAlgebra.tr(rho) ≈ 1.
             @test all(eigenvalues[1:end-1] .< 1.0) 
         end
     end
 
-    @testset "single_transfer" begin
-        nqubits = 3;
-        for row in 2:4
-            gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 4))
+  
+
+    @testset "cost_X" begin
+        nqubits = 3; 
+        for row in [1,2,3]
+            gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
             A_matrix = [Matrix(gate) for _ in 1:row]
-            rho, gap, eigenvalues = single_transfer(A_matrix, nqubits)
-            
-            @test LinearAlgebra.tr(rho) ≈ 1.
-            @test all(eigenvalues[1:end-1] .< 1.0)
+            rho, gap, eigenvalues = exact_left_eigen(A_matrix, row, nqubits)
+            X_exp = cost_X(rho, A_matrix, row, nqubits)
+            @show X_exp
+            @test abs(imag(X_exp)) < 1e-10
+            @test -1.0 ≤ real(X_exp) ≤ 1.0
         end
     end
 
-    @testset "cost_single" begin
-        nqubits = 3; row = 3
-        gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 4))
-        A_matrix = [Matrix(gate) for _ in 1:row]
-        rho, gap, eigenvalues = single_transfer(A_matrix, nqubits)
-        X_exp = cost_X_single(rho, A_matrix)
-        ZZ_exp = cost_ZZ_single(rho, A_matrix)
-        @show X_exp, ZZ_exp
+    @testset "cost_ZZ" begin
+        nqubits = 3; 
+        for row in [1,2,3]
+            gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
+            A_matrix = [Matrix(gate) for _ in 1:row]
+            rho, gap, eigenvalues = exact_left_eigen(A_matrix, row, nqubits)
+            ZZ_ver, ZZ_hor = cost_ZZ(rho, A_matrix, row, nqubits)
+            @show ZZ_ver, ZZ_hor
+            @test abs(imag(ZZ_ver)) < 1e-10
+            @test -1.0 ≤ real(ZZ_ver) ≤ 1.0
+            @test abs(imag(ZZ_hor)) < 1e-10
+            @test -1.0 ≤ real(ZZ_hor) ≤ 1.0
+        end
     end
 end
 
@@ -95,10 +104,18 @@ end
         E, len_gapped, entrop_gapped, spectrum = result_MPSKit(d, D, g, row)
     end
 
-    @testset "" begin
-        J = 1.0; g = 0.01; d = 2; D = 2
-        E, len_gapped, entrop_gapped, spectrum = result_1d(d, D, g)
-        @show E, len_gapped, entrop_gapped, spectrum
+    @testset "transfer matrix match MPSKit" begin
+        J = 1.0; g = 1.0; d = 2; D = 4; nqubits = 3; row = 1
+        E, len_gapped, entrop_gapped, spectrum, psi = result_1d(d, D, g)
+        exact_A = Array{ComplexF64}(undef, D, 2, D)
+        for (i, j, k) in Iterators.product(1:D, 1:2, 1:D)
+            exact_A[i, j, k] = psi.AR.data[1][i, j, k]
+        end
+        exact_A = reshape(permutedims(exact_A, (2, 1, 3)),(d*D,D))
+        nullspace = LinearAlgebra.nullspace(exact_A')
+        A_matrix = vcat(exact_A, nullspace)
+        A_matrix_list = [A_matrix for _ in 1:row]
+        rho, gap, eigenval = exact_left_eigen(A_matrix_list, row, nqubits) 
+        @test gap ≈ 1/len_gapped atol=1e-5
     end
 end
-
