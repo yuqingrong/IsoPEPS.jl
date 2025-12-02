@@ -55,7 +55,7 @@ export build_gate_from_params, energy_measure
 export train_energy_circ, train_exact, train_energy_circ_gradient, train_hybrid, train_nocompile
 export check_gap_sensitivity, check_all_gap_sensitivity_combined
 # visualization
-export block_variance, dynamics_observables, dynamics_observables_all, eigenvalues,gap, ACF, correlation, energy_converge
+export block_variance, dynamics_observables, dynamics_observables_all, eigenvalues,gap, ACF, correlation, energy_con
 export save_training_data
 export exact_energy_PEPS, exact_iPEPS
 # refer.jl

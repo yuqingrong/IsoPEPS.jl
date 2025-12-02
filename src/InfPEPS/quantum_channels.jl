@@ -41,7 +41,6 @@ function iterate_channel_PEPS(A_matrix, row; conv_step=1000, samples=10000,measu
             rho = Yao.apply!(rho, put(2+row,(1, 2, j+2)=>matblock(A_matrix[j]))) 
 
             if i > (conv_step + samples)/ row
-                # Last 1/4 of iterations: measure the second observable
                 if measure_first == :X
                     Z = 1-2*measure!(RemoveMeasured(), rho, 1)
                     push!(Z_list, Z.buf)
@@ -51,7 +50,6 @@ function iterate_channel_PEPS(A_matrix, row; conv_step=1000, samples=10000,measu
                     push!(X_list, X.buf)
                 end
             else
-                # First 3/4 of iterations: measure the first observable
                 if measure_first == :X
                     Yao.apply!(rho, put(2+row, 1=>H))
                     X = 1-2*measure!(RemoveMeasured(), rho, 1)                  

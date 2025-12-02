@@ -92,7 +92,7 @@ end
 J=1.0; g=1.0; g_values=[0.0, 0.25,0.5,0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5]; row=1
 d=2; D=2; nqubits=3
 p=3
-
+ACF(3.0; measure_first=:Z, max_lag=50)
 #E, ξ_h, ξ_v, λ_h, λ_v = result_PEPSKit(d, D, J, g; χ=20, ctmrg_tol=1e-10, grad_tol=1e-4, maxiter=1000)
 #E, len_gapped, entrop_gapped = result_MPSKit(d, D, g, row)
 simulation(J, g, row, p, nqubits; maxiter=100000, measure_first=:Z)
@@ -182,3 +182,6 @@ LinearAlgebra.eigen(rho1).values
 rho2 = ein"cf,abc,def,ghb,ije ->agdi"(rho, A, conj(A),A, conj(A))
 rho2 = reshape(rho2, 4,4)
 LinearAlgebra.eigen(rho2).values
+
+g_values = [0.0,0.5,1.0,1.5,2.0,2.5,3.0]
+energy_con(g_values)
