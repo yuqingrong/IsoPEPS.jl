@@ -9,7 +9,7 @@ function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int, nqu
     eigenvalues_list = Vector{Float64}[]
     current_params = copy(params)
     
-    function objective(x, _)
+    function objective(x,_)
         current_params .= x
         push!(params_history, copy(x))
         A_matrix = build_gate_from_params(x, p, row, nqubits; share_params=share_params)
@@ -56,12 +56,12 @@ function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int, nqu
         @info "⚠ Maximum iterations ($maxiter) reached"
     end   
     
-    # Build final gate
+    @show final_cost
     final_A = build_gate_from_params(final_params, p, row, nqubits)
-    
-    _save_training_data(g,row, energy_history, params_history, Z_list_list, X_list_list, gap_list, eigenvalues_list; measure_first=measure_first)
+    _,final_gap,_ = exact_left_eigen(final_A, row, nqubits)
+    _save_training_data(g,row, energy_history, params_history, Z_list_list, X_list_list, gap_list, eigenvalues_list, final_params, final_cost, final_gap; measure_first=measure_first)
    
-    return energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, eigenvalues_list, params_history
+    return energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, eigenvalues_list, params_history, final_gap
 end
 
 function train_exact(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int; measure_first=:X, niters=10000, maxiter=5000, abstol=1e-8)
@@ -428,12 +428,12 @@ function train_nocompile(gate, row::Int, nqubits::Int, M::AbstractManifold, J::F
 
     @assert is_point(M, Matrix(gate))
 
-    result = Manopt.NelderMead(
+    result = Manopt.particle_swarm(
         M, 
-        f,
-        population=NelderMeadSimplex(M);
+        f;
+        swarm_size = 20,
         stopping_criterion = StopAfterIteration(maxiter) | 
-                           StopWhenPopulationConcentrated(1e-6, 1e-6),
+                           StopWhenSwarmVelocityLess(1e-6),
         record = [:Iteration, :Cost],
         return_state = true
     )

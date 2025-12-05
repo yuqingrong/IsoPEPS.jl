@@ -7,8 +7,8 @@ using LinearAlgebra, OMEinsum
 
 function simulation(J::Float64, g::Float64, row::Int, p::Int, nqubits::Int; maxiter=5000, measure_first=:X)
     #Random.seed!(1234)
-    params = 2*pi*rand(2*nqubits*p)
-    energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, params_history = train_energy_circ(params, J, g, p, row, nqubits; maxiter=maxiter, measure_first=measure_first)
+    params = rand(2*nqubits*p)
+    energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, eigenvalues_list, params_history, final_gap = train_energy_circ(params, J, g, p, row, nqubits; maxiter=maxiter, measure_first=measure_first)
     #gate = Yao.matblock(rand_unitary(ComplexF64, 2^nqubits))
     #M = Manifolds.Unitary(2^nqubits, Manifolds.ℂ)
     #result, final_energy, final_p, X_list, ZZ_list1, ZZ_list2, energy_history, gap_list, eigenvalues_list = train_nocompile(gate, row, nqubits,M, J, g; maxiter=maxiter)
@@ -96,7 +96,9 @@ p=3
 #ACF(3.0; measure_first=:Z, max_lag=50)
 #E, ξ_h, ξ_v, λ_h, λ_v = result_PEPSKit(d, D, J, g; χ=20, ctmrg_tol=1e-10, grad_tol=1e-4, maxiter=1000)
 #E, len_gapped, entrop_gapped = result_MPSKit(d, D, g, row)
-simulation(J, g, row, p, nqubits; maxiter=5000, measure_first=:Z)
+for g in [0.0, 0.5, 1.0,1.5]
+    simulation(J, g, row, p, nqubits; maxiter=5000, measure_first=:Z)
+end
 gap, energy = exact_E_from_params(g, J, p, row, nqubits; data_dir="data", optimizer=GreedyMethod())
 @show energy
 

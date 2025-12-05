@@ -217,6 +217,7 @@ end
 function exact_E_from_params(g::Float64, J::Float64, p::Int, row::Int, nqubits::Int; data_dir="data", optimizer=GreedyMethod())
     params_file = joinpath(data_dir, "compile_params_history_row=$(row)_g=$(g).dat")
     params = parse.(Float64, split(readlines(params_file)[end]))
+    params = [0.013066984314570285, 1.7836610852674502, 0.6568040927808049, 0.8866085782374126, 0.07391051017364578, 0.6027460055133369, 0.5089131608437607, 1.8151701404219185, 1.8870478424773107, 0.3028061851768831, 1.52333574891593e-5, 0.5212051786201375, 0.5398964239263002, 0.18284551345940825, 0.00011769254370212888, 0.45722999388384605, 1.3518589967655406, 0.7511650976695137]
     A_matrix = build_gate_from_params(params, p, row, nqubits; share_params=true)
     rho, gap, eigenvalues = exact_left_eigen(A_matrix, row, nqubits)
     X_cost = real(cost_X(rho, A_matrix, row, nqubits))

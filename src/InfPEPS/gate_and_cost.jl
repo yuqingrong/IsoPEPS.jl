@@ -10,10 +10,10 @@ function _build_parameterized_gate(params, r, nqubits)
     # Build CNOT gates in a ring: 2->1, 3->2, ..., row->(row-1), 1->row TODO: check if no 1 -> row
     
     cnot_gates = Matrix{ComplexF64}(I, 2^nqubits, 2^nqubits)
-    for i in 1:(nqubits-1)
+    for i in 1:nqubits
         target = i
-        #control = (i % nqubits) + 1  
-        control = i+1
+        control = (i % nqubits) + 1  
+        #control = i+1
         cnot_gates *= Matrix(cnot(nqubits, control, target))
     end
   

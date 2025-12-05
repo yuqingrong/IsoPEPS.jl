@@ -1,4 +1,4 @@
-function _save_training_data(g::Float64, row::Int, energy_history, params_history, Z_list_list, X_list_list, gap_list, eigenvalues_list; data_dir="data", measure_first=:X)
+function _save_training_data(g::Float64, row::Int, energy_history, params_history, Z_list_list, X_list_list, gap_list, eigenvalues_list, final_params, final_cost, gap_final; data_dir="data", measure_first=:X)
     if !isdir(data_dir)
         mkdir(data_dir)
     end
@@ -40,10 +40,27 @@ function _save_training_data(g::Float64, row::Int, energy_history, params_histor
         end
     end
     
+    open(joinpath(data_dir, "compile_final_params_row=$(row)_g=$(g).dat"), "w") do io
+        for params in final_params
+            println(io, join(params, " "))
+        end
+    end
+
+    open(joinpath(data_dir, "compile_final_cost_row=$(row)_g=$(g).dat"), "w") do io
+        for cost in final_cost
+            println(io, cost)
+        end
+    end
+
+    open(joinpath(data_dir, "compile_gap_final_row=$(row)_g=$(g).dat"), "w") do io
+        for gap in gap_final
+            println(io, gap)
+        end
+    end
     @info "Training data saved to $(data_dir)/ with g=$(g)"
 end
 
-function _save_training_data_exact(g::Float64, row::Int, energy_history, X_list, ZZ_list1, ZZ_list2, gap_list, eigenvalues_list, final_p; data_dir="data_exact")
+function _save_training_data_exact(g::Float64, row::Int, energy_history, X_list, ZZ_list1, ZZ_list2, gap_list, eigenvalues_list, final_p; data_dir="data")
     if !isdir(data_dir)
         mkdir(data_dir)
     end
