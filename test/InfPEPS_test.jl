@@ -53,6 +53,13 @@ using MPSKit
             @test -1.0 ≤ real(ZZ_hor) ≤ 1.0
         end
     end
+
+    @testset "exact_E_from_params" begin
+        g = 2.0; J=1.0; p = 3; row = 3; nqubits = 3
+        _, energy = exact_E_from_params(g, J, p, row, nqubits)
+        @show energy
+        @test energy isa Float64
+    end
 end
 
 @testset "gate_and_cost" begin
@@ -86,15 +93,16 @@ end
 
 @testset "iterate_channel_PEPS" begin
     nqubits = 3; row = 3; niters = 10000
-    g = 1.0; J = 1.0
+    g = 0.0; J = 1.0
     gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
-    rho_iter, Z_list, X_list = iterate_channel_PEPS(gate, row; niters=niters)
-    rho_eigen, gap = exact_left_eigen(gate, row)
-    cost_x = InfPEPS.cost_X(rho_eigen, row, gate)
-    @test mean(X_list[end-length(Z_list):end]) ≈ cost_x atol=1e-2 # TODO: add correlation test, maybe the samples for zz_correlation (1250 each) is not enough 
+    A_matrix = [Matrix(gate) for _ in 1:row]
+    rho_iter, Z_list, X_list = iterate_channel_PEPS(A_matrix, row)
+    rho_eigen, gap, eigenvalues = exact_left_eigen(A_matrix, row, nqubits)
+    cost_x = InfPEPS.cost_X(rho_eigen, A_matrix, row, nqubits)
+    @test mean(X_list) ≈ cost_x atol=1e-2 
 
-    z_configs = extract_Z_configurations(Z_list, row)
-    energy = energy_measure(X_list, z_configs, g, J, row)
+    # Use Z_list directly from iterate_channel_PEPS, don't overwrite it
+    energy = InfPEPS.energy_measure(X_list, Z_list, g, J, row)
     @test energy isa Float64
 end
 

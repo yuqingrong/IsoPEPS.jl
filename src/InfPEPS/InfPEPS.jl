@@ -46,18 +46,25 @@ include("training.jl")
 include("visualization.jl")
 include("refer.jl")
 include("exact.jl")
-# Re-export main functions
+
+# iter circuit
 export iterate_channel_PEPS, iterate_dm
+
 # exact
-export contract_Elist, exact_left_eigen, single_transfer
+export contract_Elist, exact_left_eigen, single_transfer, exact_E_from_params
 export cost_X, cost_ZZ, cost_singleop, cost_ZZ_single, cost_X_circ, cost_ZZ_circ
-export build_gate_from_params, energy_measure
+
+#gate & cost
+export build_gate_from_params, energy_measure, energy_recal
+
+#training
 export train_energy_circ, train_exact, train_energy_circ_gradient, train_hybrid, train_nocompile
+
+#visualization
 export check_gap_sensitivity, check_all_gap_sensitivity_combined
-# visualization
 export block_variance, dynamics_observables, dynamics_observables_all, eigenvalues,gap, ACF, correlation, energy_con
 export save_training_data
-export exact_energy_PEPS, exact_iPEPS
+
 # refer.jl
 export result_MPSKit, result_PEPSKit, result_1d
 end 

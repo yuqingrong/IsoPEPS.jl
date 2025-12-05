@@ -1,38 +1,5 @@
-"""
-Training and optimization routines for variational iPEPS.
-Provides high-level optimization functions for finding ground states
-of quantum many-body systems using variational iPEPS ansatz.
-"""
 
-"""
-    train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int; maxiter=5000)
-
-Train variational iPEPS circuit to minimize energy.
-
-# Arguments
-- `params`: Initial parameter vector
-- `J`: Coupling strength
-- `g`: Transverse field strength  
-- `p`: Number of layers in the circuit
-- `row`: Number of rows
-- `maxiter`: Maximum number of iterations (default: 5000)
-
-# Returns
-- `X_history`: Energy history during optimization
-- `final_A`: Final optimized gate matrix
-- `final_params`: Final parameter values
-- `final_cost`: Final energy
-- `Z_list_list`: Z measurement history
-- `X_list_list`: X measurement history
-- `gap_list`: Spectral gap history
-- `params_history`: Parameter evolution history
-
-# Description
-Optimizes the variational circuit using CMA-ES to minimize the ground state
-energy of the transverse field Ising model. Tracks various observables and
-convergence metrics during training.
-"""
-function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int; measure_first=:X, share_params=true, conv_step=1000, samples=10000, maxiter=5000, abstol=1e-3)
+function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int; measure_first=:X, share_params=true, conv_step=1000, samples=10000, maxiter=5000, abstol=1e-2)
     energy_history = Float64[]
     params_history = Vector{Float64}[]
     final_A = Matrix(I, 8, 8)
@@ -41,17 +8,8 @@ function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int, nqu
     gap_list = Float64[]
     eigenvalues_list = Vector{Float64}[]
     current_params = copy(params)
-    iter_count = Ref(0)
     
     function objective(x, _)
-        iter_count[] += 1
-        
-        # Hard stop after maxiter function evaluations
-        if iter_count[] > maxiter
-            @warn "Reached maximum iterations ($maxiter). Stopping..."
-            error("Maximum iterations reached")
-        end
-        
         current_params .= x
         push!(params_history, copy(x))
         A_matrix = build_gate_from_params(x, p, row, nqubits; share_params=share_params)
@@ -65,12 +23,12 @@ function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int, nqu
         if measure_first == :X
             energy = energy_measure(X_list[end-conv_step:end], Z_list, g, J, row) 
         else
-            energy = energy_measure(Z_list[end-conv_step:end], X_list, g, J, row) 
+            energy = energy_measure(X_list, Z_list[end-conv_step:end], g, J, row) 
         end
         
         push!(energy_history, real(energy))
         push!(eigenvalues_list, eigenvalues)
-        @info "TFIM J=$J g=$g $row × ∞ PEPS, $measure_first first, Iter $(length(energy_history)), energy: $energy"
+        @info "TFIM J=$J g=$g $row × ∞ PEPS, $measure_first first, Iter $(length(energy_history)), energy: $energy, gap: $gap"
 
         return real(energy)
     end
@@ -85,27 +43,17 @@ function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int, nqu
         ub = fill(2*π, length(params))
     )
     
-    local final_params, final_cost
-    try
-        sol = solve(prob, CMAEvolutionStrategyOpt(), 
-                   maxiters=maxiter, abstol=abstol)
-        final_params = sol.u
-        final_cost = sol.objective
-        # Log stopping condition
-        @info "Optimization completed with status: $(sol.retcode)"
-        if sol.retcode == :Success
-            @info "✓ Converged (abstol=$abstol reached)"
-        elseif sol.retcode == :MaxIters
-            @info "⚠ Maximum iterations ($maxiter) reached"
-        end
-    catch e
-        if occursin("Maximum iterations reached", string(e))
-            @info "Using parameters from iteration $maxiter"
-            final_params = current_params
-            final_cost = isempty(energy_history) ? NaN : energy_history[end]
-        else
-            rethrow(e)
-        end
+    sol = solve(prob, CMAEvolutionStrategyOpt(), 
+               maxiters=maxiter, abstol=abstol)
+    final_params = sol.u
+    final_cost = sol.objective
+    
+    # Log stopping condition
+    @info "Optimization completed with status: $(sol.retcode)"
+    if sol.retcode == :Success
+        @info "✓ Converged (abstol=$abstol reached)"
+    elseif sol.retcode == :MaxIters
+        @info "⚠ Maximum iterations ($maxiter) reached"
     end   
     
     # Build final gate
@@ -453,29 +401,6 @@ function train_hybrid(params, J::Float64, g::Float64, p::Int, row::Int;
     return energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, params_history
 end
 
-"""
-    train_nocompile(gate, row, M::AbstractManifold, J::Float64, g::Float64; maxiter=3000)
-
-Train on a manifold without gate compilation.
-
-# Arguments
-- `gate`: Initial gate (as matrix on manifold)
-- `row`: Number of rows
-- `M`: Manifold to optimize on
-- `J`: Coupling strength
-- `g`: Transverse field strength
-- `maxiter`: Maximum iterations (default: 3000)
-
-# Returns
-- `result`: Manopt optimization result
-- `final_energy`: Final energy value
-- `final_p`: Final point on manifold
-
-# Description
-Uses Manopt's Nelder-Mead on a manifold for optimization without
-recompiling the gate at each step. Useful for constrained optimization
-on unitary groups or other manifolds.
-"""
 function train_nocompile(gate, row::Int, nqubits::Int, M::AbstractManifold, J::Float64, g::Float64; maxiter=3000)
     energy_history = Float64[]
     gap_list = Float64[]

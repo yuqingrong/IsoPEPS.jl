@@ -10,9 +10,10 @@ function _build_parameterized_gate(params, r, nqubits)
     # Build CNOT gates in a ring: 2->1, 3->2, ..., row->(row-1), 1->row TODO: check if no 1 -> row
     
     cnot_gates = Matrix{ComplexF64}(I, 2^nqubits, 2^nqubits)
-    for i in 1:nqubits
+    for i in 1:(nqubits-1)
         target = i
-        control = (i % nqubits) + 1  
+        #control = (i % nqubits) + 1  
+        control = i+1
         cnot_gates *= Matrix(cnot(nqubits, control, target))
     end
   
@@ -96,5 +97,12 @@ function energy_measure(X_list, Z_list, g, J, row)
 end
 
 
-
+function energy_recal(g::Float64, J::Float64, p::Int, row::Int, nqubits::Int; data_dir="data", optimizer=GreedyMethod())
+    X_file = joinpath(data_dir, "compile_X_list_list_row=$(row)_g=$(g).dat")
+    X_list = parse.(Float64, split(readlines(X_file)[end]))
+    Z_file = joinpath(data_dir, "compile_Z_list_list_row=$(row)_g=$(g).dat")
+    Z_list = parse.(Float64, split(readlines(Z_file)[end]))
+    energy = energy_measure(X_list, Z_list, g, J, row)
+    return energy
+end
 

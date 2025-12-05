@@ -24,14 +24,8 @@ The spectral gap quantifies how quickly the channel approaches its fixed point.
 #             2  1
 
 function exact_left_eigen(A_matrix, row, nqubits)
+    A_tensors = _A_matrix2A_tensors(A_matrix, row, nqubits)
     total_qubits = Int((row+1)*(nqubits-1)/2)
-    A_size = ntuple(i -> 2, 2*nqubits)
-    indices = (ntuple(_ -> Colon(), nqubits)..., 1, ntuple(_ -> Colon(), nqubits-1)...)
-    A_tensors = Vector{Array{ComplexF64, 2*nqubits-1}}(undef, row)
-    for i in 1:row
-        A_tensors[i] = reshape(A_matrix[i], A_size)[indices...]
-    end
-    
     _, T = contract_Elist([A_tensors[i] for i in 1:row], [conj(A_tensors[i]) for i in 1:row], row)
     T = reshape(T, 4^total_qubits, 4^(total_qubits))    # D=2
     eigenvalues = sort(abs.(LinearAlgebra.eigen(T).values))
@@ -93,26 +87,6 @@ function cost_doubleop_ver(rho, A_matrix)
     return ZZ_exp1[], ZZ_exp2[]
 end
 
-"""
-    contract_Elist(tensor_ket, tensor_bra, row; optimizer=GreedyMethod())
-
-Contract a list of tensors to form the transfer matrix.
-
-# Arguments
-- `tensor_ket`: List of ket tensors
-- `tensor_bra`: List of bra tensors
-- `row`: Number of rows
-- `optimizer`: Contraction order optimizer (default: GreedyMethod())
-
-# Returns
-- `code`: Optimized einsum contraction code
-- Result of the contraction
-
-# Description
-Constructs and contracts the tensor network representing the transfer matrix
-by pairing ket and bra tensors. Automatically generates optimal contraction
-orders for efficiency.
-"""
 function contract_Elist(tensor_ket, tensor_bra, row; optimizer=GreedyMethod())
     store = IndexStore()
     index_bra = Vector{Int}[]
@@ -167,32 +141,12 @@ function contract_Elist(tensor_ket, tensor_bra, row; optimizer=GreedyMethod())
     return code, code(tensor_ket..., tensor_bra...)
 end
 
-"""
-cost_X(rho, row, gate)
-Compute X observable expectation by direct tensor contraction.
-
-# Arguments
-- `rho`: Density matrix
-- `row`: Number of rows
-- `gate`: Quantum gate
-
-# Returns
-Expectation value ⟨X⟩
-
-# Description
-More accurate than measurement-based approach, uses exact tensor contraction.
-"""
 function cost_X(rho, A_matrix, row, nqubits; optimizer=GreedyMethod())
-    # Setup: reshape density matrix and A tensors
     total_qubits = Int((row+1)*(nqubits-1)/2)
     env_size = ntuple(i -> 2, 2*total_qubits)
-    A_size = ntuple(i -> 2, 2 * nqubits)
-    indices = (ntuple(_ -> Colon(), nqubits)..., 1, ntuple(_ -> Colon(), nqubits-1)...)
-    
     rho = reshape(rho, env_size...)
     R = reshape(Matrix(I,Int(sqrt(4^total_qubits)),Int(sqrt(4^total_qubits))), env_size)
-    A_tensors = [reshape(A_matrix[i], A_size)[indices...] for i in 1:row]
-    
+    A_tensors = _A_matrix2A_tensors(A_matrix, row, nqubits)
     # Prepare AX tensors for each position (apply X operator)
     AX_tensors = [ein"iabcd,ij -> jabcd"(A_tensors[i], Matrix(X)) for i in 1:row]   #TODO: still 3 qubits per gate
     tensor_bra = [conj(A_tensors[i]) for i in 1:row]
@@ -232,16 +186,11 @@ function _compute_ZZ_contraction(tensor_ket_a, tensor_ket_b, tensor_bra, rho, R,
 end
 
 function cost_ZZ(rho, A_matrix, row, nqubits; optimizer=GreedyMethod())
-    # Setup: reshape density matrix and A tensors
     total_qubits = Int((row+1)*(nqubits-1)/2)
     env_size = ntuple(i -> 2, 2*total_qubits)
-    A_size = ntuple(i -> 2, 2 * nqubits)
-    indices = (ntuple(_ -> Colon(), nqubits)..., 1, ntuple(_ -> Colon(), nqubits-1)...)
-    
     rho = reshape(rho, env_size...)
     R = reshape(Matrix(I,Int(sqrt(4^total_qubits)),Int(sqrt(4^total_qubits))), env_size)
-    A_tensors = [reshape(A_matrix[i], A_size)[indices...] for i in 1:row]
-    
+    A_tensors = _A_matrix2A_tensors(A_matrix, row, nqubits)
     # Prepare AZ tensors for each position (apply Z operator)
     AZ_tensors = [ein"iabcd,ij -> jabcd"(A_tensors[i], Matrix(Z)) for i in 1:row]
     tensor_ket = A_tensors
@@ -255,4 +204,26 @@ function cost_ZZ(rho, A_matrix, row, nqubits; optimizer=GreedyMethod())
     ZZ_hor = _compute_ZZ_contraction(tensor_ket2, tensor_ket2, tensor_bra, rho, R, row, total_qubits, optimizer)
     
     return ZZ_ver, ZZ_hor
+end
+
+function _A_matrix2A_tensors(A_matrix, row, nqubits)
+    total_qubits = Int((row+1)*(nqubits-1)/2)
+    A_size = ntuple(i -> 2, 2 * nqubits)
+    indices = (ntuple(_ -> Colon(), nqubits)..., 1, ntuple(_ -> Colon(), nqubits-1)...)
+    A_tensors = [reshape(A_matrix[i], A_size)[indices...] for i in 1:row]
+    return A_tensors
+end
+
+function exact_E_from_params(g::Float64, J::Float64, p::Int, row::Int, nqubits::Int; data_dir="data", optimizer=GreedyMethod())
+    params_file = joinpath(data_dir, "compile_params_history_row=$(row)_g=$(g).dat")
+    params = parse.(Float64, split(readlines(params_file)[end]))
+    A_matrix = build_gate_from_params(params, p, row, nqubits; share_params=true)
+    rho, gap, eigenvalues = exact_left_eigen(A_matrix, row, nqubits)
+    X_cost = real(cost_X(rho, A_matrix, row, nqubits))
+    ZZ_exp1, ZZ_exp2 = cost_ZZ(rho, A_matrix, row, nqubits)
+    ZZ_exp1 = real(ZZ_exp1)
+    ZZ_exp2 = real(ZZ_exp2)
+    energy = -g*X_cost - J*(row == 1 ? ZZ_exp2 : ZZ_exp1 + ZZ_exp2) 
+    @show X_cost, ZZ_exp1, ZZ_exp2
+    return gap, energy
 end
