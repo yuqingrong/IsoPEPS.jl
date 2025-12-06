@@ -65,43 +65,43 @@ function _save_training_data_exact(g::Float64, row::Int, energy_history, X_list,
         mkdir(data_dir)
     end
     # Save energy history
-    open(joinpath(data_dir, "nocompile_energy_history_row=$(row)_g=$(g)_.dat"), "w") do io
+    open(joinpath(data_dir, "exact_energy_history_row=$(row)_g=$(g)_.dat"), "w") do io
         for energy in energy_history
             println(io, energy)
         end
     end
 
     # Save Z_list_list (each row is one Z_list)
-    open(joinpath(data_dir, "nocompile_ZZ_list1_row=$(row)_g=$(g).dat"), "w") do io
+    open(joinpath(data_dir, "exact_ZZ_list1_row=$(row)_g=$(g).dat"), "w") do io
         for Z in ZZ_list1
             println(io, Z)
         end
     end
 
-    open(joinpath(data_dir, "nocompile_ZZ_list2_row=$(row)_g=$(g).dat"), "w") do io
+    open(joinpath(data_dir, "exact_ZZ_list2_row=$(row)_g=$(g).dat"), "w") do io
         for Z in ZZ_list2
             println(io, Z)
         end
     end
     # Save X_list_list (each row is one X_list)
-    open(joinpath(data_dir, "nocompile_X_list_row=$(row)_g=$(g).dat"), "w") do io
+    open(joinpath(data_dir, "exact_X_list_row=$(row)_g=$(g).dat"), "w") do io
         for X in X_list
             println(io, X)
         end
     end
     # Save gap list
-    open(joinpath(data_dir, "nocompile_gap_list_row=$(row)_g=$(g).dat"), "w") do io
+    open(joinpath(data_dir, "exact_gap_list_row=$(row)_g=$(g).dat"), "w") do io
         for gap in gap_list
             println(io, gap)
         end
     end
 
-    open(joinpath(data_dir, "nocompile_eigenvalues_list_row=$(row)_g=$(g).dat"), "w") do io
+    open(joinpath(data_dir, "exact_eigenvalues_list_row=$(row)_g=$(g).dat"), "w") do io
         for eigenvalues in eigenvalues_list
             println(io, join(eigenvalues, " "))
         end
     end
-    open(joinpath(data_dir, "nocompile_final_p_row=$(row)_g=$(g).dat"), "w") do io
+    open(joinpath(data_dir, "exact_final_p_row=$(row)_g=$(g).dat"), "w") do io
         for p in final_p
             println(io, join(p, " "))
         end
@@ -1373,7 +1373,7 @@ function var_mean_samples(g::Float64, J::Float64, row::Int, p::Int, nqubits::Int
     params = parse.(Float64, split(readlines(params_file)[end]))
     
     @info "Computing variance vs samples for g=$g, J=$J, row=$row"
-    
+    _, exact_energy = exact_E_from_params(g, J, p, row, nqubits; data_dir="data", optimizer=GreedyMethod())
     for samples in 1000:1000:10000
         @info "Processing samples=$samples"
         energy_list = Float64[]
@@ -1385,7 +1385,7 @@ function var_mean_samples(g::Float64, J::Float64, row::Int, p::Int, nqubits::Int
         end
         @show energy_list
         #variance = var(energy_list)
-        variance = mean((energy_list .-(-2.507866896802187)) .^2)
+        variance = mean((energy_list .-(exact_energy)) .^2)
         push!(var_list, variance)
         push!(samples_list, samples)
         @info "samples=$samples, variance=$variance"

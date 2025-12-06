@@ -6,16 +6,17 @@ using Yao, Manifolds
 using LinearAlgebra, OMEinsum
 
 function simulation(J::Float64, g::Float64, row::Int, p::Int, nqubits::Int; maxiter=5000, measure_first=:X)
-    #Random.seed!(1234)
+    Random.seed!(12)
     params = rand(2*nqubits*p)
-    energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, eigenvalues_list, params_history, final_gap = train_energy_circ(params, J, g, p, row, nqubits; maxiter=maxiter, measure_first=measure_first)
+    #energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, eigenvalues_list, params_history, final_gap = train_energy_circ(params, J, g, p, row, nqubits; maxiter=maxiter, measure_first=measure_first)
+    energy_history, final_A, final_params, final_cost, X_list, ZZ_list1, ZZ_list2, gap_list, eigenvalues_list = train_exact(params, J, g, p, row, nqubits; maxiter=maxiter, measure_first=measure_first)
     #gate = Yao.matblock(rand_unitary(ComplexF64, 2^nqubits))
     #M = Manifolds.Unitary(2^nqubits, Manifolds.ℂ)
     #result, final_energy, final_p, X_list, ZZ_list1, ZZ_list2, energy_history, gap_list, eigenvalues_list = train_nocompile(gate, row, nqubits,M, J, g; maxiter=maxiter)
     #return result, final_energy, final_p, X_list, ZZ_list1, ZZ_list2, energy_history, gap_list, eigenvalues_list
     #energy_history, final_A, final_params, final_cost, X_list, ZZ_list1, ZZ_list2, gap_list, params_history, eigenvalues_list = train_exact(params, J, g, p, row, nqubits; maxiter=maxiter, measure_first=measure_first)
     @show final_params
-    return  energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, params_history
+    return nothing
 end
 
 """
@@ -25,7 +26,7 @@ Run simulations for multiple g values in parallel using multi-threading.
 Returns a dictionary with g values as keys and simulation results as values.
 
 """
-function parallel_simulation_threaded(J::Float64, g_values::Vector{Float64}, row::Int, p::Int; maxiter=5000, measure_first=:X)
+function parallel_simulation_threaded(J::Float64, g_values::Vector{Float64}, row::Int, p::Int, nqubits::Int; maxiter=5000, measure_first=:X)
     n = length(g_values)
     results = Vector{Any}(undef, n)
     
@@ -63,11 +64,10 @@ function parallel_simulation_threaded(J::Float64, g_values::Vector{Float64}, row
         g = g_values[i]
         println("Thread $(Threads.threadid()): Starting simulation for g = $(g)")
         
-        #Random.seed!(12)
+        Random.seed!(12)
         params = rand(6*p*row)
         
-        energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, params_history = 
-            train_energy_circ(params, J, g, p, row; maxiter=maxiter, measure_first=measure_first)
+        energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, eigenvalues_list, params_history, final_gap = train_energy_circ(params, J, g, p, row, nqubits; maxiter=maxiter, measure_first=measure_first)
         
         results[i] = (
             g = g,
@@ -90,16 +90,16 @@ function parallel_simulation_threaded(J::Float64, g_values::Vector{Float64}, row
 end
 
 
-J=1.0; g=2.0; g_values=[0.0, 0.25,0.5,0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5]; row=1
+J=1.0; g=4.0; g_values=[0.0, 0.25,0.5,0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5]; row=2
 d=2; D=2; nqubits=3
 p=3
 #ACF(3.0; measure_first=:Z, max_lag=50)
 #E, ξ_h, ξ_v, λ_h, λ_v = result_PEPSKit(d, D, J, g; χ=20, ctmrg_tol=1e-10, grad_tol=1e-4, maxiter=1000)
 #E, len_gapped, entrop_gapped = result_MPSKit(d, D, g, row)
-for g in [0.0, 0.5, 1.0,1.5]
-    simulation(J, g, row, p, nqubits; maxiter=5000, measure_first=:Z)
-end
-gap, energy = exact_E_from_params(g, J, p, row, nqubits; data_dir="data", optimizer=GreedyMethod())
+
+simulation(J, g, row, p, nqubits; maxiter=20000, measure_first=:Z)
+
+ gap, energy = exact_E_from_params(g, J, p, row, nqubits; data_dir="data", optimizer=GreedyMethod())
 @show energy
 
 

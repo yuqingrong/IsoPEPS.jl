@@ -108,8 +108,9 @@ end
 
 @testset "refer" begin
     @testset "result_MPSKit" begin
-        J=1.0; g=0.25; row=3; d=2; D=8
+        J=1.0; g=4.0; row=2; d=2; D=8
         E, len_gapped, entrop_gapped, spectrum = result_MPSKit(d, D, g, row)
+        @show E
     end
 
     @testset "transfer matrix match MPSKit" begin

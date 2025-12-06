@@ -1,5 +1,5 @@
 
-function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int; measure_first=:X, share_params=true, conv_step=1000, samples=10000, maxiter=5000, abstol=1e-2)
+function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int; measure_first=:X, share_params=true, conv_step=1000, samples=10000, maxiter=5000, abstol=0.05)
     energy_history = Float64[]
     params_history = Vector{Float64}[]
     final_A = Matrix(I, 8, 8)
@@ -64,7 +64,7 @@ function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int, nqu
     return energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, eigenvalues_list, params_history, final_gap
 end
 
-function train_exact(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int; measure_first=:X, niters=10000, maxiter=5000, abstol=1e-8)
+function train_exact(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int; measure_first=:X, niters=10000, maxiter=5000, abstol=1e-6)
     energy_history = Float64[]
     params_history = Vector{Float64}[]
     final_A = Matrix(I, 8, 8)
@@ -139,7 +139,7 @@ function train_exact(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::
     # Build final gate
     final_A = build_gate_from_params(final_params, p, row, nqubits)
     
-    _save_training_data_exact(g, energy_history, X_list, ZZ_list1, ZZ_list2, gap_list, eigenvalues_list, final_p)
+    _save_training_data_exact(g, row, energy_history, X_list, ZZ_list1, ZZ_list2, gap_list, eigenvalues_list, final_params)
    
     return energy_history, final_A, final_params, final_cost, X_list, ZZ_list1, ZZ_list2, gap_list, eigenvalues_list
 end
