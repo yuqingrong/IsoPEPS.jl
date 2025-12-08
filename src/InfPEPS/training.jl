@@ -8,8 +8,15 @@ function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int, nqu
     gap_list = Float64[]
     eigenvalues_list = Vector{Float64}[]
     current_params = copy(params)
-    
+    iter_count = Ref(0)
     function objective(x,_)
+        iter_count[] += 1
+        
+        # Hard stop after maxiter function evaluations
+        if iter_count[] > maxiter
+            @warn "Reached maximum iterations ($maxiter). Stopping..."
+            error("Maximum iterations reached")
+        end
         current_params .= x
         push!(params_history, copy(x))
         A_matrix = build_gate_from_params(x, p, row, nqubits; share_params=share_params)
@@ -35,26 +42,29 @@ function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int, nqu
     
     @info "Number of parameters is $(length(params))"
   
-    # Setup optimization problem
-    f = OptimizationFunction(objective)
-    prob = Optimization.OptimizationProblem(
-        f, params, 
-        lb = zeros(length(params)), 
-        ub = fill(2*π, length(params))
-    )
-    
-    sol = solve(prob, CMAEvolutionStrategyOpt(), 
-               maxiters=maxiter, abstol=abstol)
-    final_params = sol.u
-    final_cost = sol.objective
-    
-    # Log stopping condition
-    @info "Optimization completed with status: $(sol.retcode)"
-    if sol.retcode == :Success
-        @info "✓ Converged (abstol=$abstol reached)"
-    elseif sol.retcode == :MaxIters
-        @info "⚠ Maximum iterations ($maxiter) reached"
-    end   
+   # Setup optimization problem
+   f = OptimizationFunction(objective)
+   prob = Optimization.OptimizationProblem(
+       f, params, 
+       lb = zeros(length(params)), 
+       ub = fill(2*π, length(params))
+   )
+   
+   local final_params, final_cost
+   try
+       sol = solve(prob, CMAEvolutionStrategyOpt(), 
+                  maxiters=maxiter, abstol=abstol)
+       final_params = sol.u
+       final_cost = sol.objective
+   catch e
+       if occursin("Maximum iterations reached", string(e))
+           @info "Using parameters from iteration $maxiter"
+           final_params = current_params
+           final_cost = isempty(energy_history) ? NaN : energy_history[end]
+       else
+           rethrow(e)
+       end
+   end
     
     @show final_cost
     final_A = build_gate_from_params(final_params, p, row, nqubits)

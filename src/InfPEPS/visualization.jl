@@ -403,9 +403,9 @@ function gap(g_values; data_dir="data")
     end
 end
 
-function ACF(g::Float64; measure_first=:X, data_dir="data", save_path=nothing, max_lag=nothing)
+function ACF(g::Float64,row::Int; measure_first=:X, data_dir="data", save_path=nothing, max_lag=nothing)
     
-    filename = joinpath(data_dir, "$(measure_first)_first_$(measure_first)_list_list_g=$(g).dat")
+    filename = joinpath(data_dir, "compile_Z_list_list_row=$(row)_g=$(g).dat")
     
     if !isfile(filename)
         @error "File not found: $filename"
@@ -432,19 +432,9 @@ function ACF(g::Float64; measure_first=:X, data_dir="data", save_path=nothing, m
         
         # Get the last line
         last_line = data_lines[end]
-        
-        # Parse the Z values from the last line
-               # Parse the Z values from the last line (excluding indices that are multiples of 3)
-        #O = [parse(Float64, x) for (i, x) in enumerate(split(last_line)) if i % 3 != 0]
-        #O = [parse(Float64, x) for (i, x) in enumerate(split(last_line)) if i % 4 == 0]
-        O = parse.(Float64, split(last_line))
+        O = parse.(Float64, split(last_line))[1000:end]
         N = length(O)
         @info "g=$g: Found $N observable values in last line"
-        
-        if N < 10
-            @error "g=$g: Too few data points ($N) for autocorrelation analysis"
-            return nothing
-        end
         
         # Determine maximum lag
         if max_lag === nothing
@@ -452,13 +442,11 @@ function ACF(g::Float64; measure_first=:X, data_dir="data", save_path=nothing, m
         else
             max_lag = min(max_lag, div(N, 2))
         end
-        
         @info "Calculating autocorrelation function up to lag $max_lag"
         
-        # Calculate mean and variance (using every other point: 1, 3, 5, ...)
         O_mean = mean(O)
         O_centered = O .- O_mean
-        C0 = sum(O_centered[i]^2 for i in 1:N)  # Variance using every other point
+        C0 = sum(O_centered[i]^2 for i in 1:N) 
         
         # Get autocorrelation from BinningAnalysis for comparison
         LB = BinningAnalysis.LogBinner(O)
@@ -472,8 +460,6 @@ function ACF(g::Float64; measure_first=:X, data_dir="data", save_path=nothing, m
         
         for k in 1:max_lag
             lag = k - 1
-            
-          
             # Calculate C(lag) = mean((O[i] - mean) * (O[i+lag] - mean))
             n_pairs = N - lag
             sum_prod = 0.0
@@ -481,36 +467,33 @@ function ACF(g::Float64; measure_first=:X, data_dir="data", save_path=nothing, m
                 sum_prod += O_centered[i] * O_centered[i + lag]
                 #sum_prod += O[i] * O[i + lag]
             end
-            acf[k] = abs(sum_prod / C0)
+            acf[k] = abs(-log(abs(sum_prod / C0)))
         end
         
-        @info "ACF calculated. acf[1] = $(acf[1]) (should be 1.0)"
+        @info "ACF calculated. acf[1] = $(acf[1]) (should be 0.0)"
         @info "First few ACF values: $(acf[1:min(10, length(acf))])"
         
-        # Fit exponential model: exp(-x / ξ)
-        model(x, p) = exp.(-x ./ p[1])  # p = [ξ]
+        model(x, p) = p[1] .* x  # y=kx
+        lags_for_fit = collect(0:(max_lag-1))
+        @show lags_for_fit
+        acf_for_fit = acf
         
-        # Use data from lag=1 onwards for fitting (skip lag=0 which is always 1.0)
-        lags_for_fit = collect(1:(max_lag-1))
-        acf_for_fit = acf[2:end]  # Skip first point (lag=0)
-        
-        # Initial guess: A ≈ acf[2], ξ ≈ 1/log(acf[2]/acf[1])
-        #A_init = acf[2]
-        xi_init = 1.0 / (-log(abs(acf[2])))
-        xi_init = max(0.1, min(xi_init, 100.0))  # Bound initial guess
-        p0 = [xi_init]
+        # Initial guess
+        # Use a point further out for better initial slope estimate
+        k_init = length(acf) >= 10 ? acf[10] / 10.0 : acf[end] / (max_lag - 1)
+        k_init = max(0.001, min(k_init, 10.0))  # Bound initial guess
+        p0 = [k_init]
         
         # Fit the model
         fit_result = nothing
-        A_fit = NaN
-        xi_fit = NaN
+        k_fit = NaN
         try
             fit_result = curve_fit(model, lags_for_fit, acf_for_fit, p0)
             fitted_params = coef(fit_result)
-            xi_fit = fitted_params[1]
+            k_fit = fitted_params[1]
             
-            @info "Exponential fit results:"
-            @info "  ξ (correlation length) = $(round(xi_fit, digits=4))"
+            @info "Linear fit results:"
+            @info "  k (slope) = $(round(k_fit, digits=4))"
             
             # Compare with gap prediction
             gap_file = joinpath(dirname(filename), "$(measure_first)_first_gap_list_g=$(g).dat")
@@ -519,12 +502,13 @@ function ACF(g::Float64; measure_first=:X, data_dir="data", save_path=nothing, m
                 if !isempty(gap_lines)
                     gap = parse(Float64, gap_lines[end])
                     xi_predicted = 1.0 / gap
-                    @info "  Predicted ξ from gap: $(round(xi_predicted, digits=4))"
-                    @info "  Ratio ξ_fit/ξ_predicted: $(round(xi_fit/xi_predicted, digits=4))"
+                    k_predicted = 1.0 / xi_predicted  # Linear model: slope ≈ 1/ξ
+                    @info "  Predicted k from gap: $(round(k_predicted, digits=4))"
+                    @info "  Ratio k_fit/k_predicted: $(round(k_fit/k_predicted, digits=4))"
                 end
             end
         catch e
-            @warn "Exponential fit failed: $e"
+            @warn "Linear fit failed: $e"
         end
         
         # Create the plot
@@ -532,27 +516,27 @@ function ACF(g::Float64; measure_first=:X, data_dir="data", save_path=nothing, m
         p = Plots.plot(
             lags,
             acf,
-            xlabel="Lag k",
-            ylabel="Autocorrelation C(k)",
-            title="$(measure_first) Autocorrelation for g=$g, τ_c_fit =$(round(xi_fit, digits=2))",
+            xlabel="d",
+            ylabel="-ln(|⟨CᵢCᵢ₊d⟩|)",
+            title="$(measure_first) Autocorrelation for g=$g, k_fit =$(round(k_fit, digits=2))",
             legend=:topright,
             linewidth=2,
             size=(800, 600),
             marker=:circle,
             markersize=3,
-            label="ACF (data)"
+            label="-ln(|⟨CᵢCᵢ₊d⟩|)"
         )
         
         # Add fitted curve if fit succeeded
         if fit_result !== nothing
             fitted_params = coef(fit_result)
-            xi_fit = fitted_params[1]
+            k_fit_plot = fitted_params[1]
             fitted_curve = model(lags, fitted_params)
             Plots.plot!(p, lags, fitted_curve, 
                 linewidth=2, 
                 linestyle=:dash, 
                 color=:red,
-                label="Fit: exp(-k/$(round(xi_fit, digits=2))); Binnng: τ = $tau_BA"
+                label="Fit: y=$(round(k_fit_plot, digits=2))d; Binnng: τ = $tau_BA"
         )
         end
         
@@ -561,7 +545,7 @@ function ACF(g::Float64; measure_first=:X, data_dir="data", save_path=nothing, m
         
         # Save the plot
         if save_path === nothing
-            save_path = "image/$(measure_first)_ACF_g=$(g).pdf"
+            save_path = "image/$(measure_first)_ACF_row=$(row)_g=$(g).pdf"
         end
         savefig(p, save_path)
         @info "Plot saved as '$save_path'"
@@ -574,15 +558,14 @@ function ACF(g::Float64; measure_first=:X, data_dir="data", save_path=nothing, m
     end
 end
 
-function correlation(g::Float64; measure_first=:X, data_dir="data", save_path=nothing, max_lag=nothing)
+function correlation(g::Float64,row::Int; measure_first=:X, data_dir="data", save_path=nothing, max_lag=nothing)
     
-    filename = joinpath(data_dir, "$(measure_first)_first_X_list_list_g=$(g).dat")
+    filename = joinpath(data_dir, "compile_Z_list_list_row=$(row)_g=$(g).dat")
     
     if !isfile(filename)
         @error "File not found: $filename"
         return nothing
     end
-    
     @info "Reading $filename..."
     
     # Read the last line
@@ -1369,8 +1352,8 @@ function var_mean_samples(g::Float64, J::Float64, row::Int, p::Int, nqubits::Int
     var_list = Float64[]
     samples_list = Int[]
     
-    params_file = joinpath(data_dir, "Z_first_3_params_history_g=$(g).dat")
-    params = parse.(Float64, split(readlines(params_file)[end]))
+    params_file = joinpath(data_dir, "compile_final_params_row=$(row)_g=$(g).dat")
+    params = []
     
     @info "Computing variance vs samples for g=$g, J=$J, row=$row"
     _, exact_energy = exact_E_from_params(g, J, p, row, nqubits; data_dir="data", optimizer=GreedyMethod())

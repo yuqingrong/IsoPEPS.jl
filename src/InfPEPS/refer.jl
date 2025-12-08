@@ -77,7 +77,7 @@ function result_PEPSKit(d::Int, D::Int, J::Float64, g::Float64; χ ::Int= 20, ct
     env₀, = leading_boundary(CTMRGEnv(peps₀, ComplexSpace(χ)), peps₀; tol=ctmrg_tol)
     peps, env, E, = fixedpoint(H, peps₀, env₀; tol=grad_tol, boundary_alg=(; tol=ctmrg_tol), 
                               optimizer_alg=(; maxiter=maxiter))
-    ξ_h, ξ_v, λ_h, λ_v = correlation_length(peps, env)
-    return E, ξ_h, ξ_v, λ_h, λ_v
+   #ξ_h, ξ_v, λ_h, λ_v = correlation_length(peps, env)
+    return E#, ξ_h, ξ_v, λ_h, λ_v
 end
 

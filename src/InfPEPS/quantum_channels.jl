@@ -1,5 +1,5 @@
 
-function iterate_channel_PEPS(A_matrix, row; conv_step=1000, samples=10000,measure_first=:X)
+function iterate_channel_PEPS(A_matrix, row; conv_step=1000, samples=100000,measure_first=:X)
     if measure_first ∉ (:X, :Z)
         throw(ArgumentError("measure_first must be either :X or :Z, got $measure_first"))
     end
