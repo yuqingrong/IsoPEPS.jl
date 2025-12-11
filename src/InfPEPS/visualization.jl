@@ -1,4 +1,4 @@
-function _save_training_data(g::Float64, row::Int, energy_history, params_history, Z_list_list, X_list_list, gap_list, eigenvalues_list, final_params, final_cost, gap_final; data_dir="data", measure_first=:X)
+function _save_training_data(g::Float64, row::Int, energy_history, params_history, Z_list_list, X_list_list, final_gap, final_eigenvalues, final_params, final_cost; data_dir="data", measure_first=:X)
     if !isdir(data_dir)
         mkdir(data_dir)
     end
@@ -28,14 +28,14 @@ function _save_training_data(g::Float64, row::Int, energy_history, params_histor
         end
     end
     # Save gap list
-    open(joinpath(data_dir, "compile_gap_list_row=$(row)_g=$(g).dat"), "w") do io
-        for gap in gap_list
+    open(joinpath(data_dir, "compile_final_gap_row=$(row)_g=$(g).dat"), "w") do io
+        for gap in final_gap
             println(io, gap)
         end
     end
     # Save eigenvalues list
-    open(joinpath(data_dir, "compile_eigenvalues_list_row=$(row)_g=$(g).dat"), "w") do io
-        for eigenvalues in eigenvalues_list
+    open(joinpath(data_dir, "compile_final_eigenvalues_row=$(row)_g=$(g).dat"), "w") do io
+        for eigenvalues in final_eigenvalues
             println(io, join(eigenvalues, " "))
         end
     end
@@ -49,12 +49,6 @@ function _save_training_data(g::Float64, row::Int, energy_history, params_histor
     open(joinpath(data_dir, "compile_final_cost_row=$(row)_g=$(g).dat"), "w") do io
         for cost in final_cost
             println(io, cost)
-        end
-    end
-
-    open(joinpath(data_dir, "compile_gap_final_row=$(row)_g=$(g).dat"), "w") do io
-        for gap in gap_final
-            println(io, gap)
         end
     end
     @info "Training data saved to $(data_dir)/ with g=$(g)"
@@ -403,9 +397,10 @@ function gap(g_values; data_dir="data")
     end
 end
 
-function ACF(g::Float64,row::Int; measure_first=:X, data_dir="data", save_path=nothing, max_lag=nothing)
+function ACF(J::Float64, g::Float64, p::Int,row::Int, nqubits::Int; measure_first=:Z, data_dir="data", save_path=nothing, max_lag=nothing, hor=true)
     
-    filename = joinpath(data_dir, "compile_Z_list_list_row=$(row)_g=$(g).dat")
+    #filename = joinpath(data_dir, "compile_Z_list_list_row=$(row)_g=$(g).dat")
+    filename = joinpath(data_dir, "exact_final_p_row=$(row)_g=$(g).dat")
     
     if !isfile(filename)
         @error "File not found: $filename"
@@ -414,8 +409,26 @@ function ACF(g::Float64,row::Int; measure_first=:X, data_dir="data", save_path=n
     
     @info "Reading $filename..."
     
-    # Read the last line
+    # Read all data from file and form a vector
+    params = []
     try
+        open(filename, "r") do file
+            for line in eachline(file)
+                if !startswith(strip(line), "#") && !isempty(strip(line))
+                    param_vec = parse.(Float64, split(line))
+                    push!(params, param_vec)
+                end
+            end
+        end
+        
+        if isempty(params)
+            @error "No data found in $filename"
+            return nothing
+        end
+        
+        @info "Loaded $(length(params)) parameter vectors from file"
+        
+        # Continue with existing logic using last parameter vector
         data_lines = []
         open(filename, "r") do file
             for line in eachline(file)
@@ -429,10 +442,19 @@ function ACF(g::Float64,row::Int; measure_first=:X, data_dir="data", save_path=n
             @error "No data lines found in $filename"
             return nothing
         end
+        params = vcat(params...)
+        @show params
+        A_matrix = build_gate_from_params(params, p, row, nqubits; share_params=true)
+        rho, Z_list, X_list = iterate_channel_PEPS(A_matrix, row; conv_step=1000, samples=1000000,measure_first=measure_first)
+        energy = energy_measure(X_list, Z_list, g, J, row)
+        @show energy
+        last_line = Z_list[1000:end]
         
-        # Get the last line
-        last_line = data_lines[end]
-        O = parse.(Float64, split(last_line))[1000:end]
+        if hor==true
+            O = last_line[1:row:end]
+        else
+            O = last_line
+        end
         N = length(O)
         @info "g=$g: Found $N observable values in last line"
         
@@ -455,8 +477,13 @@ function ACF(g::Float64,row::Int; measure_first=:X, data_dir="data", save_path=n
         tau_BA = BinningAnalysis.tau(LB)
         @info "BinningAnalysis integrated autocorrelation time: τ = $tau_BA"
         
-        # Calculate autocorrelation function manually
+        # Calculate autocorrelation function manually with error estimation
         acf = zeros(max_lag)
+        acf_err = zeros(max_lag)
+        
+        # Use block bootstrapping for error estimation
+        n_bootstrap = 100
+        block_size = min(50, div(N, 10))
         
         for k in 1:max_lag
             lag = k - 1
@@ -468,10 +495,34 @@ function ACF(g::Float64,row::Int; measure_first=:X, data_dir="data", save_path=n
                 #sum_prod += O[i] * O[i + lag]
             end
             acf[k] = abs(-log(abs(sum_prod / C0)))
+            
+            # Bootstrap error estimation
+            bootstrap_vals = zeros(n_bootstrap)
+            for b in 1:n_bootstrap
+                # Resample blocks
+                n_blocks = div(n_pairs, block_size)
+                resampled = Float64[]
+                for _ in 1:n_blocks
+                    start_idx = rand(1:(N - block_size - lag))
+                    append!(resampled, O_centered[start_idx:start_idx+block_size-1])
+                end
+                
+                if length(resampled) >= lag + 1
+                    resamp_mean = mean(resampled)
+                    resamp_centered = resampled .- resamp_mean
+                    resamp_C0 = sum(resamp_centered[i]^2 for i in 1:min(length(resamp_centered), n_pairs))
+                    resamp_sum = sum(resamp_centered[i] * resamp_centered[min(i + lag, length(resamp_centered))] 
+                                    for i in 1:min(length(resamp_centered) - lag, n_pairs))
+                    bootstrap_vals[b] = abs(-log(abs(resamp_sum / resamp_C0)))
+                end
+            end
+            acf_err[k] = std(bootstrap_vals)
         end
         
-        @info "ACF calculated. acf[1] = $(acf[1]) (should be 0.0)"
+        @info "ACF calculated with bootstrap error estimation (n_bootstrap=$n_bootstrap, block_size=$block_size)"
+        @info "acf[1] = $(acf[1]) ± $(acf_err[1]) (should be ~0.0)"
         @info "First few ACF values: $(acf[1:min(10, length(acf))])"
+        @info "First few ACF errors: $(acf_err[1:min(10, length(acf_err))])"
         
         model(x, p) = p[1] .* x  # y=kx
         lags_for_fit = collect(0:(max_lag-1))
@@ -511,20 +562,31 @@ function ACF(g::Float64,row::Int; measure_first=:X, data_dir="data", save_path=n
             @warn "Linear fit failed: $e"
         end
         
-        # Create the plot
+        # Create the plot with error bars
         lags = 0:(max_lag-1)
         p = Plots.plot(
             lags,
             acf,
             xlabel="d",
             ylabel="-ln(|⟨CᵢCᵢ₊d⟩|)",
-            title="$(measure_first) Autocorrelation for g=$g, k_fit =$(round(k_fit, digits=2))",
+            title="$(measure_first) correlation for row=$row, g=$g",
             legend=:topright,
             linewidth=2,
             size=(800, 600),
             marker=:circle,
             markersize=3,
-            label="-ln(|⟨CᵢCᵢ₊d⟩|)"
+            yerror=acf_err,
+            label="Data with error bars"
+        )
+        _, gap, _ = exact_left_eigen(A_matrix, row, nqubits)
+        @show gap
+        # Add theoretical line y = gap * x
+        theoretical_curve = gap .* lags
+        Plots.plot!(p, lags, theoretical_curve,
+            linewidth=2,
+            linestyle=:solid,
+            color=:green,
+            label="Theory: y=$(round(gap, digits=4)) d (gap from transfer matrix)"
         )
         
         # Add fitted curve if fit succeeded
@@ -536,7 +598,7 @@ function ACF(g::Float64,row::Int; measure_first=:X, data_dir="data", save_path=n
                 linewidth=2, 
                 linestyle=:dash, 
                 color=:red,
-                label="Fit: y=$(round(k_fit_plot, digits=2))d; Binnng: τ = $tau_BA"
+                label="Fit: y=$(round(k_fit_plot, digits=4))d (ratio: $(round(k_fit_plot/gap, digits=3)))"
         )
         end
         
@@ -545,7 +607,7 @@ function ACF(g::Float64,row::Int; measure_first=:X, data_dir="data", save_path=n
         
         # Save the plot
         if save_path === nothing
-            save_path = "image/$(measure_first)_ACF_row=$(row)_g=$(g).pdf"
+            save_path = "image/$(measure_first)_ACF_row=$(row)_g=$(g)_vertical.pdf"
         end
         savefig(p, save_path)
         @info "Plot saved as '$save_path'"
@@ -557,6 +619,7 @@ function ACF(g::Float64,row::Int; measure_first=:X, data_dir="data", save_path=n
         return nothing
     end
 end
+
 
 function correlation(g::Float64,row::Int; measure_first=:X, data_dir="data", save_path=nothing, max_lag=nothing)
     
@@ -895,45 +958,72 @@ function draw_gap()
 end
 
 function draw()
-    g_list = [0.01, 0.25, 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00]
-    MPSKit_list = [1/0.09938670503395748, 1/0.2767186242180228, 1/0.4558293623207221, 1/0.7611451195884831, 1/1.7296475381670806, 1/2.0838447345246576, 1/1.4864869208462, 1/1.2008972020030175, 1/1.0310843874420765]
-    PEPSKitlist = [-1.999999610358945, -2.007814504995826, -2.0312864807194675, 
-                   -2.0705176991971634, -2.1256518211812336, -2.1969439738505, 
-                   -2.2846818634108392, -2.389277196571146, -2.511299175269]
-    nocompile_list = [10.0617079483451, 3.6138131708760275, 2.193803922262251, 1.3138101013460692, 0.5781525165137043, 0.4798822256011485, 0.6727270481199901, 0.8327107524053712, 0.9698526492947356]
-    contract_list = [-1.9999998917735167, -2.0078191059955737, -2.0312516166482886, 
-                     -2.0703162733046936, -2.1268495602624498, -2.197127459624827, 
-                     -2.287280846863297, -2.3905645948990832,  -2.505084442515908]
-    compile_list = [10.840122867995094, 3.4380187943307026, 2.2297162969555773, 1.436068361228758, 0.5780242148899613, 0.47981080364804873, 0.6726520227106328, 0.8325439670588666, 0.9701494798268981]
+    g_list = [1.0, 1.5,2.0,2.5,3.0,3.5,4.0]
+    MPSKit_list = [1/0.2578353678314149, 1/ 0.33555540204090634, 1/0.4449543312401218, 1/0.6647535608179987, 1/1.4604857883943378, 1/1.020585926250979, 1/0.8310444496509529]
+    contractrow2_list = [4.229341868437619, 3.2027058878118466, 2.5141837897218506, 1.5644736638192145, 1.0340527262643096, 1.2982558625936602, 1.5644736638192145]
+    contractrow3_list = [6.72214645054244, 3.223771967755304, 2.0509835248150377, 3.203333854222672, 0.031102147204431205, 1.7399907753796913, 2.127230859908191]
+    measurerow2_list = [3.7293788678313327, 3.056366958451286, 2.6882821633610874, 3.1883266192455997, 1.4256636831433547, 1.9737348169983167, 2.6516581706512636]
+    measurerow3_list = [4.1658553940994207, 3.9027639250642845, 4.018628504686564, 3.9956480223211437, 2.617924888881849, 2.6665735844616196, 3.9787566486882997]
     
     fig = Plots.plot(xlabel="g", ylabel="spectral gap: -ln |λ_1|)", 
-                     title="spectral gap vs Transverse Field (1D)", 
-                     ylims=(0.0,11.0), xlims=(0.00, 2.25), 
+                     title="spectral gap vs Transverse Field (2D)", 
+                     ylims=(0.0,7.0), xlims=(1.0, 4.0), 
                      yscale=:linear, 
-                     yticks=[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0],
-                     xticks=[0.00, 0.25, 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00, 2.25], size=(800, 600))
+                     yticks=[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+                     xticks=[1.0, 1.5,2.0,2.5,3.0,3.5,4.0], size=(800, 600))
 
     colors = [RGBA(1,0,0,0.5), RGBA(0,1,0,0.7), RGBA(1,0.5,0,0.5), 
               RGBA(0,0,1,0.5), RGBA(0,0,0,0.5)]
     markers = [:+, :x, :star, :diamond, :circle]
     
     Plots.plot!(fig, g_list, MPSKit_list, label="MPSKit",
-              color=colors[1], marker=markers[1], markersize=4, linewidth=2)
-    #Plots.plot!(fig, g_list, PEPSKitlist, label="PEPSKit",
-                #color=colors[2], marker=markers[2], markersize=4, linewidth=2)
-    #Plots.plot!(fig, g_list, contract_list, label="contract_directly",
-                  #color=colors[3], marker=markers[3], markersize=4, linewidth=2)
+              color=colors[1], marker=markers[1], markersize=1, linewidth=2)
+    Plots.plot!(fig, g_list, contractrow2_list, label="contractrow2",
+                color=colors[2], marker=markers[2], markersize=2, linewidth=2)
+    Plots.plot!(fig, g_list, contractrow3_list, label="contractrow3",
+                color=colors[3], marker=markers[3], markersize=3, linewidth=2)
+    Plots.plot!(fig, g_list, measurerow2_list, label="measurerow2",
+                color=colors[4], marker=markers[4], markersize=4, linewidth=2)
+    Plots.plot!(fig, g_list, measurerow3_list, label="measurerow3",
+                color=colors[5], marker=markers[5], markersize=5, linewidth=2)
+
     
-    Plots.plot!(fig, g_list, nocompile_list, label="nocompile",
-               color=colors[5], marker=markers[5], markersize=4, linewidth=2)
-    Plots.plot!(fig, g_list, compile_list, label="compile",
-               color=colors[4], marker=markers[4], markersize=4, linewidth=2)
+    Plots.plot!(fig, grid=true, gridwidth=1, gridcolor=:gray, gridalpha=0.3)
+    Plots.plot!(fig, legend=:topright, legendfontsize=10)
+    Plots.savefig(fig, "image/spectral gap_vs_g_2D.pdf")
+    Plots.display(fig)
+    
+    return fig
+end
+
+function draw_energy_error()
+    g_list = [1.0, 1.5,2.0,2.5,3.0,3.5,4.0]
+    MPSKit = [-2.125426272074635, -2.283531518020085, -2.507866896802187, -2.8478757938149273, -3.2682943897391175, -3.7190408503688848, -4.185357190258307]
+    row2 = [-2.1229893589358937, -2.3477761576157614, -2.5767595159515952, -2.898724672467247, -3.3154599259925988, -3.7435440244024405, -4.221634083408341]
+    row2_error = abs.(MPSKit .- row2)
+    row3 = [-2.121685550044853, -2.341473962110339, -2.576367881285688, -2.8996361592027333, -3.254721804738692, -3.6923713696636424, -4.1231005899660405]
+    row3_error = abs.(MPSKit .- row3)
+
+    fig = Plots.plot(xlabel="g", ylabel="energy error", 
+                     title="energy error vs Transverse Field (2D)", 
+                     xticks=[1.0, 1.5,2.0,2.5,3.0,3.5,4.0], size=(800, 600))
+
+    colors = [RGBA(1,0,0,0.5), RGBA(0,1,0,0.7), RGBA(1,0.5,0,0.5), 
+              RGBA(0,0,1,0.5), RGBA(0,0,0,0.5)]
+    markers = [:+, :x, :star, :diamond, :circle]
+    
+    #Plots.plot!(fig, g_list, MPSKit_list, label="MPSKit",
+              #color=colors[1], marker=markers[1], markersize=1, linewidth=2)
+    Plots.plot!(fig, g_list, row2_error, label="row2",
+                color=colors[2], marker=markers[2], markersize=2, linewidth=2)
+    Plots.plot!(fig, g_list, row3_error, label="row3",
+                color=colors[3], marker=markers[3], markersize=3, linewidth=2)
 
     Plots.plot!(fig, grid=true, gridwidth=1, gridcolor=:gray, gridalpha=0.3)
     Plots.plot!(fig, legend=:topright, legendfontsize=10)
-    Plots.savefig(fig, "spectral gap_vs_g4.pdf")
+    Plots.savefig(fig, "image/energy_error_vs_g_2D.pdf")
     Plots.display(fig)
-    
+                
     return fig
 end
 
@@ -1348,30 +1438,48 @@ function var_samples(g::Float64, J::Float64, row::Int; data_dir="data", save_pat
     return p, sample_size_list, variance_list, std_error_list
 end
 
-function var_mean_samples(g::Float64, J::Float64, row::Int, p::Int, nqubits::Int; data_dir="data", save_path=nothing)
-    var_list = Float64[]
-    samples_list = Int[]
-    
+function var_mean_samples(g::Float64, J::Float64, row::Int, p::Int, nqubits::Int; data_dir="data", save_path=nothing, nshots=100)
     params_file = joinpath(data_dir, "compile_final_params_row=$(row)_g=$(g).dat")
     params = []
+    open(params_file, "r") do file
+        for line in eachline(file)
+            if !startswith(strip(line), "#") && !isempty(strip(line))
+                param_vec = parse.(Float64, split(line))
+                push!(params, param_vec)
+            end
+        end
+    end
+    params = vcat(params...)
+    @show params
+    @info "Computing variance vs samples for g=$g, J=$J, row=$row with $(Threads.nthreads()) threads"
+    _, exact_energy = exact_E_from_params(params, g, J, p, row, nqubits; data_dir="data", optimizer=GreedyMethod())
     
-    @info "Computing variance vs samples for g=$g, J=$J, row=$row"
-    _, exact_energy = exact_E_from_params(g, J, p, row, nqubits; data_dir="data", optimizer=GreedyMethod())
-    for samples in 1000:1000:10000
-        @info "Processing samples=$samples"
-        energy_list = Float64[]
-        for i in 1:20
+    # Define sample range
+    sample_range = 1000:1000:10000
+    n_samples = length(sample_range)
+    
+    # Pre-allocate results arrays
+    var_list = Vector{Float64}(undef, n_samples)
+    samples_list = collect(sample_range)
+    
+    # Parallelize over different sample sizes
+    Threads.@threads for idx in 1:n_samples
+        samples = samples_list[idx]
+        @info "Thread $(Threads.threadid()): Processing samples=$samples"
+        
+        # For each sample size, compute nshots energies
+        energy_list = Vector{Float64}(undef, nshots)
+        for i in 1:nshots
             A_matrix = build_gate_from_params(params, p, row, nqubits)
             rho, Z_list, X_list = iterate_channel_PEPS(A_matrix, row; conv_step=1000, samples=samples, measure_first=:Z)
-            energy = energy_measure(X_list, Z_list, g, J, row) 
-            push!(energy_list, energy)
+            energy = energy_measure(X_list, Z_list[1000:end], g, J, row) 
+            energy_list[i] = energy
         end
-        @show energy_list
+        
         #variance = var(energy_list)
         variance = mean((energy_list .-(exact_energy)) .^2)
-        push!(var_list, variance)
-        push!(samples_list, samples)
-        @info "samples=$samples, variance=$variance"
+        var_list[idx] = variance
+        @info "Thread $(Threads.threadid()): samples=$samples, variance=$variance"
     end
     
     # Create the plot
@@ -1381,7 +1489,7 @@ function var_mean_samples(g::Float64, J::Float64, row::Int, p::Int, nqubits::Int
         xlabel="Number of Samples",
         ylabel="Variance",
         title="Variance vs Samples (g=$g, J=$J, row=$row)",
-        legend=false,
+        legend=:topright,
         linewidth=2,
         marker=:circle,
         markersize=4,
@@ -1393,15 +1501,21 @@ function var_mean_samples(g::Float64, J::Float64, row::Int, p::Int, nqubits::Int
         yticks=:auto
     )
     
-    # Add 1/N reference line
-    N_range = [minimum(samples_list), maximum(samples_list)]
-    reference_scale = var_list[1] * samples_list[1]
-    reference_line = [reference_scale / N for N in N_range]
-    Plots.plot!(p_plot, N_range, reference_line,
+    # Fit reference line: y = a/x
+    # Transform to: y = a * (1/x)
+    # Least squares without intercept: a = (Σ y_i/x_i) / (Σ 1/x_i²)
+    X_inv = 1 ./ samples_list
+    a = sum(var_list .* X_inv) / sum(X_inv .^ 2)
+    @show a
+    # Generate fitted line
+    N_range = range(minimum(samples_list), maximum(samples_list), length=100)
+    fitted_line = [a / N for N in N_range]
+    
+    Plots.plot!(p_plot, N_range, fitted_line,
                linestyle=:dash,
                linewidth=2,
                color=:red,
-               label="1/N scaling")
+               label="y = $(round(a, digits=2))/x")
     
     # Save the figure
     if save_path === nothing
@@ -1412,4 +1526,54 @@ function var_mean_samples(g::Float64, J::Float64, row::Int, p::Int, nqubits::Int
     @info "Figure saved to: $save_path"
     
     return p_plot, samples_list, var_list
+end
+
+function E_vs_qubits(g::Float64, J::Float64, row::Int, p::Int, nqubits::Int; data_dir="data", save_path=nothing,nshots=100)
+    samples_list = Int[]
+    all_energies = Float64[]
+    all_samples = Int[]
+    
+    params_file = joinpath(data_dir, "compile_final_params_row=$(row)_g=$(g).dat")
+    params = []
+    open(params_file, "r") do file
+        for line in eachline(file)
+            if !startswith(strip(line), "#") && !isempty(strip(line))
+                param_vec = parse.(Float64, split(line))
+                push!(params, param_vec)
+            end
+        end
+    end
+    params = vcat(params...)
+
+    for samples in 1000:1000:10000
+        @info "Processing samples=$samples"
+        energy_list = Float64[]
+        for i in 1:nshots
+            A_matrix = build_gate_from_params(params, p, row, nqubits)
+            rho, Z_list, X_list = iterate_channel_PEPS(A_matrix, row; conv_step=1000, samples=samples, measure_first=:Z)
+            energy = energy_measure(X_list, Z_list, g, J, row) 
+            push!(energy_list, energy)
+            push!(all_energies, energy)
+            push!(all_samples, samples)
+        end
+        push!(samples_list, samples)
+    end
+    
+    # Create scatter plot
+    fig = Figure(resolution=(800, 600))
+    ax = Axis(fig[1, 1], 
+              xlabel="1/Samples", 
+              ylabel="Energy",
+              title="Energy vs 1/Samples (g=$g, J=$J, row=$row, nshots=$nshots)")
+    
+    scatter!(ax, 1 ./ all_samples, all_energies, markersize=8, alpha=0.6)
+    
+    if save_path === nothing
+        save_path = "image/E_vs_samples_sys_g=$(g)_J=$(J)_row=$(row).pdf"
+    end
+    
+    savefig(p_plot, save_path)
+    @info "Figure saved to: $save_path"
+    
+    return fig
 end

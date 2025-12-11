@@ -64,7 +64,7 @@ export train_energy_circ, train_exact, train_energy_circ_gradient, train_hybrid,
 export check_gap_sensitivity, check_all_gap_sensitivity_combined
 export block_variance, dynamics_observables, dynamics_observables_all, eigenvalues,gap, ACF, correlation, energy_con
 export save_training_data
-export var_mean_samples
+export var_mean_samples, draw, draw_energy_error
 # refer.jl
 export result_MPSKit, result_PEPSKit, result_1d
 end 

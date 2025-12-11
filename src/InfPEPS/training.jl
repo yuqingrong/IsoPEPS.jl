@@ -5,7 +5,6 @@ function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int, nqu
     final_A = Matrix(I, 8, 8)
     Z_list_list = Vector{Float64}[]
     X_list_list = Vector{Float64}[]
-    gap_list = Float64[]
     eigenvalues_list = Vector{Float64}[]
     current_params = copy(params)
     iter_count = Ref(0)
@@ -22,20 +21,17 @@ function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int, nqu
         A_matrix = build_gate_from_params(x, p, row, nqubits; share_params=share_params)
     
         rho, Z_list, X_list = iterate_channel_PEPS(A_matrix, row; conv_step=conv_step, samples=samples,measure_first=measure_first)
-        _, gap, eigenvalues = exact_left_eigen(A_matrix, row, nqubits)
-        push!(gap_list, gap)
         push!(Z_list_list, Z_list)
         push!(X_list_list, X_list)
     
         if measure_first == :X
-            energy = energy_measure(X_list[end-conv_step:end], Z_list, g, J, row) 
+            energy = energy_measure(X_list[conv_step:end], Z_list, g, J, row) 
         else
-            energy = energy_measure(X_list, Z_list[end-conv_step:end], g, J, row) 
+            energy = energy_measure(X_list, Z_list[conv_step:end], g, J, row) 
         end
         
         push!(energy_history, real(energy))
-        push!(eigenvalues_list, eigenvalues)
-        @info "TFIM J=$J g=$g $row × ∞ PEPS, $measure_first first, Iter $(length(energy_history)), energy: $energy, gap: $gap"
+        @info "TFIM J=$J g=$g $row × ∞ PEPS, $measure_first first, Iter $(length(energy_history)), energy: $energy"
 
         return real(energy)
     end
@@ -65,13 +61,21 @@ function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int, nqu
            rethrow(e)
        end
    end
-    
-    @show final_cost
-    final_A = build_gate_from_params(final_params, p, row, nqubits)
-    _,final_gap,_ = exact_left_eigen(final_A, row, nqubits)
-    _save_training_data(g,row, energy_history, params_history, Z_list_list, X_list_list, gap_list, eigenvalues_list, final_params, final_cost, final_gap; measure_first=measure_first)
+     
+    # Use parameters that achieved minimum energy
+    if !isempty(energy_history)
+        min_idx = argmin(energy_history)
+        final_params = params_history[min_idx]
+        final_cost = energy_history[min_idx]
+        @info "Best energy found at iteration $min_idx: $final_cost"
+    end
    
-    return energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, eigenvalues_list, params_history, final_gap
+    final_A = build_gate_from_params(final_params, p, row, nqubits)
+    _,final_gap, final_eigenvalues = exact_left_eigen(final_A, row, nqubits)
+    @show final_cost, final_gap, final_eigenvalues
+    _save_training_data(g,row, energy_history, params_history, Z_list_list, X_list_list, final_gap, final_eigenvalues, final_params, final_cost; measure_first=measure_first)
+   
+    return energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, final_gap, final_eigenvalues, params_history
 end
 
 function train_exact(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int; measure_first=:X, niters=10000, maxiter=5000, abstol=1e-6)
