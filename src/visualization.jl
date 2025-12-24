@@ -300,10 +300,10 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
                   acf_err::Union{AbstractVector,Nothing}=nothing,
                   fit_params::Union{Tuple{<:Real,<:Real},Nothing}=nothing,
                   title::String="Autocorrelation Function",
-                  logscale::Bool=true,
+                  logscale::Bool=false,
                   save_path::Union{String,Nothing}=nothing)
     
-    fig = Figure(size=(700, 500))
+    fig = Figure(size=(500, 350))
     ax = Axis(fig[1, 1],
               xlabel="Lag", ylabel="C(lag)",
               title=title,
@@ -428,7 +428,7 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
                                 logscale::Bool=false,
                                 save_path::Union{String,Nothing}=nothing)
     
-    fig = Figure(size=(700, 500))
+    fig = Figure(size=(500, 350))
     ax = Axis(fig[1, 1],
               xlabel="Step", ylabel=ylabel,
               title=title,
@@ -480,7 +480,7 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
                                    title::String="Variance vs Samples",
                                    save_path::Union{String,Nothing}=nothing)
     
-    fig = Figure(size=(700, 500))
+    fig = Figure(size=(500, 350))
     ax = Axis(fig[1, 1],
               xlabel="Number of Samples", ylabel="Variance",
               title=title,
