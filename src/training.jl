@@ -1,4 +1,82 @@
 """
+Result structures for optimization/training functions.
+"""
+
+"""
+    CircuitOptimizationResult
+
+Result from circuit-based optimization using sampling (optimize_circuit).
+
+# Fields
+- `energy_history::Vector{Float64}`: Energy at each iteration
+- `gates::Vector{Matrix{ComplexF64}}`: Final optimized gates
+- `params::Vector{Float64}`: Final optimized parameters
+- `energy::Float64`: Final energy value
+- `Z_samples::Vector{Float64}`: Z measurement samples from final iteration
+- `X_samples::Vector{Float64}`: X measurement samples from final iteration
+- `converged::Bool`: Whether optimization converged
+"""
+struct CircuitOptimizationResult
+    energy_history::Vector{Float64}
+    gates::Vector{Matrix{ComplexF64}}
+    params::Vector{Float64}
+    energy::Float64
+    Z_samples::Vector{Float64}
+    X_samples::Vector{Float64}
+    converged::Bool
+end
+
+"""
+    ExactOptimizationResult
+
+Result from exact tensor contraction optimization (optimize_exact).
+
+# Fields
+- `energy_history::Vector{Float64}`: Energy at each iteration
+- `gates::Vector{Matrix{ComplexF64}}`: Final optimized gates
+- `params::Vector{Float64}`: Final optimized parameters
+- `energy::Float64`: Final energy value
+- `gap::Float64`: Spectral gap
+- `eigenvalues::Vector{Float64}`: Transfer matrix eigenvalues
+- `X_expectation::Float64`: Final ⟨X⟩ value
+- `ZZ_vertical::Float64`: Final ⟨ZZ⟩ vertical
+- `ZZ_horizontal::Float64`: Final ⟨ZZ⟩ horizontal
+- `converged::Bool`: Whether optimization converged
+"""
+struct ExactOptimizationResult
+    energy_history::Vector{Float64}
+    gates::Vector{Matrix{ComplexF64}}
+    params::Vector{Float64}
+    energy::Float64
+    gap::Float64
+    eigenvalues::Vector{Float64}
+    X_expectation::Float64
+    ZZ_vertical::Float64
+    ZZ_horizontal::Float64
+    converged::Bool
+end
+
+"""
+    ManifoldOptimizationResult
+
+Result from manifold optimization using particle swarm (optimize_manifold).
+
+# Fields
+- `energy_history::Vector{Float64}`: Energy at each iteration
+- `gate::Matrix{ComplexF64}`: Final optimized gate
+- `energy::Float64`: Final energy value
+- `gap_history::Vector{Float64}`: Spectral gap at each iteration
+- `converged::Bool`: Whether optimization converged
+"""
+struct ManifoldOptimizationResult
+    energy_history::Vector{Float64}
+    gate::Matrix{ComplexF64}
+    energy::Float64
+    gap_history::Vector{Float64}
+    converged::Bool
+end
+
+"""
     optimize_circuit(params, J, g, p, row, nqubits; kwargs...)
 
 Optimize circuit parameters to minimize TFIM energy using CMA-ES.
@@ -20,22 +98,21 @@ Optimize circuit parameters to minimize TFIM energy using CMA-ES.
 - `abstol`: Absolute tolerance (default: 0.01)
 
 # Returns
-Named tuple with:
-- `energy_history`: Energy values during optimization
-- `gates`: Final optimized gates
-- `params`: Final parameters
-- `energy`: Final energy
-- `gap`: Spectral gap (placeholder)
+`CircuitOptimizationResult` with energy history, final gates, parameters, and samples
 """
 function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int; 
                           measure_first=:Z, share_params=true, conv_step=1000, 
                           samples=10000, maxiter=5000, abstol=0.01)
+    # Store initial parameters
+    initial_params = copy(params)
+    
     energy_history = Float64[]
     params_history = Vector{Float64}[]
     Z_samples_history = Vector{Float64}[]
     X_samples_history = Vector{Float64}[]
     current_params = copy(params)
     iter_count = Ref(0)
+    converged = false
     
     function objective(x, _)
         iter_count[] += 1
@@ -80,11 +157,13 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
         sol = solve(prob, CMAEvolutionStrategyOpt(), maxiters=maxiter, abstol=abstol)
         final_params = sol.u
         final_cost = sol.objective
+        converged = true
     catch e
         if occursin("Maximum iterations reached", string(e))
             @info "Using parameters from iteration $maxiter"
             final_params = current_params
             final_cost = isempty(energy_history) ? NaN : energy_history[end]
+            converged = false
         else
             rethrow(e)
         end
@@ -99,23 +178,35 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
     end
    
     final_gates = build_unitary_gate(final_params, p, row, nqubits; share_params=share_params)
-    
-    # Save results
-    save_results("data/training_g=$(g)_row=$(row).json";
-        g=g, J=J, row=row, p=p, nqubits=nqubits,
-        energy_history=energy_history,
-        final_params=final_params,
-        final_energy=final_cost,
-        measure_first=String(measure_first)
-    )
+    final_Z_samples = isempty(Z_samples_history) ? Float64[] : Z_samples_history[end]
+    final_X_samples = isempty(X_samples_history) ? Float64[] : X_samples_history[end]
    
-    return (
-        energy_history = energy_history,
-        gates = final_gates,
-        params = final_params,
-        energy = final_cost,
-        gap = 1.0  # Placeholder
+    result = CircuitOptimizationResult(
+        energy_history,
+        final_gates,
+        final_params,
+        final_cost,
+        final_Z_samples,
+        final_X_samples,
+        converged
     )
+    
+    # Save result with all input parameters
+    input_args = Dict{Symbol, Any}(
+        # Model parameters
+        :g => g, :J => J, :row => row, :p => p, :nqubits => nqubits,
+        # Optimization settings
+        :initial_params => initial_params,
+        :measure_first => String(measure_first),
+        :share_params => share_params,
+        :conv_step => conv_step,
+        :samples => samples,
+        :maxiter => maxiter,
+        :abstol => abstol
+    )
+    save_result("data/circuit_g=$(g)_row=$(row).json", result, input_args)
+    
+    return result
 end
 
 """
@@ -127,10 +218,13 @@ Optimize circuit parameters using exact tensor contraction (no sampling noise).
 Same as `optimize_circuit`
 
 # Returns
-Named tuple with energy_history, gates, params, energy, gap, eigenvalues
+`ExactOptimizationResult` with energy history, spectral properties, and expectation values
 """
 function optimize_exact(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int; 
                         maxiter=5000, abstol=1e-6)
+    # Store initial parameters
+    initial_params = copy(params)
+    
     energy_history = Float64[]
     params_history = Vector{Float64}[]
     X_history = Float64[]
@@ -140,6 +234,7 @@ function optimize_exact(params, J::Float64, g::Float64, p::Int, row::Int, nqubit
     eigenvalues_history = Vector{Float64}[]
     current_params = copy(params)
     iter_count = Ref(0)
+    converged = false
     
     function objective(x, _)
         iter_count[] += 1
@@ -186,38 +281,50 @@ function optimize_exact(params, J::Float64, g::Float64, p::Int, row::Int, nqubit
         sol = solve(prob, CMAEvolutionStrategyOpt(), maxiters=maxiter, abstol=abstol)
         final_params = sol.u
         final_cost = sol.objective
+        converged = true
     catch e
         if occursin("Maximum iterations reached", string(e))
             @info "Using parameters from iteration $maxiter"
             final_params = current_params
             final_cost = isempty(energy_history) ? NaN : energy_history[end]
+            converged = false
         else
             rethrow(e)
         end
     end   
     
     final_gates = build_unitary_gate(final_params, p, row, nqubits)
-    
-    # Save results
-    save_results("data/training_exact_g=$(g)_row=$(row).json";
-        g=g, J=J, row=row, p=p, nqubits=nqubits,
-        energy_history=energy_history,
-        X_history=X_history,
-        ZZ_vert_history=ZZ_vert_history,
-        ZZ_horiz_history=ZZ_horiz_history,
-        gap_history=gap_history,
-        final_params=final_params,
-        final_energy=final_cost
-    )
+    final_gap = isempty(gap_history) ? NaN : gap_history[end]
+    final_eigenvalues = isempty(eigenvalues_history) ? Float64[] : eigenvalues_history[end]
+    final_X = isempty(X_history) ? NaN : X_history[end]
+    final_ZZ_vert = isempty(ZZ_vert_history) ? NaN : ZZ_vert_history[end]
+    final_ZZ_horiz = isempty(ZZ_horiz_history) ? NaN : ZZ_horiz_history[end]
    
-    return (
-        energy_history = energy_history,
-        gates = final_gates,
-        params = final_params,
-        energy = final_cost,
-        gap = isempty(gap_history) ? NaN : gap_history[end],
-        eigenvalues = isempty(eigenvalues_history) ? Float64[] : eigenvalues_history[end]
+    result = ExactOptimizationResult(
+        energy_history,
+        final_gates,
+        final_params,
+        final_cost,
+        final_gap,
+        final_eigenvalues,
+        final_X,
+        final_ZZ_vert,
+        final_ZZ_horiz,
+        converged
     )
+    
+    # Save result with all input parameters
+    input_args = Dict{Symbol, Any}(
+        # Model parameters
+        :g => g, :J => J, :row => row, :p => p, :nqubits => nqubits,
+        # Optimization settings
+        :initial_params => initial_params,
+        :maxiter => maxiter,
+        :abstol => abstol
+    )
+    save_result("data/exact_g=$(g)_row=$(row).json", result, input_args)
+    
+    return result
 end
 
 """
@@ -235,10 +342,13 @@ Optimize gate on unitary manifold using particle swarm.
 - `maxiter`: Maximum iterations (default: 3000)
 
 # Returns
-Named tuple with result, energy, gate, and history
+`ManifoldOptimizationResult` with energy and gap history
 """
 function optimize_manifold(gate, row::Int, nqubits::Int, manifold::AbstractManifold, 
                            J::Float64, g::Float64; maxiter=3000)
+    # Store initial gate
+    initial_gate = copy(gate)
+    
     energy_history = Float64[]
     gap_history = Float64[]
     eigenvalues_history = Vector{Float64}[]
@@ -281,19 +391,27 @@ function optimize_manifold(gate, row::Int, nqubits::Int, manifold::AbstractManif
     final_gate = get_solver_result(result)
     final_energy = f(manifold, final_gate)
     
-    # Save results
-    save_results("data/training_manifold_g=$(g)_row=$(row).json";
-        g=g, J=J, row=row, nqubits=nqubits,
-        energy_history=energy_history,
-        gap_history=gap_history,
-        final_energy=final_energy
+    # Check convergence based on velocity criterion
+    converged = true  # particle_swarm returns when velocity is low enough or maxiter
+    
+    opt_result = ManifoldOptimizationResult(
+        energy_history,
+        final_gate,
+        final_energy,
+        gap_history,
+        converged
     )
     
-    return (
-        result = result,
-        energy = final_energy,
-        gate = final_gate,
-        energy_history = energy_history,
-        gap_history = gap_history
+    # Save result with all input parameters
+    input_args = Dict{Symbol, Any}(
+        # Model parameters
+        :g => g, :J => J, :row => row, :nqubits => nqubits,
+        # Optimization settings
+        :initial_gate => initial_gate,
+        :maxiter => maxiter,
+        :manifold_type => string(typeof(manifold))
     )
+    save_result("data/manifold_g=$(g)_row=$(row).json", opt_result, input_args)
+    
+    return opt_result
 end

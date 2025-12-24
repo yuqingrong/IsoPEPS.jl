@@ -8,15 +8,26 @@ using LinearAlgebra, OMEinsum
 function simulation(J::Float64, g::Float64, row::Int, p::Int, nqubits::Int; maxiter=5000, measure_first=:X)
     Random.seed!(12)
     params = rand(2*nqubits*p)
-    energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, final_gap, final_eigenvalues, params_history = train_energy_circ(params, J, g, p, row, nqubits; measure_first=measure_first, share_params=true, maxiter=maxiter)
-    #energy_history, final_A, final_params, final_cost, X_list, ZZ_list1, ZZ_list2, gap_list, eigenvalues_list = train_exact(params, J, g, p, row, nqubits; maxiter=maxiter, measure_first=measure_first)
-    #gate = Yao.matblock(rand_unitary(ComplexF64, 2^nqubits))
-    #M = Manifolds.Unitary(2^nqubits, Manifolds.ℂ)
-    #result, final_energy, final_p, X_list, ZZ_list1, ZZ_list2, energy_history, gap_list, eigenvalues_list = train_nocompile(gate, row, nqubits,M, J, g; maxiter=maxiter)
-    #return result, final_energy, final_p, X_list, ZZ_list1, ZZ_list2, energy_history, gap_list, eigenvalues_list
-    #energy_history, final_A, final_params, final_cost, X_list, ZZ_list1, ZZ_list2, gap_list, params_history, eigenvalues_list = train_exact(params, J, g, p, row, nqubits; maxiter=maxiter, measure_first=measure_first)
-    @show final_params
-    return nothing
+    
+    # Use new API with result struct
+    result = optimize_circuit(params, J, g, p, row, nqubits; 
+                              measure_first=measure_first, 
+                              share_params=true, 
+                              maxiter=maxiter)
+    
+    @show result.params
+    @show result.energy
+    @show result.converged
+    
+    # Alternative: exact optimization
+    # result = optimize_exact(params, J, g, p, row, nqubits; maxiter=maxiter)
+    
+    # Alternative: manifold optimization
+    # gate = Yao.matblock(rand_unitary(ComplexF64, 2^nqubits))
+    # M = Manifolds.Unitary(2^nqubits, Manifolds.ℂ)
+    # result = optimize_manifold(gate, row, nqubits, M, J, g; maxiter=maxiter)
+    
+    return result
 end
 
 """
@@ -24,157 +35,203 @@ end
 
 Run simulations for multiple g values in parallel using multi-threading.
 Returns a dictionary with g values as keys and simulation results as values.
-
 """
-function parallel_simulation_threaded(J::Float64, g_values::Vector{Float64}, row::Int, p::Int, nqubits::Int; maxiter=5000, measure_first=:Z)
+function parallel_simulation_threaded(J::Float64, g_values::Vector{Float64}, row::Int, p::Int, nqubits::Int; 
+                                       maxiter=5000, measure_first=:Z)
     n = length(g_values)
-    results = Vector{Any}(undef, n)
+    results = Vector{CircuitOptimizationResult}(undef, n)
     
     println("Running $(n) simulations in parallel with $(Threads.nthreads()) threads...")
-    #==
+
     Threads.@threads for i in 1:n
         g = g_values[i]
         println("Thread $(Threads.threadid()): Starting simulation for g = $(g)")
         
-        # Each thread gets its own random seed for thread safety
-        Random.seed!(1234 + i)
-        gate = Yao.matblock(rand_unitary(ComplexF64, 2^row))
-        M = Manifolds.Unitary(2^row, Manifolds.ℂ)
-        
-        result, final_energy, final_p, X_list, ZZ_list, energy_history, gap_list, eigenvalues_list = 
-            train_nocompile(gate, row, M, J, g; maxiter=maxiter)
-        
-        results[i] = (
-            g = g,
-            result = result,
-            final_energy = final_energy,
-            final_p = final_p,
-            X_list = X_list,
-            ZZ_list = ZZ_list,
-            energy_history = energy_history,
-            gap_list = gap_list,
-            eigenvalues_list = eigenvalues_list
-        )
-        
-        println("Thread $(Threads.threadid()): Completed simulation for g = $(g), final_energy = $(final_energy)")
-    end
-    ==#
-    #Old version using train_energy_circ
-    Threads.@threads for i in 1:n
-        g = g_values[i]
-        println("Thread $(Threads.threadid()): Starting simulation for g = $(g)")
-        
-        Random.seed!(12)
+        Random.seed!(12 + i)  # Different seed for each thread
         params = rand(2*nqubits*p)
         
-        energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, eigenvalues_list, params_history, final_gap = train_energy_circ(params, J, g, p, row, nqubits; maxiter=maxiter, measure_first=measure_first)
+        result = optimize_circuit(params, J, g, p, row, nqubits; 
+                                  maxiter=maxiter, 
+                                  measure_first=measure_first)
         
-        results[i] = (
-            g = g,
-            energy_history = energy_history,
-            final_A = final_A,
-            final_params = final_params,
-            final_cost = final_cost,
-            Z_list_list = Z_list_list,
-            X_list_list = X_list_list,
-            gap_list = gap_list,
-            params_history = params_history
-        )
+        results[i] = result
         
-        println("Thread $(Threads.threadid()): Completed simulation for g = $(g)")
+        println("Thread $(Threads.threadid()): Completed simulation for g = $(g), energy = $(result.energy)")
     end
     
-    
-    # Convert to dictionary for easier access
-    return Dict(results[i].g => results[i] for i in 1:n)
+    # Convert to dictionary for easier access (with g values as keys)
+    return Dict(g_values[i] => results[i] for i in 1:n)
 end
 
-using CairoMakie
-J=1.0; g=3.0; g_values=[0.5, 1.0, 1.5,2.0, 2.5, 3.0, 3.5, 4.0]; row=8
-d=2; D=2; nqubits=3
-p=3
- 
-#E, ξ_h, ξ_v, λ_h, λ_v = result_PEPSKit(d, D, J, g; χ=20, ctmrg_tol=1e-10, grad_tol=1e-4, maxiter=1000)
-#E, len_gapped, entrop_gapped = result_MPSKit(d, D, g, row)
-simulation(J, g, row, p, nqubits; maxiter=5000, measure_first=:Z)
-parallel_simulation_threaded(J, g_values, row, p, nqubits; maxiter=2000, measure_first=:Z)
-ACF(J, g, p,row, nqubits; max_lag=10, hor=false)
-gap, energy = exact_E_from_params(g, J, p, row, nqubits; data_dir="data", optimizer=GreedyMethod())
-draw()
-draw_energy_error()
-spin_correlation(J, g, p, row, nqubits; measure_first=:Z, conv_step=1000, samples=1000000, data_dir="data")
-C1C2(g_values, J, p, row, nqubits;samples=1000000)
-magnectization(g_values, row)
-dynamics(g, J, p, row, nqubits; conv_step=100, samples=0, nshots=100000, data_dir="data")
-energy_con([0.5, 1.0, 1.5, 2.0], row)
+# Example usage (commented out to prevent execution on include)
 #=
-gap, energy = exact_E_from_params(g, J, p, row, nqubits; data_dir="data", optimizer=GreedyMethod())
-@show energy
-eigenvalues(g_values; data_dir="data_exact")
-gap(g_values; data_dir="data_exact")
+using CairoMakie
+J = 1.0
+g = 3.0
+g_values = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
+row = 8
+d = 2
+D = 2
+nqubits = 3
+p = 3
 
-correlation(g; measure_first=:Z, data_dir="data",max_lag=2)
+# Reference calculations
+# result_ref = pepskit_ground_state(d, D, J, g; χ=20, ctmrg_tol=1e-10, grad_tol=1e-4, maxiter=1000)
+# result_ref = mpskit_ground_state(d, D, g, row)
 
-#dynamics_observables(g; measure_first=:Z)
-#dynamics_observables_all(g_values; measure_first=:Z)
-#block_variance(g,[1,5000])
-draw()
-chain_result(J::Float64, g::Float64, row::Int, d::Int, D::Int)
-energy_converge([0.25, 0.5, 1.25, 1.5])
+# Single simulation
+result = simulation(J, g, row, p, nqubits; maxiter=5000, measure_first=:Z)
+
+# Parallel simulations
+results_dict = parallel_simulation_threaded(J, g_values, row, p, nqubits; maxiter=2000, measure_first=:Z)
+
+# Plot results
+fig = Figure(size=(800, 600))
+ax = Axis(fig[1, 1], xlabel="g", ylabel="Energy", title="TFIM Energy vs g")
+energies = [results_dict[g].energy for g in g_values]
+lines!(ax, g_values, energies, marker=:circle, linewidth=2)
+display(fig)
+
+# Compute exact energy for comparison
+params = rand(2*nqubits*p)
+gap, energy = compute_exact_energy(params, g, J, p, row, nqubits)
+@show gap, energy
 =#
 
-function analyze_trained_gate(g::Float64, row::Int, p::Int; 
-                              measure_first=:Z, data_dir="data")
-    # Construct filename
-    prefix = measure_first == :X ? "X" : "Z"
-    filename = joinpath(data_dir, "$(prefix)_first_params_history_g=$(g).dat")
+"""
+    analyze_result(filename::String)
+
+Analyze a saved training result from JSON file.
+"""
+function analyze_result(filename::String)
+    result, input_args = load_result(filename)
     
-    if !isfile(filename)
-        error("File not found: $filename")
+    println("=== Training Result Analysis ===")
+    println("Type: ", typeof(result))
+    println("Final energy: ", result.energy)
+    println("Converged: ", result.converged)
+    println("Iterations: ", length(result.energy_history))
+    
+    if haskey(input_args, :g)
+        println("\nModel parameters:")
+        println("  g = ", input_args[:g])
+        println("  J = ", get(input_args, :J, "N/A"))
+        println("  row = ", get(input_args, :row, "N/A"))
+        println("  p = ", get(input_args, :p, "N/A"))
+        println("  nqubits = ", get(input_args, :nqubits, "N/A"))
     end
     
-    # Read the last line
-    lines = readlines(filename)
-    # Filter out empty lines
-    non_empty_lines = filter(line -> !isempty(strip(line)), lines)
+    # Plot training history
+    fig = plot_training_history(result; title="Training History")
+    display(fig)
     
-    if isempty(non_empty_lines)
-        error("File is empty: $filename")
-    end
-    
-    last_line = non_empty_lines[end]
-    
-    # Parse parameters
-    params = parse.(Float64, split(last_line))
-    
-    # Verify we have the right number of parameters
-    expected_params = 6 * p
-    if length(params) != expected_params
-        @warn "Expected $expected_params parameters but got $(length(params)). Using first $expected_params."
-        params = params[1:expected_params]
-    end
-    
-    @info "Loaded $(length(params)) parameters from $filename"
-    @info "Parameter range: [$(minimum(params)), $(maximum(params))]"
-    
-    # Build gate from parameters
-    A_matrix = build_gate_from_params(params, p)
-    gate = Yao.matblock(A_matrix)
-    
-    # Compute spectral properties
-    rho, gap,gap_h, eigenvalues = exact_left_eigen(gate, row)
-    
-    @info "Spectral gap: $gap"
-    @info "Horizontal spectral gap: $gap_h"
-    @info "Largest eigenvalue: $(maximum(abs.(eigenvalues)))"
-    
-    return gate, rho, gap, gap_h, eigenvalues, params
+    return result, input_args
 end
 
+"""
+    compare_methods(J::Float64, g::Float64, row::Int, p::Int, nqubits::Int; maxiter=1000)
 
-params = rand(2*nqubits*p)
-A_matrix = build_gate_from_params(params, p, row, nqubits)
-rho, Z_list, X_list = iterate_channel_PEPS(A_matrix, row, nqubits; conv_step=1000, samples=0,measure_first=:Z)
-rho = join(rho, zero_state(1))
-rho = Yao.apply!(rho, put(Int((nqubits-1)/2)*(row+1)+1,(1, 2, 3,4,5)=>matblock(A_matrix[1]))) 
-von_neumann_entropy(rho, (1))
+Compare circuit optimization vs exact optimization.
+"""
+function compare_methods(J::Float64, g::Float64, row::Int, p::Int, nqubits::Int; maxiter=1000)
+    Random.seed!(42)
+    params = rand(2*nqubits*p)
+    
+    println("Running circuit optimization...")
+    result_circuit = optimize_circuit(copy(params), J, g, p, row, nqubits; 
+                                      maxiter=maxiter, 
+                                      conv_step=100, 
+                                      samples=1000)
+    
+    println("Running exact optimization...")
+    result_exact = optimize_exact(copy(params), J, g, p, row, nqubits; 
+                                   maxiter=maxiter)
+    
+    println("\n=== Results Comparison ===")
+    println("Circuit optimization:")
+    println("  Energy: ", result_circuit.energy)
+    println("  Converged: ", result_circuit.converged)
+    
+    println("\nExact optimization:")
+    println("  Energy: ", result_exact.energy)
+    println("  Gap: ", result_exact.gap)
+    println("  Converged: ", result_exact.converged)
+    
+    # Plot comparison
+    fig = Figure(size=(1200, 500))
+    
+    ax1 = Axis(fig[1, 1], xlabel="Iteration", ylabel="Energy", title="Circuit Optimization")
+    lines!(ax1, 1:length(result_circuit.energy_history), result_circuit.energy_history, linewidth=2)
+    
+    ax2 = Axis(fig[1, 2], xlabel="Iteration", ylabel="Energy", title="Exact Optimization")
+    lines!(ax2, 1:length(result_exact.energy_history), result_exact.energy_history, linewidth=2)
+    
+    display(fig)
+    
+    return result_circuit, result_exact
+end
+
+"""
+    reconstruct_gates(result, p::Int, row::Int, nqubits::Int)
+
+Reconstruct gates from optimization result parameters.
+"""
+function reconstruct_gates(result::Union{CircuitOptimizationResult, ExactOptimizationResult}, 
+                          p::Int, row::Int, nqubits::Int; share_params=true)
+    gates = build_unitary_gate(result.params, p, row, nqubits; share_params=share_params)
+    
+    # Compute transfer spectrum
+    rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
+    
+    println("=== Gate Analysis ===")
+    println("Spectral gap: ", gap)
+    println("Largest eigenvalue: ", maximum(abs.(eigenvalues)))
+    println("Second largest eigenvalue: ", sort(abs.(eigenvalues))[end-1])
+    
+    return gates, rho, gap, eigenvalues
+end
+
+"""
+    visualize_correlation(result::CircuitOptimizationResult, row::Int)
+
+Visualize spin-spin correlation from circuit optimization result.
+"""
+function visualize_correlation(result::CircuitOptimizationResult, row::Int)
+    if isempty(result.Z_samples)
+        @warn "No Z samples in result"
+        return nothing
+    end
+    
+    fig = plot_correlation_heatmap(result.Z_samples, row; 
+                                    title="Spin-Spin Correlation")
+    display(fig)
+    
+    return fig
+end
+
+"""
+    analyze_acf(samples::Vector{Float64}; max_lag=100)
+
+Analyze autocorrelation function of samples.
+"""
+function analyze_acf(samples::Vector{Float64}; max_lag=100)
+    lags, acf, acf_err = compute_acf(samples; max_lag=max_lag, n_bootstrap=50)
+    
+    try
+        A, ξ = fit_acf_exponential(lags, acf)
+        println("Autocorrelation length: ξ = ", ξ)
+        
+        fig = plot_acf(lags, acf; 
+                      acf_err=acf_err,
+                      fit_params=(A, ξ),
+                      title="Autocorrelation Function (ξ = $(round(ξ, digits=2)))")
+        display(fig)
+        
+        return lags, acf, ξ
+    catch e
+        @warn "ACF fit failed: $e"
+        fig = plot_acf(lags, acf; acf_err=acf_err)
+        display(fig)
+        return lags, acf, NaN
+    end
+end

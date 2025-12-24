@@ -68,6 +68,7 @@ export build_unitary_gate, compute_energy
 # =============================================================================
 # Optimization / Training
 # =============================================================================
+export CircuitOptimizationResult, ExactOptimizationResult, ManifoldOptimizationResult
 export optimize_circuit, optimize_exact, optimize_manifold
 
 # =============================================================================
@@ -85,8 +86,8 @@ export mpskit_ground_state, mpskit_ground_state_1d, pepskit_ground_state
 # =============================================================================
 # Data I/O & Visualization
 # =============================================================================
-export TrainingData, save_data, load_data, save_results, load_results
+export save_result, load_result, save_results, load_results
 export plot_correlation_heatmap, plot_acf, compute_acf, fit_acf_exponential
-export plot_training_history, plot_variance_vs_samples, visualize_training
+export plot_training_history, plot_variance_vs_samples
 
 end

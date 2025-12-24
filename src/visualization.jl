@@ -3,56 +3,160 @@
 # ============================================================================
 
 """
-    TrainingData
+    save_result(filename::String, result, input_args::Dict)
 
-Container for all training-related data.
-"""
-struct TrainingData
-    # Model parameters
-    g::Float64
-    J::Float64
-    row::Int
-    p::Int
-    nqubits::Int
-    
-    # Training history
-    energy_history::Vector{Float64}
-    params_history::Vector{Vector{Float64}}
-    
-    # Observable samples
-    Z_samples::Vector{Float64}
-    X_samples::Vector{Float64}
-    
-    # Final results
-    final_params::Vector{Float64}
-    final_energy::Float64
-    spectral_gap::Float64
-end
+Save optimization result to JSON file with input arguments.
 
-"""
-    save_data(filename::String, data::TrainingData)
+# Arguments
+- `filename`: Path to save file
+- `result`: Optimization result (CircuitOptimizationResult, ExactOptimizationResult, or ManifoldOptimizationResult)
+- `input_args`: Dictionary of input arguments/metadata
 
-Save training data to a JSON file.
+# Example
+```julia
+result = optimize_circuit(...)
+input_args = Dict(
+    :g => 2.0, :J => 1.0, :row => 3,
+    :initial_params => params,
+    :maxiter => 5000
+)
+save_result("data/result.json", result, input_args)
+```
 """
-function save_data(filename::String, data::TrainingData)
+function save_result(filename::String, result::CircuitOptimizationResult, input_args::Dict)
     dir = dirname(filename)
     !isempty(dir) && !isdir(dir) && mkpath(dir)
+    
+    data = Dict{Symbol, Any}(
+        :type => "CircuitOptimizationResult",
+        :energy_history => result.energy_history,
+        :params => result.params,
+        :energy => result.energy,
+        :converged => result.converged,
+        :Z_samples => result.Z_samples,
+        :X_samples => result.X_samples,
+        :input_args => input_args
+    )
     
     open(filename, "w") do io
         JSON3.pretty(io, data)
     end
-    @info "Data saved to $filename"
+    @info "Result saved to $filename"
+end
+
+function save_result(filename::String, result::ExactOptimizationResult, input_args::Dict)
+    dir = dirname(filename)
+    !isempty(dir) && !isdir(dir) && mkpath(dir)
+    
+    data = Dict{Symbol, Any}(
+        :type => "ExactOptimizationResult",
+        :energy_history => result.energy_history,
+        :params => result.params,
+        :energy => result.energy,
+        :gap => result.gap,
+        :eigenvalues => result.eigenvalues,
+        :X_expectation => result.X_expectation,
+        :ZZ_vertical => result.ZZ_vertical,
+        :ZZ_horizontal => result.ZZ_horizontal,
+        :converged => result.converged,
+        :input_args => input_args
+    )
+    
+    open(filename, "w") do io
+        JSON3.pretty(io, data)
+    end
+    @info "Result saved to $filename"
+end
+
+function save_result(filename::String, result::ManifoldOptimizationResult, input_args::Dict)
+    dir = dirname(filename)
+    !isempty(dir) && !isdir(dir) && mkpath(dir)
+    
+    data = Dict{Symbol, Any}(
+        :type => "ManifoldOptimizationResult",
+        :energy_history => result.energy_history,
+        :gate => result.gate,
+        :energy => result.energy,
+        :gap_history => result.gap_history,
+        :converged => result.converged,
+        :input_args => input_args
+    )
+    
+    open(filename, "w") do io
+        JSON3.pretty(io, data)
+    end
+    @info "Result saved to $filename"
 end
 
 """
-    load_data(filename::String) -> TrainingData
+    load_result(filename::String; result_type=:auto)
 
-Load training data from a JSON file.
+Load optimization result from JSON file.
+
+# Arguments
+- `filename`: Path to JSON file
+- `result_type`: Result type to load (`:auto`, `:circuit`, `:exact`, or `:manifold`)
+
+# Returns
+Tuple of (result, input_args_dict)
 """
-function load_data(filename::String)
-    open(filename, "r") do io
-        JSON3.read(io, TrainingData)
+function load_result(filename::String; result_type::Symbol=:auto)
+    data = open(filename, "r") do io
+        JSON3.read(io, Dict)
     end
+    
+    # Determine type
+    if result_type == :auto
+        result_type_str = get(data, "type", get(data, :type, ""))
+        result_type = Symbol(lowercase(replace(result_type_str, "OptimizationResult" => "")))
+    end
+    
+    # Extract input_args and convert string keys to symbols
+    input_args_raw = get(data, "input_args", get(data, :input_args, Dict()))
+    input_args = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in pairs(input_args_raw))
+    
+    # Helper function to get data with both string and symbol key fallback
+    function get_data(dict, key)
+        get(dict, string(key), get(dict, Symbol(key), nothing))
+    end
+    
+    # Reconstruct result based on type
+    if result_type == :circuit
+        result = CircuitOptimizationResult(
+            Vector{Float64}(get_data(data, :energy_history)),
+            Vector{Matrix{ComplexF64}}[],  # Gates not saved to JSON
+            Vector{Float64}(get_data(data, :params)),
+            Float64(get_data(data, :energy)),
+            Vector{Float64}(get(data, "Z_samples", get(data, :Z_samples, Float64[]))),
+            Vector{Float64}(get(data, "X_samples", get(data, :X_samples, Float64[]))),
+            Bool(get_data(data, :converged))
+        )
+    elseif result_type == :exact
+        result = ExactOptimizationResult(
+            Vector{Float64}(get_data(data, :energy_history)),
+            Vector{Matrix{ComplexF64}}[],  # Gates not saved to JSON
+            Vector{Float64}(get_data(data, :params)),
+            Float64(get_data(data, :energy)),
+            Float64(get_data(data, :gap)),
+            Vector{Float64}(get_data(data, :eigenvalues)),
+            Float64(get_data(data, :X_expectation)),
+            Float64(get_data(data, :ZZ_vertical)),
+            Float64(get_data(data, :ZZ_horizontal)),
+            Bool(get_data(data, :converged))
+        )
+    elseif result_type == :manifold
+        result = ManifoldOptimizationResult(
+            Vector{Float64}(get_data(data, :energy_history)),
+            Matrix{ComplexF64}(get_data(data, :gate)),
+            Float64(get_data(data, :energy)),
+            Vector{Float64}(get_data(data, :gap_history)),
+            Bool(get_data(data, :converged))
+        )
+    else
+        error("Unknown result type: $result_type")
+    end
+    
+    return result, input_args
 end
 
 """
@@ -65,8 +169,7 @@ Save arbitrary results to a JSON file. Accepts keyword arguments for flexibility
 save_results("results.json"; 
     g=2.0, row=3, 
     energy_history=[1.0, 0.5, 0.3],
-    correlation_matrix=corr_mat,
-    acf_data=acf_values
+    correlation_matrix=corr_mat
 )
 ```
 """
@@ -137,30 +240,43 @@ function plot_correlation_heatmap(corr_matrix::Matrix;
 end
 
 """
-    plot_correlation_heatmap(data::TrainingData; kwargs...)
+    plot_correlation_heatmap(Z_samples::Vector{Float64}, row::Int; kwargs...)
 
-Compute and plot spin correlation heatmap from training data.
+Compute and plot spin correlation heatmap from Z measurement samples.
 """
-function plot_correlation_heatmap(data::TrainingData; kwargs...)
-    Z = data.Z_samples
-    row = data.row
-    
+function plot_correlation_heatmap(Z_samples::Vector{Float64}, row::Int; kwargs...)
     # Build correlation matrix
-    n_steps = div(length(Z) - row, row)
+    n_steps = div(length(Z_samples) - row, row)
     endpoint = row + n_steps * row
     
     corr = zeros(row, row)
     for i in 1:row
         for j in i:row
-            Zi = Z[i:row:endpoint]
-            Zj = Z[j:row:endpoint]
+            Zi = Z_samples[i:row:endpoint]
+            Zj = Z_samples[j:row:endpoint]
             corr[i,j] = mean(Zi .* Zj)
             corr[j,i] = corr[i,j]
         end
     end
     
-    title = get(kwargs, :title, "Spin Correlation (g=$(data.g))")
-    plot_correlation_heatmap(corr; title=title, kwargs...)
+    plot_correlation_heatmap(corr; kwargs...)
+end
+
+"""
+    plot_correlation_heatmap(result::CircuitOptimizationResult; kwargs...)
+
+Plot correlation heatmap from circuit optimization result.
+"""
+function plot_correlation_heatmap(result::CircuitOptimizationResult; kwargs...)
+    if isempty(result.Z_samples)
+        @warn "No Z samples in result"
+        return nothing
+    end
+    
+    # Infer row from samples length (this is approximate)
+    # For now, just use the samples directly
+    @warn "Row size not stored in result, correlation plot may be incorrect"
+    return nothing
 end
 
 """
@@ -334,14 +450,13 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
 end
 
 """
-    plot_training_history(data::TrainingData; kwargs...)
+    plot_training_history(result; kwargs...)
 
-Plot training history from TrainingData.
+Plot training history from optimization result.
 """
-function plot_training_history(data::TrainingData; kwargs...)
-    n = length(data.energy_history)
-    title = get(kwargs, :title, "Training History (g=$(data.g), row=$(data.row))")
-    plot_training_history(1:n, data.energy_history; title=title, kwargs...)
+function plot_training_history(result::Union{CircuitOptimizationResult, ExactOptimizationResult, ManifoldOptimizationResult}; kwargs...)
+    n = length(result.energy_history)
+    plot_training_history(1:n, result.energy_history; ylabel="Energy", kwargs...)
 end
 
 """
@@ -400,44 +515,4 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
     end
     
     return fig
-end
-
-# ============================================================================
-# Convenience functions for common workflows
-# ============================================================================
-
-"""
-    visualize_training(filename::String; save_dir="image")
-
-Load training data from JSON and generate all standard plots.
-"""
-function visualize_training(filename::String; save_dir::String="image")
-    !isdir(save_dir) && mkpath(save_dir)
-    
-    data = load_data(filename)
-    base = splitext(basename(filename))[1]
-    
-    # Training history
-    plot_training_history(data, save_path=joinpath(save_dir, "$(base)_training.pdf"))
-    
-    # Correlation heatmap
-    if !isempty(data.Z_samples)
-        plot_correlation_heatmap(data, save_path=joinpath(save_dir, "$(base)_correlation.pdf"))
-    end
-    
-    # ACF
-    if !isempty(data.Z_samples)
-        lags, acf, acf_err = compute_acf(data.Z_samples)
-        try
-            A, ξ = fit_acf_exponential(lags, acf)
-            plot_acf(lags, acf; acf_err=acf_err, fit_params=(A, ξ),
-                     title="ACF (g=$(data.g), ξ=$(round(ξ, digits=2)))",
-                     save_path=joinpath(save_dir, "$(base)_acf.pdf"))
-        catch
-            plot_acf(lags, acf; acf_err=acf_err,
-                     save_path=joinpath(save_dir, "$(base)_acf.pdf"))
-        end
-    end
-    
-    @info "All plots saved to $save_dir"
 end

@@ -1,55 +1,61 @@
 using Test
 using IsoPEPS
-using CairoMakie
-
-@testset "TrainingData" begin
-    data = TrainingData(
-        2.0, 1.0, 3, 2, 3,
-        [1.0, 0.5, 0.3],
-        [[0.1, 0.2], [0.15, 0.25], [0.2, 0.3]],
-        [0.5, 0.6, 0.7],
-        [0.8, 0.9, 1.0],
-        [0.2, 0.3],
-        0.3,
-        0.5
-    )
-    @test data.g == 2.0
-    @test data.row == 3
-    @test length(data.energy_history) == 3
-end
-
-@testset "save and load data" begin
-    data = TrainingData(
-        2.0, 1.0, 3, 2, 3,
-        [1.0, 0.5, 0.3],
-        [[0.1, 0.2], [0.15, 0.25]],
-        [0.5, 0.6],
-        [0.8, 0.9],
-        [0.2, 0.3],
-        0.3,
-        0.5
-    )
-    
-    tmpfile = tempname() * ".json"
-    save_data(tmpfile, data)
-    @test isfile(tmpfile)
-    
-    loaded = load_data(tmpfile)
-    @test loaded.g == data.g
-    @test loaded.energy_history == data.energy_history
-    
-    rm(tmpfile)
-end
+using CairoMakie: Figure
 
 @testset "save and load results" begin
-    tmpfile = tempname() * ".json"
+    # Test CircuitOptimizationResult
+    result_circuit = CircuitOptimizationResult(
+        [1.0, 0.5, 0.3],
+        [zeros(ComplexF64, 8, 8)],
+        [0.1, 0.2],
+        0.3,
+        [0.5, 0.6],
+        [0.8, 0.9],
+        true
+    )
     
-    save_results(tmpfile; g=2.0, energy=[1.0, 0.5], params=[0.1, 0.2])
+    input_args = Dict{Symbol, Any}(
+        :g => 2.0, :J => 1.0, :row => 3,
+        :initial_params => [0.0, 0.0]
+    )
+    
+    tmpfile = tempname() * ".json"
+    save_result(tmpfile, result_circuit, input_args)
     @test isfile(tmpfile)
     
-    results = load_results(tmpfile)
-    @test results["g"] == 2.0
-    @test results["energy"] == [1.0, 0.5]
+    loaded, loaded_args = load_result(tmpfile; result_type=:circuit)
+    @test loaded isa CircuitOptimizationResult
+    @test loaded.energy ≈ result_circuit.energy
+    @test loaded.converged == result_circuit.converged
+    @test loaded_args[:g] == 2.0
+    @test loaded_args[:J] == 1.0
+    
+    rm(tmpfile)
+    
+    # Test ExactOptimizationResult
+    result_exact = ExactOptimizationResult(
+        [1.0, 0.5],
+        [zeros(ComplexF64, 8, 8)],
+        [0.1, 0.2],
+        0.5,
+        0.2,
+        [1.0, 0.8],
+        0.9,
+        0.85,
+        0.88,
+        true
+    )
+    
+    input_args = Dict{Symbol, Any}(:g => 2.0, :row => 2)
+    
+    tmpfile = tempname() * ".json"
+    save_result(tmpfile, result_exact, input_args)
+    @test isfile(tmpfile)
+    
+    loaded, loaded_args = load_result(tmpfile; result_type=:exact)
+    @test loaded isa ExactOptimizationResult
+    @test loaded.gap ≈ result_exact.gap
+    @test loaded_args[:g] == 2.0
     
     rm(tmpfile)
 end
@@ -60,6 +66,12 @@ end
     
     fig = plot_correlation_heatmap(corr; title="Test")
     @test fig isa Figure
+    
+    # Test with Z samples
+    Z_samples = randn(100)
+    row = 5
+    fig2 = plot_correlation_heatmap(Z_samples, row)
+    @test fig2 isa Figure
 end
 
 @testset "compute_acf" begin
@@ -103,6 +115,13 @@ end
     # With reference
     fig2 = plot_training_history(steps, energies; reference=-1.0)
     @test fig2 isa Figure
+    
+    # With result
+    result = CircuitOptimizationResult(
+        energies, [], [], 0.5, [], [], true
+    )
+    fig3 = plot_training_history(result)
+    @test fig3 isa Figure
 end
 
 @testset "plot_variance_vs_samples" begin
@@ -116,29 +135,4 @@ end
     errors = [0.01, 0.002, 0.001, 0.0002]
     fig2 = plot_variance_vs_samples(samples, variances; errors=errors)
     @test fig2 isa Figure
-end
-
-@testset "visualize_training integration" begin
-    data = TrainingData(
-        2.0, 1.0, 3, 2, 3,
-        [1.0, 0.5, 0.3],
-        [[0.1, 0.2], [0.15, 0.25]],
-        ones(100),
-        ones(100),
-        [0.2, 0.3],
-        0.3,
-        0.5
-    )
-    
-    tmpfile = tempname() * ".json"
-    tmpdir = tempname()
-    
-    save_data(tmpfile, data)
-    visualize_training(tmpfile; save_dir=tmpdir)
-    
-    @test isdir(tmpdir)
-    @test length(readdir(tmpdir)) > 0
-    
-    rm(tmpfile)
-    rm(tmpdir, recursive=true)
 end

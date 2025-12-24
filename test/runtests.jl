@@ -1,32 +1,30 @@
 using IsoPEPS
 using Test
 
-@testset "IsoPEPS.jl" begin
-    @testset "gates" begin
-        include("gates.jl")
-    end
+@testset "gates" begin
+    include("gates.jl")
+end
 
-    @testset "exact" begin
-        include("exact.jl")
-    end
-    
-    @testset "additional_exact" begin
-        include("additional_exact.jl")
-    end
+@testset "exact" begin
+    include("exact.jl")
+end
 
-    @testset "quantum_channels" begin
-        include("quantum_channels.jl")
-    end
+@testset "additional_exact" begin
+    include("additional_exact.jl")
+end
 
-    @testset "reference" begin
-        include("reference.jl")
-    end
-    
-    @testset "training" begin
-        include("training.jl")
-    end
-    
-    @testset "visualization" begin
-        include("visualization.jl")
-    end
+@testset "quantum_channels" begin
+    include("quantum_channels.jl")
+end
+
+@testset "reference" begin
+    include("reference.jl")
+end
+
+@testset "training" begin
+    include("training.jl")
+end
+
+@testset "visualization" begin
+    include("visualization.jl")
 end
