@@ -1,0 +1,16 @@
+*.jl.*.cov
+*.jl.cov
+*.jl.mem
+/Manifest.toml
+/docs/Manifest.toml
+/docs/build/
+
+Manifest.toml
+.vscode/
+.DS_Store
+
+# Data and image files
+/data/
+/data_exact/
+/image/
+test/data
