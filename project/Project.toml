@@ -1,0 +1,13 @@
+[deps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+IsoPEPS = "ba2a9c53-054a-4f79-8e7e-3842f08de153"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Manifolds = "1cead3c2-87b3-11e9-0ccd-23c62b72b94e"
+OMEinsum = "ebe7aa44-baf0-506c-a96f-8464559b3922"
+Optimization = "7f7a1694-90dd-40f0-9382-eb1efda571ba"
+OptimizationCMAEvolutionStrategy = "bd407f91-200f-4536-9381-e4ba712f53f8"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Yao = "5872b779-8223-5990-8dd0-5abbb0748c8c"
+
+[sources]
+IsoPEPS = {path = ".."}

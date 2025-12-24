@@ -1,78 +1,70 @@
+"""
+    IsoPEPS
+
+A Julia package for infinite Projected Entangled Pair States (IsoPEPS) algorithms,
+providing functionality for:
+- Quantum channel simulations
+- Transfer matrix calculations  
+- Cost function evaluations
+- Variational optimization
+- Sensitivity analysis
+- Data visualization
+"""
 module IsoPEPS
 
-using Random
-using Yao, Yao.EasyBuild
-using KrylovKit: eigsolve
 using LinearAlgebra
-using Arpack
-using OMEinsum
-import Yao
-import Yao: mat
-using Optim
-import Optim: optimize
-using FiniteDiff, FiniteDifferences
-using SparseArrays,Arpack
-using Graphs, GraphPlot
-using Graphs: SimpleEdge
-using DifferentiationInterface
 using Statistics
+using Yao, Yao.EasyBuild
+using OMEinsum
 using OMEinsumContractionOrders
-using Manifolds, Manopt
-using RecursiveArrayTools
-using TensorKit, MPSKit, MPSKitModels, PEPSKit 
-using MPSKitModels: transverse_field_ising, InfiniteStrip, InfiniteCylinder
+using TensorKit, MPSKit, MPSKitModels, PEPSKit
+using MPSKitModels: transverse_field_ising, InfiniteStrip, InfiniteCylinder, @mpoham, InfiniteChain, nearest_neighbours, vertices
 using PEPSKit: InfiniteSquare
-using Plots
-using Colors: RGBA
 using Optimization, OptimizationCMAEvolutionStrategy
+using Manifolds, Manopt
+using Optim
+using CairoMakie
+using LsqFit
+using JSON3
 
-export statevec, vec
-export ising_hamiltonian, ising_hamiltonian_2d,ed_groundstate, ising_ham_periodic2d
-export itime_groundstate!, lanczos
-export transverse_ising,itime_groundstate!
-#export dagger_mps,inner_product
-export MPS,generate_mps,code_dot,vec2mps,code_mps2vec,mps_variation, MPO,transverse_ising_mpo,mat2mpo,local_X,mps_dot_mpo,code_sandwich
-export PEPS, _optimized_code, inner_product, zero_peps, rand_peps, SimpleGraph, SimpleDiGraph, grid, edges,add_edge!, TreeSA, MergeGreedy, generate_peps, 
-       apply_onsite!, getvlabel, getphysicallabel, newlabel, single_sandwich_code, single_sandwich, nflavor, D, two_sandwich_code, two_sandwich,
-       variables, load_variables!, f1, g1!, peps_optimize1, f2, g2!, peps_optimize2, f_ising, g_ising!, peps_optimize_ising, put, mat, 
-       long_range_coherence_peps, cached_peps_optimize1, optimized_peps_optimize2, dtorus, dgrid
-export AutoMooncake, prepare_gradient, gradient
-export local_h,peps_variation,f,g!
-export MPO,transverse_ising_mpo,mat2mpo,local_X
-export truncated_svd,mps_dot_mpo,code_sandwich
-export ishermitian
-export sparse
-export grad, central_fdm
-export dot
-export IsometricPEPS, rand_isometricpeps, mose_move_right!,mose_move_right_step!,peps_fidelity, isometric_peps, point
-export peps2ugate, get_circuit,get_reuse_circuit,get_iter_circuit,Measure, collect_blocks,I, gensample, long_range_coherence, zz_correlation, mean, Sz_convergence,
-       iter_sz_convergence, extract_sz_measurements, init_random_vq, torus_long_range_coherence, torus_gensample
-export ProductManifold, Stiefel, isopeps_optimize_ising, isometric_peps_to_unitary
+# Index helper for tensor contractions
+mutable struct IndexStore
+    count::Int
+    IndexStore() = new(0)
+end
 
-export check_all_sites_convergence, adaptive_all_sites_convergence, monitor_all_sites_iteration_convergence
-export check_convergence_all_sites
+function newindex!(store::IndexStore)
+    store.count += 1
+    return store.count
+end
 
-# Core includes
-include("LanczosAlgorithm.jl")
-include("KrylovkitYao.jl")
-include("ImTebd.jl")
-#include("inner_product_mps.jl")
-include("mps.jl")
-include("mpo.jl")
-include("mpsandmpo.jl")
-include("peps.jl")
-include("isometricpeps.jl")
-include("isopeps2circuit.jl")
+# Include module files
+include("quantum_channels.jl")
+include("gate_and_cost.jl")
+include("training.jl")
+include("visualization.jl")
+include("refer.jl")
+include("exact.jl")
 
-# Include InfPEPS submodule (Infinite PEPS)
-include("InfPEPS/InfPEPS.jl")
+# iter circuit
+export iterate_channel_PEPS, iterate_dm
 
-# Re-export InfPEPS functions (for backward compatibility)
-using .InfPEPS
-export contract_Elist, exact_left_eigen, iterate_channel_PEPS, exact_energy_PEPS
-export cost_X_circ, cost_ZZ_circ, cost_X, cost_ZZ
-export train_energy_circ, train_nocompile
-export draw, draw_X_from_file, draw_gap, check_gap_sensitivity, check_all_gap_sensitivity_combined
-export save_training_data, exact_iPEPS
+# exact
+export contract_Elist, exact_left_eigen, single_transfer, exact_E_from_params
+export cost_X, cost_ZZ, cost_singleop, cost_ZZ_single, cost_X_circ, cost_ZZ_circ
+
+#gate & cost
+export build_gate_from_params, energy_measure, energy_recal
+
+#training
+export train_energy_circ, train_exact, train_energy_circ_gradient, train_hybrid, train_nocompile
+
+# visualization & data I/O
+export TrainingData, save_data, load_data, save_results, load_results
+export plot_correlation_heatmap, plot_acf, compute_acf, fit_acf_exponential
+export plot_training_history, plot_variance_vs_samples, visualize_training
+
+# refer.jl
+export result_MPSKit, result_PEPSKit, result_1d
 
 end

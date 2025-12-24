@@ -1,28 +1,18 @@
 using IsoPEPS
 using Test
 
-@testset "KrylovkitYao" begin
-    include("KrylovkitYao.jl")
+@testset "exact" begin
+    include("exact.jl")
 end
 
-@testset "LanczosAlgorithm" begin
-    include("LanczosAlgorithm.jl")
+@testset "gate_and_cost" begin
+    include("gate_and_cost.jl")
 end
 
-@testset "ImTebd" begin
-    include("ImTebd.jl")
+@testset "quantum_channels" begin
+    include("quantum_channels.jl")
 end
 
-
-
-@testset "mps" begin
-    include("mps.jl")
-end
-
-@testset "peps" begin
-    include("peps.jl")
-end
-
-@testset "mpsandmpo" begin
-    include("mpsandmpo.jl")
+@testset "refer" begin
+    include("refer.jl")
 end

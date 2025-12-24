@@ -1,7 +1,7 @@
-using IsoPEPS.InfPEPS
+using IsoPEPS
 using Optimization, OptimizationCMAEvolutionStrategy
 using Random
-using Plots
+using CairoMakie
 using Yao, Manifolds
 using LinearAlgebra, OMEinsum
 
