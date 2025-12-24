@@ -32,7 +32,7 @@ using PEPSKit: InfiniteSquare
 using Optimization, OptimizationCMAEvolutionStrategy, OptimizationOptimisers
 using Manifolds, Manopt
 using Optim
-using Plots
+using Plots,CairoMakie
 using Colors: RGBA
 using BinningAnalysis, LsqFit
 
@@ -62,9 +62,8 @@ export train_energy_circ, train_exact, train_energy_circ_gradient, train_hybrid,
 
 #visualization
 export check_gap_sensitivity, check_all_gap_sensitivity_combined
-export block_variance, dynamics_observables, dynamics_observables_all, eigenvalues,gap, ACF, correlation, energy_con
-export save_training_data
-export var_mean_samples, draw, draw_energy_error
+export block_variance, dynamics_observables, dynamics_observables_all, eigenvalues, gap, ACF, correlation, energy_con
+export var_mean_samples, draw, draw_energy_error, spin_correlation, C1C2, magnectization, dynamics
 # refer.jl
 export result_MPSKit, result_PEPSKit, result_1d
 end 

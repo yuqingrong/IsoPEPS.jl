@@ -1,10 +1,14 @@
 
-function iterate_channel_PEPS(A_matrix, row; conv_step=1000, samples=100000,measure_first=:X)
+function iterate_channel_PEPS(A_matrix, row, nqubits; conv_step=1000, samples=100000,measure_first=:Z)
     if measure_first ∉ (:X, :Z)
         throw(ArgumentError("measure_first must be either :X or :Z, got $measure_first"))
     end
     
-    rho = zero_state(row+1)
+    rho = zero_state(Int((nqubits-1)/2)*(row+1))
+    #rho = Yao.apply!(zero_state(Int((nqubits-1)/2)*(row+1)), repeat(H, Int((nqubits-1)/2)*(row+1)))
+    total_qubits = Int((nqubits-1)/2)*(row+1)+1
+    fixed_qubits = (nqubits+1)÷2
+    remaining_qubits = (nqubits-1)÷2
     X_list = Float64[]
     Z_list = Float64[]
     
@@ -12,21 +16,22 @@ function iterate_channel_PEPS(A_matrix, row; conv_step=1000, samples=100000,meas
     for i in 1:niters
         for j in 1:row
             rho_p = zero_state(1)
+            #rho_p = Yao.apply!(zero_state(1), H)
             rho = join(rho, rho_p)
-            rho = Yao.apply!(rho, put(2+row,(1, 2, j+2)=>matblock(A_matrix[j]))) 
-
+            qubit_positions = tuple((1:fixed_qubits)..., (fixed_qubits + (j-1)*remaining_qubits + 1:fixed_qubits + j*remaining_qubits)...)
+            rho = Yao.apply!(rho, put(total_qubits, qubit_positions=>matblock(A_matrix[j]))) 
             if i > (conv_step + samples)/ row
                 if measure_first == :X
                     Z = 1-2*measure!(RemoveMeasured(), rho, 1)
                     push!(Z_list, Z.buf)
                 else
-                    Yao.apply!(rho, put(2+row, 1=>H))
+                    Yao.apply!(rho, put(total_qubits, 1=>H))
                     X = 1-2*measure!(RemoveMeasured(), rho, 1)
                     push!(X_list, X.buf)
                 end
             else
                 if measure_first == :X
-                    Yao.apply!(rho, put(2+row, 1=>H))
+                    Yao.apply!(rho, put(total_qubits, 1=>H))
                     X = 1-2*measure!(RemoveMeasured(), rho, 1)                  
                     push!(X_list, X.buf)
                 else
@@ -49,12 +54,16 @@ function iterate_dm(gate, row; niters=10000, measure_first=:X)
     rho = density_matrix(zero_state(row+1))
     X_list = Float64[]
     Z_list = Float64[]
+    nqubits = size(gate[1], 1) |> log2 |> Int  # Infer nqubits from gate matrix size
     
     for i in 1:niters
         for j in 1:row
             rho_p = density_matrix(zero_state(1))   
             rho = join(rho, rho_p)
-            rho = Yao.apply!(rho, put(2+row,(1, 2, j+2)=>matblock(gate[j]))) 
+            fixed_qubits = (nqubits+1)÷2
+            remaining_qubits = (nqubits-1)÷2
+            qubit_positions = tuple((1:fixed_qubits)..., (fixed_qubits + (j-1)*remaining_qubits + 1:fixed_qubits + j*remaining_qubits)...)
+            rho = Yao.apply!(rho, put(2+row, qubit_positions=>matblock(gate[j]))) 
 
             if i > niters*3 ÷ 4
                 # Last 1/4 of iterations: compute expectation value of second observable

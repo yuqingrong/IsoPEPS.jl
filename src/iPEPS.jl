@@ -181,7 +181,7 @@ function train_energy_circ(params, J::Float64, g::Float64, p::Int, row::Int; max
         @assert A_matrix' * A_matrix ≈ I atol=1e-5
         gate = matblock(A_matrix)
        
-        rho, Z_list, X_list = iterate_channel_PEPS(gate, row)
+        rho, Z_list, X_list = iterate_channel_PEPS(gate, row, nqubits)
         _, gap = exact_left_eigen(gate, row)
         push!(gap_list, gap)
         push!(Z_list_list, Z_list)
@@ -386,7 +386,7 @@ function check_gap_sensitivity(params::Vector{Float64}, param_idx::Int, g::Float
         
         # Optionally compute energy
         #==
-        rho, Z_list, X_list = iterate_channel_PEPS(gate_block, row; niters=10000)
+        rho, Z_list, X_list = iterate_channel_PEPS(gate_block, row, nqubits; niters=10000)
         Z1_list = Z_list[1:2*row:end]
         Z2_list = Z_list[2:2*row:end]  
         Z3_list = Z_list[3:2*row:end]
@@ -512,7 +512,7 @@ function check_all_gap_sensitivity_combined(params::Vector{Float64}, g::Float64,
             # Optionally compute energy
             #==
             if plot_energy
-                rho, Z_list, X_list = iterate_channel_PEPS(gate_block, row; niters=10000)
+                rho, Z_list, X_list = iterate_channel_PEPS(gate_block, row,nqubits; niters=10000)
                 Z1_list = Z_list[1:2*row:end]
                 Z2_list = Z_list[2:2*row:end]  
                 Z3_list = Z_list[3:2*row:end]
@@ -746,7 +746,7 @@ function train_nocompile(gate, row, M::AbstractManifold, J::Float64, g::Float64;
     
     function f(M, gate)
         gate = matblock(gate)
-        rho = iterate_channel_PEPS(gate, row)
+        rho = iterate_channel_PEPS(gate, row, nqubits)
         energy = -g*cost_X(rho, row, gate) - J*cost_ZZ(rho, row, gate)
         return real(energy)
     end

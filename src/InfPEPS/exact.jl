@@ -214,10 +214,7 @@ function _A_matrix2A_tensors(A_matrix, row, nqubits)
     return A_tensors
 end
 
-function exact_E_from_params(g::Float64, J::Float64, p::Int, row::Int, nqubits::Int; data_dir="data", optimizer=GreedyMethod())
-    params_file = joinpath(data_dir, "exact_final_p_row=$(row)_g=$(g).dat")
-    params = parse.(Float64, split(readlines(params_file)[end]))
-    params = [0.3440118386015081, 0.4045558259085492, 0.0887657398500202, 0.00659732041829872, 0.5902277666933375, 1.7741666544768477, 0.03895888955575853, 0.057212664237594815, 1.21680842976913, 1.795972242888115, 0.0052187249619120675, 0.12318313977125812, 0.0006726345625920186, 0.07566871795352716, 0.026909988840403402, 0.18230319845674586, 1.3718440469333655, 0.362168502185398]
+function exact_E_from_params(params::Vector{Float64}, g::Float64, J::Float64, p::Int, row::Int, nqubits::Int; data_dir="data", optimizer=GreedyMethod())
     A_matrix = build_gate_from_params(params, p, row, nqubits; share_params=true)
     rho, gap, eigenvalues = exact_left_eigen(A_matrix, row, nqubits)
     X_cost = real(cost_X(rho, A_matrix, row, nqubits))
@@ -225,6 +222,5 @@ function exact_E_from_params(g::Float64, J::Float64, p::Int, row::Int, nqubits::
     ZZ_exp1 = real(ZZ_exp1)
     ZZ_exp2 = real(ZZ_exp2)
     energy = -g*X_cost - J*(row == 1 ? ZZ_exp2 : ZZ_exp1 + ZZ_exp2) 
-    @show X_cost, ZZ_exp1, ZZ_exp2
     return gap, energy
 end

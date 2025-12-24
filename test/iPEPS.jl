@@ -22,7 +22,7 @@ end
 @testset "iterate_channel_PEPS" begin
     nsites = 3; row = 3; niters = 40
     gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nsites))
-    rho_iter,_ = iterate_channel_PEPS(gate, row; niters=niters)
+    rho_iter,_ = iterate_channel_PEPS(gate, row, nqubits; niters=niters)
     rho_eigen, gap = exact_left_eigen(gate, row)
     re1 = cost_ZZ(rho_iter, row, gate); re2 = cost_X(rho_iter, row, gate)
     @show re1, re2

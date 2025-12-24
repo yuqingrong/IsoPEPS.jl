@@ -39,7 +39,7 @@ All functions are re-exported at the top level for backward compatibility:
 using IsoPEPS
 
 # These work as before
-rho, Z_list, X_list = iterate_channel_PEPS(gate, row)
+rho, Z_list, X_list = iterate_channel_PEPS(gate, row, nqubits)
 energy = cost_X(rho, row, gate)
 train_energy_circ(params, J, g, p, row)
 ```

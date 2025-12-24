@@ -8,7 +8,7 @@ using LinearAlgebra, OMEinsum
 function simulation(J::Float64, g::Float64, row::Int, p::Int, nqubits::Int; maxiter=5000, measure_first=:X)
     Random.seed!(12)
     params = rand(2*nqubits*p)
-    energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, gap_list, eigenvalues_list, params_history, final_gap = train_energy_circ(params, J, g, p, row, nqubits; maxiter=maxiter, measure_first=measure_first)
+    energy_history, final_A, final_params, final_cost, Z_list_list, X_list_list, final_gap, final_eigenvalues, params_history = train_energy_circ(params, J, g, p, row, nqubits; measure_first=measure_first, share_params=true, maxiter=maxiter)
     #energy_history, final_A, final_params, final_cost, X_list, ZZ_list1, ZZ_list2, gap_list, eigenvalues_list = train_exact(params, J, g, p, row, nqubits; maxiter=maxiter, measure_first=measure_first)
     #gate = Yao.matblock(rand_unitary(ComplexF64, 2^nqubits))
     #M = Manifolds.Unitary(2^nqubits, Manifolds.ℂ)
@@ -26,7 +26,7 @@ Run simulations for multiple g values in parallel using multi-threading.
 Returns a dictionary with g values as keys and simulation results as values.
 
 """
-function parallel_simulation_threaded(J::Float64, g_values::Vector{Float64}, row::Int, p::Int, nqubits::Int; maxiter=5000, measure_first=:X)
+function parallel_simulation_threaded(J::Float64, g_values::Vector{Float64}, row::Int, p::Int, nqubits::Int; maxiter=5000, measure_first=:Z)
     n = length(g_values)
     results = Vector{Any}(undef, n)
     
@@ -89,21 +89,24 @@ function parallel_simulation_threaded(J::Float64, g_values::Vector{Float64}, row
     return Dict(results[i].g => results[i] for i in 1:n)
 end
 
-
-J=1.0; g=4.0; g_values=[0.0, 0.25,0.5,0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5]; row=3
+using CairoMakie
+J=1.0; g=3.0; g_values=[0.5, 1.0, 1.5,2.0, 2.5, 3.0, 3.5, 4.0]; row=8
 d=2; D=2; nqubits=3
 p=3
-
+ 
 #E, ξ_h, ξ_v, λ_h, λ_v = result_PEPSKit(d, D, J, g; χ=20, ctmrg_tol=1e-10, grad_tol=1e-4, maxiter=1000)
 #E, len_gapped, entrop_gapped = result_MPSKit(d, D, g, row)
 simulation(J, g, row, p, nqubits; maxiter=5000, measure_first=:Z)
-
-g_values=[1.0,2.0,3.0,4.0]
 parallel_simulation_threaded(J, g_values, row, p, nqubits; maxiter=2000, measure_first=:Z)
-ACF(J, g, p,row, nqubits; max_lag=3, hor=false)
+ACF(J, g, p,row, nqubits; max_lag=10, hor=false)
 gap, energy = exact_E_from_params(g, J, p, row, nqubits; data_dir="data", optimizer=GreedyMethod())
 draw()
 draw_energy_error()
+spin_correlation(J, g, p, row, nqubits; measure_first=:Z, conv_step=1000, samples=1000000, data_dir="data")
+C1C2(g_values, J, p, row, nqubits;samples=1000000)
+magnectization(g_values, row)
+dynamics(g, J, p, row, nqubits; conv_step=100, samples=0, nshots=100000, data_dir="data")
+energy_con([0.5, 1.0, 1.5, 2.0], row)
 #=
 gap, energy = exact_E_from_params(g, J, p, row, nqubits; data_dir="data", optimizer=GreedyMethod())
 @show energy
@@ -167,3 +170,11 @@ function analyze_trained_gate(g::Float64, row::Int, p::Int;
     
     return gate, rho, gap, gap_h, eigenvalues, params
 end
+
+
+params = rand(2*nqubits*p)
+A_matrix = build_gate_from_params(params, p, row, nqubits)
+rho, Z_list, X_list = iterate_channel_PEPS(A_matrix, row, nqubits; conv_step=1000, samples=0,measure_first=:Z)
+rho = join(rho, zero_state(1))
+rho = Yao.apply!(rho, put(Int((nqubits-1)/2)*(row+1)+1,(1, 2, 3,4,5)=>matblock(A_matrix[1]))) 
+von_neumann_entropy(rho, (1))
