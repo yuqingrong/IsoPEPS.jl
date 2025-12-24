@@ -1,14 +1,22 @@
 """
     IsoPEPS
 
-A Julia package for infinite Projected Entangled Pair States (IsoPEPS) algorithms,
-providing functionality for:
-- Quantum channel simulations
-- Transfer matrix calculations  
-- Cost function evaluations
-- Variational optimization
-- Sensitivity analysis
-- Data visualization
+A Julia package for Isometric Projected Entangled Pair States (IsoPEPS) algorithms.
+
+# Features
+- Quantum channel simulation for PEPS
+- Transfer matrix calculations with exact contraction
+- Variational optimization (CMA-ES, manifold methods)
+- Reference implementations using MPSKit and PEPSKit
+- Data visualization and analysis
+
+# Main Functions
+- `sample_quantum_channel`: Sample observables from quantum channel
+- `build_unitary_gate`: Build parameterized unitary gates
+- `compute_energy`: Compute TFIM energy from samples
+- `optimize_circuit`: Optimize circuit parameters
+- `compute_transfer_spectrum`: Compute transfer matrix spectrum
+- `mpskit_ground_state`: Reference ground state from MPSKit
 """
 module IsoPEPS
 
@@ -18,7 +26,8 @@ using Yao, Yao.EasyBuild
 using OMEinsum
 using OMEinsumContractionOrders
 using TensorKit, MPSKit, MPSKitModels, PEPSKit
-using MPSKitModels: transverse_field_ising, InfiniteStrip, InfiniteCylinder, @mpoham, InfiniteChain, nearest_neighbours, vertices
+using MPSKitModels: transverse_field_ising, InfiniteStrip, InfiniteCylinder, 
+                    @mpoham, InfiniteChain, nearest_neighbours, vertices
 using PEPSKit: InfiniteSquare
 using Optimization, OptimizationCMAEvolutionStrategy
 using Manifolds, Manopt
@@ -40,31 +49,44 @@ end
 
 # Include module files
 include("quantum_channels.jl")
-include("gate_and_cost.jl")
+include("gates.jl")
 include("training.jl")
 include("visualization.jl")
-include("refer.jl")
+include("reference.jl")
 include("exact.jl")
 
-# iter circuit
-export iterate_channel_PEPS, iterate_dm
+# =============================================================================
+# Quantum Channel Simulation
+# =============================================================================
+export sample_quantum_channel
 
-# exact
-export contract_Elist, exact_left_eigen, single_transfer, exact_E_from_params
-export cost_X, cost_ZZ, cost_singleop, cost_ZZ_single, cost_X_circ, cost_ZZ_circ
+# =============================================================================
+# Gate Construction & Energy
+# =============================================================================
+export build_unitary_gate, compute_energy
 
-#gate & cost
-export build_gate_from_params, energy_measure, energy_recal
+# =============================================================================
+# Optimization / Training
+# =============================================================================
+export optimize_circuit, optimize_exact, optimize_manifold
 
-#training
-export train_energy_circ, train_exact, train_energy_circ_gradient, train_hybrid, train_nocompile
+# =============================================================================
+# Exact Tensor Contraction
+# =============================================================================
+export compute_transfer_spectrum, compute_single_transfer
+export compute_X_expectation, compute_ZZ_expectation
+export contract_transfer_matrix, compute_exact_energy
 
-# visualization & data I/O
+# =============================================================================
+# Reference Implementations
+# =============================================================================
+export mpskit_ground_state, mpskit_ground_state_1d, pepskit_ground_state
+
+# =============================================================================
+# Data I/O & Visualization
+# =============================================================================
 export TrainingData, save_data, load_data, save_results, load_results
 export plot_correlation_heatmap, plot_acf, compute_acf, fit_acf_exponential
 export plot_training_history, plot_variance_vs_samples, visualize_training
-
-# refer.jl
-export result_MPSKit, result_PEPSKit, result_1d
 
 end

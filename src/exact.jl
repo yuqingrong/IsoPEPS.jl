@@ -1,93 +1,81 @@
 """
-    exact_left_eigen(gate, nsites)
+    compute_transfer_spectrum(gates, row, nqubits)
 
-Compute the left eigenvector and spectral gap of the transfer matrix.
+Compute the transfer matrix spectrum and fixed point.
 
 # Arguments
-- `gate`: Quantum gate defining the channel
-- `nsites`: Number of sites
+- `gates`: Vector of gate matrices
+- `row`: Number of rows
+- `nqubits`: Number of qubits per gate
 
 # Returns
-- `rho`: Normalized density matrix (fixed point)
-- `gap`: Spectral gap (-log|λ₂|) where λ₂ is the second largest eigenvalue
+- `rho`: Fixed point density matrix (normalized)
+- `gap`: Spectral gap = -log|λ₂| where λ₂ is second largest eigenvalue
+- `eigenvalues`: Sorted eigenvalue magnitudes
 
 # Description
-Constructs the transfer matrix from the gate and computes its spectral properties.
-The spectral gap quantifies how quickly the channel approaches its fixed point.
+Constructs the transfer matrix from gates and computes its spectral properties.
+The spectral gap quantifies how quickly the channel converges to its fixed point.
 """
-
-#index of single A:
-#          4  5
-#           \ |
-#         6 -|A|- 3
-#             | \
-#             2  1
-
-function exact_left_eigen(A_matrix, row, nqubits)
-    A_tensors = _A_matrix2A_tensors(A_matrix, row, nqubits)
+function compute_transfer_spectrum(gates, row, nqubits)
+    A_tensors = _gates_to_tensors(gates, row, nqubits)
     total_qubits = Int((row+1)*(nqubits-1)/2)
-    _, T = contract_Elist([A_tensors[i] for i in 1:row], [conj(A_tensors[i]) for i in 1:row], row)
-    T = reshape(T, 4^total_qubits, 4^(total_qubits))    # D=2
-    eigenvalues = sort(abs.(LinearAlgebra.eigen(T).values))
-    gap = -log(eigenvalues[end-1])  # Second largest eigenvalue
-    @assert eigenvalues[end] ≈ 1.0
-    fixed_point_rho = reshape(LinearAlgebra.eigen(T).vectors[:, end], Int(sqrt(4^total_qubits)), Int(sqrt(4^total_qubits)))
-    rho = fixed_point_rho ./ tr(fixed_point_rho)
-    return rho, gap, eigenvalues
-end
-
-function single_transfer(A_matrix, nqubits)
-    A_size = ntuple(i -> 2, 2*nqubits)
-    indices = (ntuple(_ -> Colon(), nqubits)..., 1, ntuple(_ -> Colon(), nqubits-1)...)
-    A_single = reshape(A_matrix[1], A_size)[indices...]
-    T = ein"iabcd,iefgh-> abefcdgh"(A_single, conj(A_single))
-    T = reshape(T, 4^(nqubits-1), 4^(nqubits-1))    # D=2
-    eigenvalues = sort(abs.(LinearAlgebra.eigen(T).values))
-    gap = -log(eigenvalues[end-1])  # Second largest eigenvalue
-    @assert eigenvalues[end] ≈ 1.0
-    fixed_point_rho = reshape(LinearAlgebra.eigen(T).vectors[:, end], Int(sqrt(4^(nqubits-1))), Int(sqrt(4^(nqubits-1))))
-    rho = fixed_point_rho ./ tr(fixed_point_rho)
-    return rho, gap, eigenvalues
-end
-
-function cost_singleop(rho, A_matrix, nqubits, op)
-    A_size = ntuple(i -> 2, 2*nqubits)
-    env_size = ntuple(i -> 2, 2*(nqubits-1))
-    indices = (ntuple(_ -> Colon(), nqubits)..., 1, ntuple(_ -> Colon(), nqubits-1)...)
-    A = reshape(A_matrix[1], A_size)[indices...]
-    rho = reshape(rho, env_size)
-    R = reshape(Matrix(I,4^(nqubits-1),4^(nqubits-1)), env_size)
-
-    store = IndexStore()
-    index_A = [newindex!(store) for _ in 1:2*nqubits-1]
-    index_conjA = [newindex!(store) for i in 1:2*nqubits-1]
-    index_op = [index_A[1], index_conjA[1]]
-    index_rho = [index_A[Int(end+1)/2+1:end]..., index_conjA[Int(end+1)/2+1:end]...]
-    index_R = [index_A[2:Int(end+1)/2]..., index_conjA[2:Int(end+1)/2]...]
-
-    index = [index_A..., index_conjA..., index_op..., index_rho..., index_R...]
-
-    # Optimize contraction order
-    size_dict = OMEinsum.get_size_dict(index, [A, conj(A), op, rho, R])
-    code = optimize_code(DynamicEinCode(index, Int[]), size_dict, optimizer)
     
-    return code, code(A, conj(A), op, rho, R)[]
+    _, T = contract_transfer_matrix([A_tensors[i] for i in 1:row], 
+                                     [conj(A_tensors[i]) for i in 1:row], row)
+    T = reshape(T, 4^total_qubits, 4^total_qubits)
+    
+    eigenvalues = sort(abs.(LinearAlgebra.eigen(T).values))
+    gap = -log(eigenvalues[end-1])
+    @assert eigenvalues[end] ≈ 1.0 "Largest eigenvalue should be 1"
+    
+    fixed_point = reshape(LinearAlgebra.eigen(T).vectors[:, end], 
+                          Int(sqrt(4^total_qubits)), Int(sqrt(4^total_qubits)))
+    rho = fixed_point ./ tr(fixed_point)
+    
+    return rho, gap, eigenvalues
 end
 
-function cost_doubleop_ver(rho, A_matrix)
-    A = reshape(A_matrix[1], (2, 2, 2, 2))[:, :, 1, :]
-    mid_res1 = ein"bd, iab, ij, jcd -> ac"(rho, A, Matrix(Z), conj(A))
-    ZZ_exp1 = ein"bd, iab, ij, jad ->"(mid_res1, A, Matrix(Z), conj(A))
+"""
+    compute_single_transfer(gates, nqubits)
 
-    mid_res2 = ein"bd, iab, icd -> ac"(mid_res1, A, conj(A))
-    mid_res3 = ein"bd, iab, icd -> ac"(mid_res2, A, conj(A))
-    mid_res4 = ein"bd, iab, icd -> ac"(mid_res3, A, conj(A))    #TODO: relation with row
-    ZZ_exp2 = ein"bd, iab, ij, jad ->"(mid_res4, A, Matrix(Z), conj(A))
-
-    return ZZ_exp1[], ZZ_exp2[]
+Compute transfer matrix for a single gate (row=1 case).
+"""
+function compute_single_transfer(gates, nqubits)
+    A_size = ntuple(i -> 2, 2*nqubits)
+    indices = (ntuple(_ -> Colon(), nqubits)..., 1, ntuple(_ -> Colon(), nqubits-1)...)
+    A_single = reshape(gates[1], A_size)[indices...]
+    
+    T = ein"iabcd,iefgh-> abefcdgh"(A_single, conj(A_single))
+    T = reshape(T, 4^(nqubits-1), 4^(nqubits-1))
+    
+    eigenvalues = sort(abs.(LinearAlgebra.eigen(T).values))
+    gap = -log(eigenvalues[end-1])
+    @assert eigenvalues[end] ≈ 1.0 "Largest eigenvalue should be 1"
+    
+    fixed_point = reshape(LinearAlgebra.eigen(T).vectors[:, end], 
+                          Int(sqrt(4^(nqubits-1))), Int(sqrt(4^(nqubits-1))))
+    rho = fixed_point ./ tr(fixed_point)
+    
+    return rho, gap, eigenvalues
 end
 
-function contract_Elist(tensor_ket, tensor_bra, row; optimizer=GreedyMethod())
+"""
+    contract_transfer_matrix(tensor_ket, tensor_bra, row; optimizer=GreedyMethod())
+
+Contract tensors to form the transfer matrix.
+
+# Arguments
+- `tensor_ket`: Ket tensors (row of them)
+- `tensor_bra`: Bra tensors (conjugates)
+- `row`: Number of rows
+- `optimizer`: Contraction order optimizer
+
+# Returns
+- `code`: Optimized contraction code
+- `result`: Contracted transfer matrix
+"""
+function contract_transfer_matrix(tensor_ket, tensor_bra, row; optimizer=GreedyMethod())
     store = IndexStore()
     index_bra = Vector{Int}[]
     index_ket = Vector{Int}[]
@@ -134,50 +122,105 @@ function contract_Elist(tensor_ket, tensor_bra, row; optimizer=GreedyMethod())
     
     index = [index_ket..., index_bra...]
 
-    # Optimize contraction order
     size_dict = OMEinsum.get_size_dict(index, [tensor_ket..., tensor_bra...])
     code = optimize_code(DynamicEinCode(index, index_output), size_dict, optimizer)
     
     return code, code(tensor_ket..., tensor_bra...)
 end
 
-function cost_X(rho, A_matrix, row, nqubits; optimizer=GreedyMethod())
+"""
+    compute_X_expectation(rho, gates, row, nqubits; optimizer=GreedyMethod())
+
+Compute ⟨X⟩ expectation value from fixed point density matrix.
+
+# Arguments
+- `rho`: Fixed point density matrix
+- `gates`: Gate matrices
+- `row`: Number of rows
+- `nqubits`: Number of qubits per gate
+- `optimizer`: Contraction optimizer
+
+# Returns
+Average X expectation value across all sites.
+"""
+function compute_X_expectation(rho, gates, row, nqubits; optimizer=GreedyMethod())
     total_qubits = Int((row+1)*(nqubits-1)/2)
     env_size = ntuple(i -> 2, 2*total_qubits)
     rho = reshape(rho, env_size...)
-    R = reshape(Matrix(I,Int(sqrt(4^total_qubits)),Int(sqrt(4^total_qubits))), env_size)
-    A_tensors = _A_matrix2A_tensors(A_matrix, row, nqubits)
-    # Prepare AX tensors for each position (apply X operator)
-    AX_tensors = [ein"iabcd,ij -> jabcd"(A_tensors[i], Matrix(X)) for i in 1:row]   #TODO: still 3 qubits per gate
+    R = reshape(Matrix(I, Int(sqrt(4^total_qubits)), Int(sqrt(4^total_qubits))), env_size)
+    
+    A_tensors = _gates_to_tensors(gates, row, nqubits)
+    AX_tensors = [ein"iabcd,ij -> jabcd"(A_tensors[i], Matrix(X)) for i in 1:row]
     tensor_bra = [conj(A_tensors[i]) for i in 1:row]
     
-    # Compute expectation value at each position and average
     results = map(1:row) do pos
         tensor_ket = [i == pos ? AX_tensors[i] : A_tensors[i] for i in 1:row]
-        _, list = contract_Elist(tensor_ket, tensor_bra, row)
+        _, list = contract_transfer_matrix(tensor_ket, tensor_bra, row; optimizer=optimizer)
+        
         store = IndexStore()
         index_list = [newindex!(store) for _ in 1:4*total_qubits]
         index_rho = index_list[2*total_qubits+1:4*total_qubits] 
         index_R = index_list[1:2*total_qubits]
         index = [index_list, index_rho, index_R]
+        
         size_dict = OMEinsum.get_size_dict(index, [list, rho, R])
         code = optimize_code(DynamicEinCode(index, Int[]), size_dict, optimizer)
         code(list, rho, R)[]
     end
+    
     return sum(results) / row
 end
 
-function _compute_ZZ_contraction(tensor_ket_a, tensor_ket_b, tensor_bra, rho, R, row, total_qubits, optimizer)
-    # Helper function to compute ZZ contraction for a pair of tensor kets.
-    _, list1 = contract_Elist(tensor_ket_a, tensor_bra, row)
-    _, list2 = contract_Elist(tensor_ket_b, tensor_bra, row)
+"""
+    compute_ZZ_expectation(rho, gates, row, nqubits; optimizer=GreedyMethod())
+
+Compute ⟨ZZ⟩ expectation values (vertical and horizontal bonds).
+
+# Arguments
+- `rho`: Fixed point density matrix
+- `gates`: Gate matrices
+- `row`: Number of rows
+- `nqubits`: Number of qubits per gate
+- `optimizer`: Contraction optimizer
+
+# Returns
+- `ZZ_vertical`: Vertical bond ⟨ZᵢZᵢ₊₁⟩
+- `ZZ_horizontal`: Horizontal bond ⟨ZᵢZᵢ₊ᵣₒw⟩
+"""
+function compute_ZZ_expectation(rho, gates, row, nqubits; optimizer=GreedyMethod())
+    total_qubits = Int((row+1)*(nqubits-1)/2)
+    env_size = ntuple(i -> 2, 2*total_qubits)
+    rho = reshape(rho, env_size...)
+    R = reshape(Matrix(I, Int(sqrt(4^total_qubits)), Int(sqrt(4^total_qubits))), env_size)
+    
+    A_tensors = _gates_to_tensors(gates, row, nqubits)
+    AZ_tensors = [ein"iabcd,ij -> jabcd"(A_tensors[i], Matrix(Z)) for i in 1:row]
+    tensor_bra = [conj(A_tensors[i]) for i in 1:row]
+
+    # Vertical: Z on sites 1 and 2
+    tensor_ket_vert = [i == 1 || i == 2 ? AZ_tensors[i] : A_tensors[i] for i in 1:row]
+    # Horizontal: Z on site 1 only (correlates across transfer matrix)
+    tensor_ket_horiz = [i == 1 ? AZ_tensors[i] : A_tensors[i] for i in 1:row]
+
+    ZZ_vert = _contract_ZZ(tensor_ket_vert, A_tensors, tensor_bra, rho, R, row, total_qubits, optimizer)
+    ZZ_horiz = _contract_ZZ(tensor_ket_horiz, tensor_ket_horiz, tensor_bra, rho, R, row, total_qubits, optimizer)
+    
+    return ZZ_vert, ZZ_horiz
+end
+
+"""
+Helper function to contract ZZ expectation value.
+"""
+function _contract_ZZ(tensor_ket_a, tensor_ket_b, tensor_bra, rho, R, row, total_qubits, optimizer)
+    _, list1 = contract_transfer_matrix(tensor_ket_a, tensor_bra, row; optimizer=optimizer)
+    _, list2 = contract_transfer_matrix(tensor_ket_b, tensor_bra, row; optimizer=optimizer)
     
     store = IndexStore()
     index_list1 = [newindex!(store) for _ in 1:4*total_qubits]
     index_list2 = [[newindex!(store) for _ in 1:2*total_qubits]..., index_list1[1:2*total_qubits]...]
     
-    index_rho = index_list1[2*total_qubits+1:4*total_qubits]  # Last half of list1
-    index_R = index_list2[1:2*total_qubits]  # First half of list2
+    index_rho = index_list1[2*total_qubits+1:4*total_qubits]
+    index_R = index_list2[1:2*total_qubits]
     index = [index_list1, index_list2, index_rho, index_R]
     
     size_dict = OMEinsum.get_size_dict(index, [list1, list2, rho, R])
@@ -185,42 +228,43 @@ function _compute_ZZ_contraction(tensor_ket_a, tensor_ket_b, tensor_bra, rho, R,
     return code(list1, list2, rho, R)[]
 end
 
-function cost_ZZ(rho, A_matrix, row, nqubits; optimizer=GreedyMethod())
-    total_qubits = Int((row+1)*(nqubits-1)/2)
-    env_size = ntuple(i -> 2, 2*total_qubits)
-    rho = reshape(rho, env_size...)
-    R = reshape(Matrix(I,Int(sqrt(4^total_qubits)),Int(sqrt(4^total_qubits))), env_size)
-    A_tensors = _A_matrix2A_tensors(A_matrix, row, nqubits)
-    # Prepare AZ tensors for each position (apply Z operator)
-    AZ_tensors = [ein"iabcd,ij -> jabcd"(A_tensors[i], Matrix(Z)) for i in 1:row]
-    tensor_ket = A_tensors
-    tensor_bra = [conj(A_tensors[i]) for i in 1:row]
-
-    tensor_ket1 = [i == 1 || i == 2 ? AZ_tensors[i] : A_tensors[i] for i in 1:row]
-    tensor_ket2 = [i == 1 ? AZ_tensors[i] : A_tensors[i] for i in 1:row]
-
-    # Compute ZZ expectation values
-    ZZ_ver = _compute_ZZ_contraction(tensor_ket1, tensor_ket, tensor_bra, rho, R, row, total_qubits, optimizer)
-    ZZ_hor = _compute_ZZ_contraction(tensor_ket2, tensor_ket2, tensor_bra, rho, R, row, total_qubits, optimizer)
-    
-    return ZZ_ver, ZZ_hor
-end
-
-function _A_matrix2A_tensors(A_matrix, row, nqubits)
-    total_qubits = Int((row+1)*(nqubits-1)/2)
+"""
+Convert gate matrices to tensor form for contraction.
+"""
+function _gates_to_tensors(gates, row, nqubits)
     A_size = ntuple(i -> 2, 2 * nqubits)
     indices = (ntuple(_ -> Colon(), nqubits)..., 1, ntuple(_ -> Colon(), nqubits-1)...)
-    A_tensors = [reshape(A_matrix[i], A_size)[indices...] for i in 1:row]
-    return A_tensors
+    return [reshape(gates[i], A_size)[indices...] for i in 1:row]
 end
 
-function exact_E_from_params(params::Vector{Float64}, g::Float64, J::Float64, p::Int, row::Int, nqubits::Int; data_dir="data", optimizer=GreedyMethod())
-    A_matrix = build_gate_from_params(params, p, row, nqubits; share_params=true)
-    rho, gap, eigenvalues = exact_left_eigen(A_matrix, row, nqubits)
-    X_cost = real(cost_X(rho, A_matrix, row, nqubits))
-    ZZ_exp1, ZZ_exp2 = cost_ZZ(rho, A_matrix, row, nqubits)
-    ZZ_exp1 = real(ZZ_exp1)
-    ZZ_exp2 = real(ZZ_exp2)
-    energy = -g*X_cost - J*(row == 1 ? ZZ_exp2 : ZZ_exp1 + ZZ_exp2) 
+"""
+    compute_exact_energy(params, g, J, p, row, nqubits; optimizer=GreedyMethod())
+
+Compute exact energy from parameters using tensor contraction.
+
+# Arguments
+- `params`: Parameter vector
+- `g`: Transverse field strength
+- `J`: Coupling strength
+- `p`: Number of circuit layers
+- `row`: Number of rows
+- `nqubits`: Number of qubits per gate
+- `optimizer`: Contraction optimizer
+
+# Returns
+- `gap`: Spectral gap
+- `energy`: Ground state energy estimate
+"""
+function compute_exact_energy(params::Vector{Float64}, g::Float64, J::Float64, 
+                               p::Int, row::Int, nqubits::Int; optimizer=GreedyMethod())
+    gates = build_unitary_gate(params, p, row, nqubits; share_params=true)
+    rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
+    
+    X_cost = real(compute_X_expectation(rho, gates, row, nqubits; optimizer=optimizer))
+    ZZ_vert, ZZ_horiz = compute_ZZ_expectation(rho, gates, row, nqubits; optimizer=optimizer)
+    ZZ_vert = real(ZZ_vert)
+    ZZ_horiz = real(ZZ_horiz)
+    
+    energy = -g*X_cost - J*(row == 1 ? ZZ_horiz : ZZ_vert + ZZ_horiz) 
     return gap, energy
 end
