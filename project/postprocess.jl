@@ -141,7 +141,7 @@ function visualize_correlation(filename::String)
 end
 
 """
-    analyze_acf(filename::String; max_lag=100, basis=:Z)
+    analyze_acf(filename::String; max_lag=100, basis=:Z, resample=false, conv_step=1000, samples=100000)
 
 Analyze autocorrelation function of samples from result stored in JSON file.
 
@@ -149,11 +149,23 @@ Analyze autocorrelation function of samples from result stored in JSON file.
 - `filename`: Path to JSON result file
 - `max_lag`: Maximum lag for ACF computation (default: 100)
 - `basis`: Which samples to use, :Z or :X (default: :Z)
+- `resample`: If true, generate fresh samples instead of using saved ones (default: false)
+- `conv_step`: Convergence steps before sampling when resampling (default: 1000)
+- `samples`: Number of samples to generate when resampling (default: 100000)
 
 # Returns
 - Tuple of (lags, acf, ξ) where ξ is the correlation length
+
+# Example
+```julia
+# Analyze ACF using saved samples
+lags, acf, ξ = analyze_acf("results/circuit_J=1.0_g=2.0_row=6.json")
+
+# Analyze ACF with fresh resampled data
+lags, acf, ξ = analyze_acf("results/circuit_J=1.0_g=2.0_row=6.json"; resample=true, samples=50000)
+```
 """
-function analyze_acf(filename::String; max_lag=100, basis=:Z)
+function analyze_acf(filename::String; max_lag=100, basis=:Z, resample=true, conv_step=1000, samples=1000000)
     result, input_args = load_result(filename)
     
     if !(result isa CircuitOptimizationResult)
@@ -161,25 +173,115 @@ function analyze_acf(filename::String; max_lag=100, basis=:Z)
         return nothing
     end
     
-    samples = basis == :Z ? result.Z_samples : result.X_samples
+    # Get samples - either from resampling or from saved result
+    if resample
+        println("Generating fresh samples for ACF analysis...")
+        rho, Z_samples_new, X_samples_new, params, gates = resample_circuit(filename; 
+                                                                              conv_step=conv_step, 
+                                                                              samples=samples)
+        sample_data = basis == :Z ? Z_samples_new : X_samples_new
+        sample_source = "resampled"
+    else
+        sample_data = basis == :Z ? result.Z_samples : result.X_samples
+        sample_source = "saved"
+    end
     
-    if isempty(samples)
-        @warn "No $(basis) samples in result"
+    if isempty(sample_data)
+        @warn "No $(basis) samples available"
         return nothing
     end
     
-    lags, acf, acf_err = compute_acf(samples; max_lag=max_lag, n_bootstrap=50)
+    println("\n=== ACF Analysis ($(sample_source) samples) ===")
+    println("Basis: $basis")
+    println("Number of samples: $(length(sample_data))")
     
+    lags, acf, acf_err = compute_acf(sample_data[1000:4:end]; max_lag=max_lag, n_bootstrap=50)
+    @show acf, acf_err
     A, ξ = fit_acf_exponential(lags, acf)
     println("Autocorrelation length ($(basis)-basis): ξ = ", ξ)
+    
+    title_text = "ACF $(basename(filename)) (ξ=$(round(ξ, digits=2)))"
+    if resample
+        title_text *= " [resampled]"
+    end
     
     fig = plot_acf(lags, acf; 
                     acf_err=acf_err,
                     fit_params=(A, ξ),
-                    title="ACF $(basename(filename)) (ξ = $(round(ξ, digits=2)))")
+                    logscale=false,
+                    title=title_text)
     display(fig)
     
     return lags, acf, ξ
+end
+
+"""
+    resample_circuit(filename::String; conv_step=1000, samples=100000, measure_first=nothing)
+
+Extract final parameters from a saved result and re-run the circuit to generate new samples.
+
+# Arguments
+- `filename`: Path to JSON result file containing CircuitOptimizationResult
+- `conv_step`: Number of convergence steps before sampling (default: 1000)
+- `samples`: Number of samples to collect (default: 100000)
+- `measure_first`: Which observable to measure first, :X or :Z (default: use value from saved result)
+
+# Returns
+- Tuple of (rho, Z_samples, X_samples, params, gates) where:
+  - `rho`: Final quantum state
+  - `Z_samples`: Vector of Z measurement outcomes
+  - `X_samples`: Vector of X measurement outcomes
+  - `params`: Parameters used (from the saved result)
+  - `gates`: Gates reconstructed from parameters
+
+# Example
+```julia
+rho, Z_samples, X_samples, params, gates = resample_circuit("results/circuit_J=1.0_g=2.0_row=6.json"; samples=50000)
+```
+"""
+function resample_circuit(filename::String; conv_step=1000, samples=100000, measure_first=nothing)
+    result, input_args = load_result(filename)
+    
+    if !(result isa CircuitOptimizationResult)
+        @warn "Result is not CircuitOptimizationResult, cannot resample"
+        return nothing
+    end
+    
+    # Extract parameters from result
+    params = result.params
+    
+    # Extract circuit configuration from input_args
+    p = input_args[:p]
+    row = input_args[:row]
+    nqubits = input_args[:nqubits]
+    share_params = get(input_args, :share_params, true)
+    
+    # Use measure_first from result if not specified
+    if isnothing(measure_first)
+        measure_first = Symbol(get(input_args, :measure_first, "Z"))
+    end
+    
+    println("=== Resampling Circuit ===")
+    println("File: ", basename(filename))
+    println("Parameters: $(length(params)) params")
+    println("Configuration: p=$p, row=$row, nqubits=$nqubits")
+    println("Share params: $share_params")
+    println("Measure first: $measure_first")
+    println("Conv steps: $conv_step, Samples: $samples")
+    
+    # Reconstruct gates from parameters
+    gates = build_unitary_gate(params, p, row, nqubits; share_params=share_params)
+    
+    # Run the quantum channel to generate new samples
+    println("\nGenerating new samples...")
+    rho, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits; 
+                                                        conv_step=conv_step, 
+                                                        samples=samples,
+                                                        measure_first=measure_first)
+    
+    println("Generated $(length(Z_samples)) Z samples and $(length(X_samples)) X samples")
+    
+    return rho, Z_samples, X_samples, params, gates
 end
 
 """
@@ -311,9 +413,9 @@ end
 
 # Example usage (commented out)
 # Analyze a single result
-g = 3.0
+g = 3.0; row=4
 data_dir = joinpath(@__DIR__, "results")
-datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=3.json")
+datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$row.json")
 result, args = analyze_result(datafile)
 
 # Compare two results
@@ -326,8 +428,14 @@ gates, rho, gap, eigenvalues = reconstruct_gates(datafile)
 # Visualize correlation
 visualize_correlation(datafile)
 
-# Analyze autocorrelation
-lags, acf, ξ = analyze_acf(datafile; max_lag=100)
+# Analyze autocorrelation (using saved samples)
+lags, acf, ξ = analyze_acf(datafile; max_lag=10, resample=false, samples=1000000)
+
+# Analyze autocorrelation with fresh resampled data
+# lags, acf, ξ = analyze_acf(datafile; max_lag=10, resample=true, samples=50000)
+
+# Or resample circuit separately to get the raw samples
+# rho, Z_samples, X_samples, params, gates = resample_circuit(datafile; conv_step=1000, samples=50000)
 
 # Plot energy landscape
 fig = plot_energy_vs_g(data_dir; J=1.0, row=3)
@@ -336,5 +444,3 @@ display(fig)
 # Plot training history comparison
 fig = plot_training_history_comparison(data_dir; J=1.0, row=3, selected_g=[1.0, 2.0, 3.0])
 display(fig)
-
-

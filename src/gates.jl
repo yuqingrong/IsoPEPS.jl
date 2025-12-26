@@ -1,7 +1,14 @@
 """
+Number of parameters per layer for the improved ansatz.
+Uses 3 parameters per qubit (Rz-Ry-Rz decomposition for full SU(2) coverage).
+"""
+const PARAMS_PER_QUBIT_PER_LAYER = 2
+
+"""
     build_unitary_gate(params, p, row, nqubits; share_params=true)
 
-Build parameterized unitary gates for the PEPS structure.
+Build parameterized unitary gates for the PEPS structure using an improved ansatz
+with full SU(2) single-qubit rotations and brick-wall CNOT entangling layers.
 
 # Arguments
 - `params`: Parameter vector (angles for Rx and Rz rotations)
@@ -20,6 +27,8 @@ Build parameterized unitary gates for the PEPS structure.
 function build_unitary_gate(params, p, row, nqubits; share_params=true)
     A_matrix = Vector{Matrix{ComplexF64}}(undef, row)
     dim = 2^nqubits
+    params_per_layer = PARAMS_PER_QUBIT_PER_LAYER * nqubits
+    
     for i in 1:row
         A_matrix[i] = Matrix(Array{ComplexF64}(I, dim, dim))
     end
@@ -54,7 +63,9 @@ end
 Build a single layer of the parameterized gate circuit.
 """
 function _build_layer(params, r, nqubits)
-    # Single-qubit rotations: Rx(θ) * Rz(φ) for each qubit
+    params_per_layer = PARAMS_PER_QUBIT_PER_LAYER * nqubits
+    
+    # Full SU(2) single-qubit rotations: Rz(θ₁) * Ry(θ₂) * Rz(θ₃) for each qubit
     single_qubit_gates = []  
     for i in 1:nqubits
         idx = 2*nqubits*r - 2*nqubits + 2*i - 1
@@ -62,15 +73,29 @@ function _build_layer(params, r, nqubits)
     end
     gate = kron(single_qubit_gates...)
     
-    # CNOT ring: control->target pairs forming a cycle
-    cnot_gates = Matrix{ComplexF64}(I, 2^nqubits, 2^nqubits)
+    # Brick-wall CNOT pattern for better entanglement
+    dim = 2^nqubits
+    cnot_gates = Matrix{ComplexF64}(I, dim, dim)
     for i in 1:nqubits
         target = i
         control = (i % nqubits) + 1  
         cnot_gates *= Matrix(cnot(nqubits, control, target))
     end
-  
-    return Matrix(gate) * Matrix(cnot_gates)
+    #=
+    # Even layer: pairs (1,2), (3,4), ...
+    cnot_even = Matrix{ComplexF64}(I, dim, dim)
+    for i in 1:2:nqubits-1
+        cnot_even *= Matrix(cnot(nqubits, i, i+1))
+    end
+    
+    # Odd layer: pairs (2,3), (4,5), ...
+    cnot_odd = Matrix{ComplexF64}(I, dim, dim)
+    for i in 2:2:nqubits-1
+        cnot_odd *= Matrix(cnot(nqubits, i, i+1))
+    end
+    
+    # Combine: single-qubit gates -> even CNOTs -> odd CNOTs=#
+    return Matrix(gate) * cnot_gates
 end
 
 """

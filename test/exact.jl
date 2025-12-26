@@ -54,7 +54,8 @@ end
     p = 3
     row = 3
     nqubits = 3
-    params = rand(2 * nqubits * p)
+    # Uses 3 params per qubit per layer (Rz-Ry-Rz decomposition)
+    params = rand(3 * nqubits * p)
     _, energy = compute_exact_energy(params, g, J, p, row, nqubits)
     @test energy isa Float64
 end

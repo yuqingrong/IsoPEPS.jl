@@ -300,26 +300,49 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
                   acf_err::Union{AbstractVector,Nothing}=nothing,
                   fit_params::Union{Tuple{<:Real,<:Real},Nothing}=nothing,
                   title::String="Autocorrelation Function",
-                  logscale::Bool=false,
+                  logscale::Bool=true,
                   save_path::Union{String,Nothing}=nothing)
     
     fig = Figure(size=(500, 350))
+    
+    # Prepare data - use absolute values for log scale
+    abs_acf = abs.(collect(acf))
+    lags_vec = collect(lags)
+    
+    if logscale
+        # Set minimum threshold to avoid log10(0)
+        min_threshold = max(maximum(abs_acf) * 1e-10, 1e-15)
+        abs_acf = max.(abs_acf, min_threshold)
+        plot_y = abs_acf
+        ylabel = "|C(lag)|"
+    else
+        plot_y = collect(acf)
+        ylabel = "C(lag)"
+    end
+    
     ax = Axis(fig[1, 1],
-              xlabel="Lag", ylabel="C(lag)",
+              xlabel="Lag", ylabel=ylabel,
               title=title,
               yscale=logscale ? log10 : identity)
     
-    # Plot data with error bars
-    if !isnothing(acf_err)
-        errorbars!(ax, collect(lags), collect(acf), collect(acf_err), color=:gray)
+    # Plot data with error bars (only for linear scale)
+    if !isnothing(acf_err) && !logscale
+        errorbars!(ax, lags_vec, plot_y, collect(acf_err), color=:gray)
     end
-    scatter!(ax, collect(lags), collect(acf), markersize=8, label="Data")
+    scatter!(ax, lags_vec, plot_y, markersize=8, label="Data")
     
     # Plot exponential fit
     if !isnothing(fit_params)
         A, ξ = fit_params
-        fit_curve = A .* exp.(-collect(lags) ./ ξ)
-        lines!(ax, collect(lags), fit_curve, linewidth=2, linestyle=:dash, color=:red,
+        A_pos = abs(A)
+        fit_curve = A_pos .* exp.(-lags_vec ./ ξ)
+        
+        if logscale
+            # Clamp to min threshold to avoid log10(0)
+            fit_curve = max.(fit_curve, min_threshold)
+        end
+        
+        lines!(ax, lags_vec, fit_curve, linewidth=2, linestyle=:dash, color=:red,
                label="Fit: A·exp(-lag/$(round(ξ, digits=2)))")
     end
     
@@ -384,22 +407,25 @@ end
     fit_acf_exponential(lags, acf) -> (A, ξ)
 
 Fit ACF to exponential decay A·exp(-lag/ξ).
+Fits the absolute values to extract the decay length.
 """
 function fit_acf_exponential(lags::AbstractVector, acf::AbstractVector)
+    # Fit to absolute values to get decay length
+    abs_acf = abs.(acf)
     model(x, p) = p[1] .* exp.(-x ./ p[2])
     
-    A_init = acf[1]
-    # Estimate ξ from where ACF drops to 1/e
+    A_init = abs_acf[1]
+    # Estimate ξ from where |ACF| drops to 1/e
     ξ_init = 10.0
-    for i in 2:length(acf)
-        if acf[i] < acf[1] / ℯ
+    for i in 2:length(abs_acf)
+        if abs_acf[i] < abs_acf[1] / ℯ
             ξ_init = Float64(i - 1)
             break
         end
     end
     ξ_init = clamp(ξ_init, 1.0, length(lags) / 2.0)
     
-    fit = curve_fit(model, collect(lags), collect(acf), [A_init, ξ_init])
+    fit = curve_fit(model, collect(lags), collect(abs_acf), [A_init, ξ_init])
     A, ξ = coef(fit)
     return (A, ξ)
 end

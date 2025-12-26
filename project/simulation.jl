@@ -54,7 +54,7 @@ function simulation(; J::Float64, g_values::Vector{Float64}, row::Int, p::Int, n
         g = g_values[i]
         verbose && println("Thread $(Threads.threadid()): Starting simulation for g = $(g)")
         
-        Random.seed!(seed + i)  # Different seed for each thread
+        Random.seed!(seed)  # Different seed for each thread
         params = rand(2*nqubits*p)
         
         result = optimize_circuit(params, J, g, p, row, nqubits; 
@@ -79,11 +79,11 @@ end
 
 simulation(;
     J=1.0,
-    g_values=[0.5, 3.0, 4.0],
-    row=3,
-    p=3,
-    nqubits=3,
-    maxiter=200,
+    g_values=[3.0],
+    row=4,
+    p=4,
+    nqubits=5,
+    maxiter=10000,
     measure_first=:Z,
     seed=12,
     verbose=true,

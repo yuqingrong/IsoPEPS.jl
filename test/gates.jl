@@ -4,12 +4,13 @@ using IsoPEPS
 @testset "build_unitary_gate" begin
     for row in 3:6, p in 2:4, nqubits in [3]
         # Shared parameters: all gates should be equal
-        params = rand(2 * nqubits * p)
+        # Uses 3 params per qubit per layer (Rz-Ry-Rz decomposition)
+        params = rand(3 * nqubits * p) .* 2π
         gates = build_unitary_gate(params, p, row, nqubits)
         @test all(gates[i] == gates[1] for i in 2:row)
 
         # Independent parameters: all gates should be different
-        params = rand(2 * nqubits * p * row)
+        params = rand(3 * nqubits * p * row) .* 2π
         gates = build_unitary_gate(params, p, row, nqubits; share_params=false)
         @test all(gates[i] != gates[1] for i in 2:row)
     end

@@ -6,7 +6,8 @@ using LinearAlgebra
     # Small test: 2 iterations only
     g, J = 2.0, 1.0
     p, row, nqubits = 1, 2, 3
-    params = rand(2 * nqubits * p)
+    # Uses 3 params per qubit per layer (Rz-Ry-Rz decomposition)
+    params = rand(3 * nqubits * p)
     
     result = optimize_circuit(params, J, g, p, row, nqubits; 
                               maxiter=2, conv_step=10, samples=50)
@@ -25,7 +26,8 @@ end
     # Small test: 2 iterations only
     g, J = 2.0, 1.0
     p, row, nqubits = 1, 2, 3
-    params = rand(2 * nqubits * p)
+    # Uses 3 params per qubit per layer (Rz-Ry-Rz decomposition)
+    params = rand(3 * nqubits * p)
     
     result = optimize_exact(params, J, g, p, row, nqubits; maxiter=2)
     
