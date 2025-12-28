@@ -50,7 +50,7 @@ function simulation(; J::Float64, g_values::Vector{Float64}, row::Int, p::Int, n
     verbose && println("Running $(n) simulations in parallel with $(Threads.nthreads()) threads...")
     verbose && println("Results will be saved to: $output_dir/")
     
-    Threads.@threads for i in 1:n
+    for i in 1:n
         g = g_values[i]
         verbose && println("Thread $(Threads.threadid()): Starting simulation for g = $(g)")
         

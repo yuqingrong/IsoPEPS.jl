@@ -21,7 +21,7 @@ Simulates the quantum channel by iteratively applying gates and measuring.
 The `measure_first` parameter determines which observable is sampled during
 the convergence phase vs the sampling phase.
 """
-function sample_quantum_channel(gates, row, nqubits; conv_step=1000, samples=100000, measure_first=:Z)
+function sample_quantum_channel(gates, row, nqubits; conv_step=100, samples=100000, measure_first=:Z)
     if measure_first ∉ (:X, :Z)
         throw(ArgumentError("measure_first must be either :X or :Z, got $measure_first"))
     end

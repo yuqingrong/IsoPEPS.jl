@@ -126,18 +126,41 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
         push!(params_history, copy(x))
         
         gates = build_unitary_gate(x, p, row, nqubits; share_params=share_params)
-        rho, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits; 
-                                                            conv_step=conv_step, 
-                                                            samples=samples,
-                                                            measure_first=measure_first)
-        push!(Z_samples_history, Z_samples)
-        push!(X_samples_history, X_samples)
-    
-        if measure_first == :X
-            energy = compute_energy(X_samples[conv_step:end], Z_samples, g, J, row) 
-        else
-            energy = compute_energy(X_samples, Z_samples[conv_step:end], g, J, row) 
+        
+        # Run circuit 11 times with 1000 samples each (in parallel)
+        n_runs = 11
+        Z_samples_all = Vector{Vector{Float64}}(undef, n_runs)
+        X_samples_all = Vector{Vector{Float64}}(undef, n_runs)
+        
+        # Log threading info on first iteration
+        if iter_count[] == 1
+            @info "Using $(Threads.nthreads()) threads for parallel sampling"
         end
+        
+        Threads.@threads for run_idx in 1:n_runs
+            rho, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits; 
+                                                                conv_step=conv_step, 
+                                                                samples=1000,
+                                                                measure_first=measure_first)
+            # Discard convergence samples from each run
+            if measure_first == :X
+                Z_samples_all[run_idx] = Z_samples
+                X_samples_all[run_idx] = X_samples[conv_step:end]
+            else
+                Z_samples_all[run_idx] = Z_samples[conv_step:end]
+                X_samples_all[run_idx] = X_samples
+            end
+        end
+        
+        # Combine all samples
+        Z_samples_combined = reduce(vcat, Z_samples_all)
+        X_samples_combined = reduce(vcat, X_samples_all)
+        
+        push!(Z_samples_history, Z_samples_combined)
+        push!(X_samples_history, X_samples_combined)
+    
+        # Energy computation with already filtered samples
+        energy = compute_energy(X_samples_combined, Z_samples_combined, g, J, row) 
         
         push!(energy_history, real(energy))
         @info "TFIM J=$J g=$g $(row)×∞ PEPS | Iter $(length(energy_history)) | Energy: $(round(energy, digits=6))"
