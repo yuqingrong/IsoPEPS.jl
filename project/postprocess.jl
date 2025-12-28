@@ -181,9 +181,37 @@ function analyze_acf(filename::String; max_lag=100, basis=:Z, resample=true, con
                                                                               samples=samples)
         sample_data = basis == :Z ? Z_samples_new : X_samples_new
         sample_source = "resampled"
+        
+        # Compute and display energy from resampled data
+        # Make sure samples have same length
+        min_len = min(length(X_samples_new), length(Z_samples_new))
+        try
+            energy = compute_energy(X_samples_new[1:min_len], Z_samples_new[1:min_len], 
+                                   input_args[:g], input_args[:J], input_args[:row])
+            println("\n=== Energy from Resampled Data ===")
+            println("Energy: $energy")
+            println("g=$(input_args[:g]), J=$(input_args[:J]), row=$(input_args[:row])")
+        catch e
+            println("Error computing energy: $e")
+            @show length(X_samples_new), length(Z_samples_new)
+        end
     else
         sample_data = basis == :Z ? result.Z_samples : result.X_samples
         sample_source = "saved"
+        
+        # Compute and display energy from saved samples
+        min_len = min(length(result.X_samples), length(result.Z_samples))
+        try
+            energy_computed = compute_energy(result.X_samples[1:min_len], result.Z_samples[1:min_len], 
+                                            input_args[:g], input_args[:J], input_args[:row])
+            println("\n=== Energy from Saved Samples ===")
+            println("Energy (recomputed): $energy_computed")
+            println("Energy (stored):     $(result.energy)")
+            println("Difference:          $(abs(energy_computed - result.energy))")
+        catch e
+            println("Error computing energy: $e")
+            @show length(result.X_samples), length(result.Z_samples)
+        end
     end
     
     if isempty(sample_data)
@@ -195,7 +223,7 @@ function analyze_acf(filename::String; max_lag=100, basis=:Z, resample=true, con
     println("Basis: $basis")
     println("Number of samples: $(length(sample_data))")
     
-    lags, acf, acf_err = compute_acf(sample_data[1000:4:end]; max_lag=max_lag, n_bootstrap=50)
+    lags, acf, acf_err = compute_acf(sample_data[100:end]; max_lag=max_lag, n_bootstrap=50)
     @show acf, acf_err
     A, ξ = fit_acf_exponential(lags, acf)
     println("Autocorrelation length ($(basis)-basis): ξ = ", ξ)
@@ -211,6 +239,12 @@ function analyze_acf(filename::String; max_lag=100, basis=:Z, resample=true, con
                     logscale=false,
                     title=title_text)
     display(fig)
+    
+    # Save figure to file
+    output_filename = replace(basename(filename), ".json" => "_acf.pdf")
+    output_path = joinpath(dirname(filename), output_filename)
+    save(output_path, fig)
+    println("Figure saved to: $output_path")
     
     return lags, acf, ξ
 end
@@ -413,7 +447,7 @@ end
 
 # Example usage (commented out)
 # Analyze a single result
-g = 3.0; row=4
+g = 2.0; row=3
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$row.json")
 result, args = analyze_result(datafile)
@@ -429,7 +463,7 @@ gates, rho, gap, eigenvalues = reconstruct_gates(datafile)
 visualize_correlation(datafile)
 
 # Analyze autocorrelation (using saved samples)
-lags, acf, ξ = analyze_acf(datafile; max_lag=10, resample=false, samples=1000000)
+lags, acf, ξ = analyze_acf(datafile; max_lag=6, resample=true, samples=1000000)
 
 # Analyze autocorrelation with fresh resampled data
 # lags, acf, ξ = analyze_acf(datafile; max_lag=10, resample=true, samples=50000)

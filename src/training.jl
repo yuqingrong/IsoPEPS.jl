@@ -101,7 +101,7 @@ Optimize circuit parameters to minimize TFIM energy using CMA-ES.
 `CircuitOptimizationResult` with energy history, final gates, parameters, and samples
 """
 function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int; 
-                          measure_first=:Z, share_params=true, conv_step=1000, 
+                          measure_first=:Z, share_params=true, conv_step=100, 
                           samples=10000, maxiter=5000, abstol=0.01)
     # Store initial parameters
     initial_params = copy(params)

@@ -63,7 +63,7 @@ export sample_quantum_channel
 # =============================================================================
 # Gate Construction & Energy
 # =============================================================================
-export build_unitary_gate, compute_energy, PARAMS_PER_QUBIT_PER_LAYER
+export build_unitary_gate, compute_energy
 
 # =============================================================================
 # Optimization / Training

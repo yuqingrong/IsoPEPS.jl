@@ -60,12 +60,12 @@ function build_unitary_gate(params, p, row, nqubits; share_params=true)
 end
 
 """
-Build a single layer of the parameterized gate circuit.
+Build a single layer of the parameterized gate circuit with multi-range entanglement.
 """
 function _build_layer(params, r, nqubits)
     params_per_layer = PARAMS_PER_QUBIT_PER_LAYER * nqubits
     
-    # Full SU(2) single-qubit rotations: Rz(θ₁) * Ry(θ₂) * Rz(θ₃) for each qubit
+    # Full SU(2) single-qubit rotations: Rx(θ₁) * Rz(θ₂) for each qubit
     single_qubit_gates = []  
     for i in 1:nqubits
         idx = 2*nqubits*r - 2*nqubits + 2*i - 1
@@ -73,29 +73,36 @@ function _build_layer(params, r, nqubits)
     end
     gate = kron(single_qubit_gates...)
     
-    # Brick-wall CNOT pattern for better entanglement
     dim = 2^nqubits
-    cnot_gates = Matrix{ComplexF64}(I, dim, dim)
-    for i in 1:nqubits
-        target = i
-        control = (i % nqubits) + 1  
-        cnot_gates *= Matrix(cnot(nqubits, control, target))
-    end
-    #=
-    # Even layer: pairs (1,2), (3,4), ...
-    cnot_even = Matrix{ComplexF64}(I, dim, dim)
-    for i in 1:2:nqubits-1
-        cnot_even *= Matrix(cnot(nqubits, i, i+1))
+    
+    # Nearest-neighbor CNOTs: (1,2), (2,3), (3,4), (4,5), ...
+    cnot_nn = Matrix{ComplexF64}(I, dim, dim)
+    for i in 1:nqubits-1
+        cnot_nn *= Matrix(cnot(nqubits, i+1, i))  # control=i, target=i+1
     end
     
-    # Odd layer: pairs (2,3), (4,5), ...
-    cnot_odd = Matrix{ComplexF64}(I, dim, dim)
-    for i in 2:2:nqubits-1
-        cnot_odd *= Matrix(cnot(nqubits, i, i+1))
+    # Next-nearest-neighbor CNOTs: (1,3), (2,4), (3,5), ...
+    cnot_nnn = Matrix{ComplexF64}(I, dim, dim)
+    for i in 1:nqubits-2
+        cnot_nnn *= Matrix(cnot(nqubits, i+2, i))  # control=i, target=i+2
     end
     
-    # Combine: single-qubit gates -> even CNOTs -> odd CNOTs=#
-    return Matrix(gate) * cnot_gates
+    # Skip-2 CNOTs: (1,4), (2,5), ... (only if nqubits >= 4)
+    cnot_skip2 = Matrix{ComplexF64}(I, dim, dim)
+    if nqubits >= 4
+        for i in 1:nqubits-3
+            cnot_skip2 *= Matrix(cnot(nqubits, i+3, i))  # control=i, target=i+3
+        end
+    end
+    
+    # Full-range CNOT: 1→nqubits (wrap-around, only if nqubits >= 5)
+    cnot_full = Matrix{ComplexF64}(I, dim, dim)
+    if nqubits >= 5
+        cnot_full *= Matrix(cnot(nqubits, nqubits, 1))  # 1→5 for nqubits=5
+    end
+    
+    # Combine: single-qubit gates -> NN -> NNN -> Skip-2 -> Full-range
+    return Matrix(gate) * cnot_nn * cnot_nnn * cnot_skip2 * cnot_full
 end
 
 """
@@ -115,15 +122,40 @@ Compute TFIM energy from measurement samples.
 
 # Description
 Computes the transverse field Ising model energy:
-H = -g ∑ᵢ Xᵢ - J ∑ᵢ ZᵢZᵢ₊₁ - J ∑ᵢ ZᵢZᵢ₊ᵣₒw
+H = -g ∑ᵢ Xᵢ - J ∑⟨ij⟩ ZᵢZⱼ
+
+Sample layout for row=4:
+  Z[1]  Z[5]  Z[9]   ...   ← row 1
+  Z[2]  Z[6]  Z[10]  ...   ← row 2
+  Z[3]  Z[7]  Z[11]  ...   ← row 3
+  Z[4]  Z[8]  Z[12]  ...   ← row 4
+   ↑     ↑     ↑
+  col1  col2  col3
+
+- Vertical bonds: Z[i]*Z[i+1] only when i % row != 0 (not at last row of column)
+- Horizontal bonds: Z[i]*Z[i+row] (same row, adjacent columns)
 """
 function compute_energy(X_samples, Z_samples, g, J, row) 
     X_mean = mean(X_samples)
+    N = length(Z_samples)
+    
     if row == 1
-        ZZ_mean = mean(Z_samples[i]*Z_samples[i+1] for i in 1:length(Z_samples)-1)
+        # Row=1: only horizontal bonds (no vertical neighbors)
+        ZZ_horiz = mean(Z_samples[i] * Z_samples[i+1] for i in 1:N-1)
+        ZZ_mean = ZZ_horiz
     else
-        ZZ_mean = mean(Z_samples[i]*Z_samples[i+1] + Z_samples[i]*Z_samples[i+row] 
-                       for i in 1:length(Z_samples)-row)
+        # Vertical bonds: Z[i]*Z[i+1] only when NOT at the last row of a column
+        # Skip when i % row == 0 (e.g., Z[4]*Z[5] would be diagonal, not vertical)
+        ZZ_vert_pairs = [Z_samples[i] * Z_samples[i+1] 
+                         for i in 1:N-1]
+        ZZ_vert = mean(ZZ_vert_pairs)
+        
+        # Horizontal bonds: Z[i]*Z[i+row] (same row, adjacent columns)
+        ZZ_horiz = mean(Z_samples[i] * Z_samples[i+row] for i in 1:N-row)
+        
+        # Both contribute to energy
+        ZZ_mean = ZZ_vert + ZZ_horiz
     end
+    
     return -g * X_mean - J * ZZ_mean
 end
