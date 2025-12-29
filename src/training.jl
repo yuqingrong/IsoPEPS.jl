@@ -227,7 +227,7 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
         :maxiter => maxiter,
         :abstol => abstol
     )
-    save_result("data/circuit_g=$(g)_row=$(row).json", result, input_args)
+    save_result("data/circuit_g=$(g)_row=$(row)_nqubits=$(nqubits).json", result, input_args)
     
     return result
 end

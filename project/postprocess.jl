@@ -2,6 +2,7 @@ using IsoPEPS
 using CairoMakie
 using Random
 using LinearAlgebra
+using JSON3
 
 """
     analyze_result(filename::String)
@@ -165,7 +166,7 @@ lags, acf, ξ = analyze_acf("results/circuit_J=1.0_g=2.0_row=6.json")
 lags, acf, ξ = analyze_acf("results/circuit_J=1.0_g=2.0_row=6.json"; resample=true, samples=50000)
 ```
 """
-function analyze_acf(filename::String; max_lag=100, basis=:Z, resample=true, conv_step=1000, samples=1000000)
+function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=true, conv_step=1000, samples=1000000)
     result, input_args = load_result(filename)
     
     if !(result isa CircuitOptimizationResult)
@@ -223,7 +224,7 @@ function analyze_acf(filename::String; max_lag=100, basis=:Z, resample=true, con
     println("Basis: $basis")
     println("Number of samples: $(length(sample_data))")
     
-    lags, acf, acf_err = compute_acf(sample_data[100:end]; max_lag=max_lag, n_bootstrap=50)
+    lags, acf, acf_err = compute_acf(sample_data[100:row:end]; max_lag=max_lag, n_bootstrap=50)
     @show acf, acf_err
     A, ξ = fit_acf_exponential(lags, acf)
     println("Autocorrelation length ($(basis)-basis): ξ = ", ξ)
@@ -245,6 +246,16 @@ function analyze_acf(filename::String; max_lag=100, basis=:Z, resample=true, con
     output_path = joinpath(dirname(filename), output_filename)
     save(output_path, fig)
     println("Figure saved to: $output_path")
+    
+    # Save correlation length ξ back to the result file
+    data = open(filename, "r") do io
+        JSON3.read(io, Dict)
+    end
+    data["correlation_length"] = ξ  # Use string key, not Symbol
+    open(filename, "w") do io
+        JSON3.pretty(io, data)
+    end
+    println("Correlation length ξ=$(round(ξ, digits=3)) saved to result file")
     
     return lags, acf, ξ
 end
@@ -445,11 +456,93 @@ function plot_training_history_comparison(data_dir::String; J=1.0, row=3, select
     return fig
 end
 
+"""
+    extract_correlation_lengths(data_dir::String; J=1.0, g=3.0, nqubits=3, selected_rows=nothing)
+
+Extract correlation lengths (ξ) from multiple result files.
+
+# Arguments
+- `data_dir`: Directory containing JSON result files
+- `J`: Filter results by J value (default: 1.0)
+- `g`: Filter results by g value (default: 3.0)
+- `nqubits`: Filter results by nqubits value (default: 3)
+- `selected_rows`: Vector of row values to extract (default: extract all)
+
+# Returns
+- Tuple of (row_values, ξ_values) sorted by row
+
+# Example
+```julia
+row, ξ = extract_correlation_lengths("project/results"; J=1.0, g=3.0, nqubits=3)
+plot_corr_scale(row, ξ; save_path="project/results/corr_scaling.pdf")
+```
+"""
+function extract_correlation_lengths(data_dir::String; J=1.0, g=3.0, nqubits=3, selected_rows=nothing)
+    # Find all matching files
+    pattern = r"circuit_J=([\d\.]+)_g=([\d\.]+)_row=(\d+)_nqubits=(\d+)\.json"
+    files = filter(readdir(data_dir, join=true)) do f
+        m = match(pattern, basename(f))
+        if isnothing(m)
+            return false
+        end
+        file_J = parse(Float64, m.captures[1])
+        file_g = parse(Float64, m.captures[2])
+        file_row = parse(Int, m.captures[3])
+        file_nqubits = parse(Int, m.captures[4])
+        
+        matches_filter = file_J == J && file_g == g && file_nqubits == nqubits
+        if !isnothing(selected_rows)
+            return matches_filter && file_row in selected_rows
+        end
+        return matches_filter
+    end
+    
+    if isempty(files)
+        @warn "No matching files found in $data_dir"
+        return nothing, nothing
+    end
+    
+    # Extract row and ξ from each file
+    data = []
+    for file in files
+        json_data = open(file, "r") do io
+            JSON3.read(io, Dict)
+        end
+        
+        # Extract row from input_args
+        input_args = get(json_data, "input_args", get(json_data, :input_args, Dict()))
+        row = get(input_args, "row", get(input_args, :row, nothing))
+        
+        # Extract correlation_length if it exists
+        ξ = get(json_data, "correlation_length", get(json_data, :correlation_length, nothing))
+        
+        if !isnothing(row) && !isnothing(ξ)
+            push!(data, (row=row, ξ=ξ))
+            println("Found: row=$row, ξ=$ξ ($(basename(file)))")
+        else
+            @warn "Missing correlation_length in $(basename(file)). Run analyze_acf first."
+        end
+    end
+    
+    if isempty(data)
+        @warn "No files with correlation_length found. Run analyze_acf on the result files first."
+        return nothing, nothing
+    end
+    
+    # Sort by row
+    sort!(data, by=x->x.row)
+    
+    row_values = [d.row for d in data]
+    ξ_values = [d.ξ for d in data]
+    
+    return row_values, ξ_values
+end
+
 # Example usage (commented out)
 # Analyze a single result
-g = 2.0; row=3
+g = 2.0; row=6; nqubits=5
 data_dir = joinpath(@__DIR__, "results")
-datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$row.json")
+datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 result, args = analyze_result(datafile)
 
 # Compare two results
@@ -463,7 +556,7 @@ gates, rho, gap, eigenvalues = reconstruct_gates(datafile)
 visualize_correlation(datafile)
 
 # Analyze autocorrelation (using saved samples)
-lags, acf, ξ = analyze_acf(datafile; max_lag=6, resample=true, samples=1000000)
+lags, acf, ξ = analyze_acf(datafile,row; max_lag=6, resample=false, samples=1000000)
 
 # Analyze autocorrelation with fresh resampled data
 # lags, acf, ξ = analyze_acf(datafile; max_lag=10, resample=true, samples=50000)
@@ -478,3 +571,28 @@ display(fig)
 # Plot training history comparison
 fig = plot_training_history_comparison(data_dir; J=1.0, row=3, selected_g=[1.0, 2.0, 3.0])
 display(fig)
+
+
+
+# ============================================================================
+# Batch process ACF and correlation length scaling
+# ============================================================================
+
+# Step 1: Compute and save ξ for all result files (run once for each file)
+# J_val = 1.0; g_val = 3.0; nqubits_val = 3
+# for row_val in [2, 4, 6, 7, 8, 10, 12]
+#     datafile = joinpath(data_dir, "circuit_J=$(J_val)_g=$(g_val)_row=$(row_val)_nqubits=$(nqubits_val).json")
+#     if isfile(datafile)
+#         println("\n=== Processing J=$J_val, g=$g_val, row=$row_val, nqubits=$nqubits_val ===")
+#         lags, acf, ξ = analyze_acf(datafile; max_lag=6, resample=true, samples=1000000)
+#     end
+# end
+
+# Step 2: Extract correlation lengths from all result files and plot scaling
+row, ξ = extract_correlation_lengths(data_dir; J=1.0, g=2.0, nqubits=5)
+if !isnothing(row) && !isnothing(ξ)
+    fig = plot_corr_scale(row, ξ;
+                          title="Correlation Length Scaling, g=3.0, p=4, virtual_bond=2",
+                          save_path="project/results/corr_scaling.pdf")
+    display(fig)
+end

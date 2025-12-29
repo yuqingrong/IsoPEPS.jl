@@ -64,7 +64,7 @@ function simulation(; J::Float64, g_values::Vector{Float64}, row::Int, p::Int, n
         results[i] = result
         
         # Save result to JSON
-        filename = joinpath(output_dir, "circuit_J=$(J)_g=$(g)_row=$(row).json")
+        filename = joinpath(output_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
         input_args = Dict(
             :J => J, :g => g, :row => row, :p => p, :nqubits => nqubits,
             :maxiter => maxiter, :measure_first => measure_first,
@@ -79,7 +79,7 @@ end
 simulation(;
     J=1.0,
     g_values=[2.0],
-    row=3,
+    row=5,
     p=4,
     nqubits=5,
     maxiter=5000,

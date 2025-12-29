@@ -542,3 +542,64 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
     
     return fig
 end
+
+"""
+    plot_corr_scale(row, corr_length; kwargs...)
+
+Plot inverse correlation length vs inverse row to analyze finite-size scaling.
+
+# Arguments
+- `row`: Array of system sizes (row values)
+- `corr_length`: Array of correlation lengths (ξ) corresponding to each row
+- `title`: Plot title (default: "Correlation Length Scaling")
+- `fit_line`: Show linear fit (default: true)
+- `save_path`: Path to save figure (optional)
+
+# Returns
+- `Figure` object
+
+# Example
+```julia
+row = [3, 4, 5, 6, 7, 8, 10]
+corr_length = [2.5, 3.2, 4.1, 5.3, 6.8, 8.5, 11.2]
+fig = plot_corr_scale(row, corr_length; save_path="corr_scaling.png")
+```
+"""
+function plot_corr_scale(row::AbstractVector, corr_length::AbstractVector;
+    title::String="Correlation Length Scaling",
+    save_path::Union{String,Nothing}=nothing)
+
+# Check input validity
+if length(row) != length(corr_length)
+error("row and corr_length must have the same length")
+end
+
+if any(x -> x <= 0, row) || any(x -> x <= 0, corr_length)
+error("All values must be positive for inverse scaling plot")
+end
+
+# Compute inverse quantities
+inv_row = 1 ./ row
+inv_corr_length = 1 ./ corr_length
+
+# Create figure
+fig = Figure(size=(500, 350))
+ax = Axis(fig[1, 1],
+xlabel="1/row", ylabel="1/ξ",
+title=title)
+
+# Plot data points with connecting lines
+lines!(ax, collect(inv_row), collect(inv_corr_length), 
+linewidth=2, color=:blue, label="Data")
+scatter!(ax, collect(inv_row), collect(inv_corr_length), 
+markersize=12, color=:blue)
+
+axislegend(ax, position=:rb)
+
+if !isnothing(save_path)
+save(save_path, fig)
+@info "Figure saved to $save_path"
+end
+
+return fig
+end

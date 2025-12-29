@@ -89,5 +89,5 @@ export mpskit_ground_state, mpskit_ground_state_1d, pepskit_ground_state
 export save_result, load_result, save_results, load_results
 export plot_correlation_heatmap, plot_acf, compute_acf, fit_acf_exponential
 export plot_training_history, plot_variance_vs_samples
-
+export plot_corr_scale
 end
