@@ -84,7 +84,7 @@ function _build_layer(params, r, nqubits)
     # Next-nearest-neighbor CNOTs: (1,3), (2,4), (3,5), ...
     cnot_nnn = Matrix{ComplexF64}(I, dim, dim)
     for i in 1:nqubits-2
-        cnot_nnn *= Matrix(cnot(nqubits, i, i+2))  # control=i, target=i+2
+        cnot_nnn *= Matrix(cnot(nqubits, i+2, i))  # control=i, target=i+2
     end
     
     # Skip-2 CNOTs: (1,4), (2,5), ... (only if nqubits >= 4)
@@ -156,6 +156,6 @@ function compute_energy(X_samples, Z_samples, g, J, row)
         # Both contribute to energy
         ZZ_mean = ZZ_vert + ZZ_horiz
     end
-    
+   @show X_mean, ZZ_mean
     return -g * X_mean - J * ZZ_mean
 end

@@ -540,7 +540,7 @@ end
 
 # Example usage (commented out)
 # Analyze a single result
-g = 2.0; row=6; nqubits=5
+g = 1.0; row=5 ; nqubits=5
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 result, args = analyze_result(datafile)
@@ -589,10 +589,10 @@ display(fig)
 # end
 
 # Step 2: Extract correlation lengths from all result files and plot scaling
-row, ξ = extract_correlation_lengths(data_dir; J=1.0, g=2.0, nqubits=5)
+row, ξ = extract_correlation_lengths(data_dir; J=1.0, g=1.0, nqubits=5)
 if !isnothing(row) && !isnothing(ξ)
     fig = plot_corr_scale(row, ξ;
-                          title="Correlation Length Scaling, g=3.0, p=4, virtual_bond=2",
+                          title="Correlation Length Scaling, g=1.0, p=4, virtual_bond=4",
                           save_path="project/results/corr_scaling.pdf")
     display(fig)
 end

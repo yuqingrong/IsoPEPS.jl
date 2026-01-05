@@ -128,12 +128,12 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
         gates = build_unitary_gate(x, p, row, nqubits; share_params=share_params)
         
         # Run circuit 11 times with 1000 samples each (in parallel)
-        n_runs = 11
+        n_runs = 1
         Z_samples_all = Vector{Vector{Float64}}(undef, n_runs)
         X_samples_all = Vector{Vector{Float64}}(undef, n_runs)
         
         # Log threading info on first iteration
-        if iter_count[] == 1
+        if iter_count[] == 11
             @info "Using $(Threads.nthreads()) threads for parallel sampling"
         end
         
@@ -163,7 +163,9 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
         energy = compute_energy(X_samples_combined, Z_samples_combined, g, J, row) 
         
         push!(energy_history, real(energy))
-        @info "TFIM J=$J g=$g $(row)×∞ PEPS | Iter $(length(energy_history)) | Energy: $(round(energy, digits=6))"
+        if length(energy_history) % 10 == 0
+            @info "TFIM J=$J g=$g $(row)×∞ PEPS | Iter $(length(energy_history)) | Energy: $(round(energy, digits=6))"
+        end
 
         return real(energy)
     end
