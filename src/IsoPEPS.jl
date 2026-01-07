@@ -22,6 +22,7 @@ module IsoPEPS
 
 using LinearAlgebra
 using Statistics
+using KrylovKit
 using Yao, Yao.EasyBuild
 using OMEinsum
 using OMEinsumContractionOrders
@@ -58,7 +59,7 @@ include("exact.jl")
 # =============================================================================
 # Quantum Channel Simulation
 # =============================================================================
-export sample_quantum_channel
+export sample_quantum_channel, track_convergence_to_steady_state
 
 # =============================================================================
 # Gate Construction & Energy

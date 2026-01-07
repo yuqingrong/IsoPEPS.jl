@@ -224,12 +224,28 @@ function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=t
     println("Basis: $basis")
     println("Number of samples: $(length(sample_data))")
     
+    # Compute transfer matrix gap for comparison
+    p = input_args[:p]
+    nqubits = input_args[:nqubits]
+    share_params = get(input_args, :share_params, true)
+    gates = build_unitary_gate(result.params, p, row, nqubits; share_params=share_params)
+    _, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
+    ξ_transfer = 1.0 / gap  # Theoretical correlation length from transfer matrix
+    
+    # Subsample every `row` steps so each lag = one full layer
+    # This should match the transfer matrix which also describes one layer
     lags, acf, acf_err = compute_acf(sample_data[100:row:end]; max_lag=max_lag, n_bootstrap=50)
     @show acf, acf_err
-    A, ξ = fit_acf_exponential(lags, acf)
-    println("Autocorrelation length ($(basis)-basis): ξ = ", ξ)
+    A, ξ = fit_acf_exponential(lags, acf; use_log_fit=true)
     
-    title_text = "ACF $(basename(filename)) (ξ=$(round(ξ, digits=2)))"
+    println("\n--- Correlation Length Comparison ---")
+    println("Transfer matrix gap:        gap = $(round(gap, digits=4))")
+    println("Transfer matrix ξ:          1/gap = $(round(ξ_transfer, digits=4))")
+    println("ACF correlation length:     ξ_ACF = $(round(ξ, digits=4))")
+    println("Ratio (ξ_ACF / ξ_transfer): $(round(ξ / ξ_transfer, digits=4))")
+    println("Second eigenvalue |λ₂|:     $(round(eigenvalues[2], digits=6))")
+    
+    title_text = "ACF $(basename(filename))\nξ_ACF=$(round(ξ, digits=2)), 1/gap=$(round(ξ_transfer, digits=2))"
     if resample
         title_text *= " [resampled]"
     end
@@ -540,7 +556,7 @@ end
 
 # Example usage (commented out)
 # Analyze a single result
-g = 1.0; row=5 ; nqubits=5
+g = 2.0; row=3 ; nqubits=3
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 result, args = analyze_result(datafile)
@@ -589,10 +605,10 @@ display(fig)
 # end
 
 # Step 2: Extract correlation lengths from all result files and plot scaling
-row, ξ = extract_correlation_lengths(data_dir; J=1.0, g=1.0, nqubits=5)
+row, ξ = extract_correlation_lengths(data_dir; J=1.0, g=3.0, nqubits=5)
 if !isnothing(row) && !isnothing(ξ)
     fig = plot_corr_scale(row, ξ;
-                          title="Correlation Length Scaling, g=1.0, p=4, virtual_bond=4",
-                          save_path="project/results/corr_scaling.pdf")
+                          title="Correlation Length Scaling, g=3.0, p=4, virtual_bond=4",
+                          save_path="project/results/corr_scaling_g3.pdf")
     display(fig)
 end

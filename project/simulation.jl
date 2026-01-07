@@ -79,12 +79,12 @@ end
 simulation(;
     J=1.0,
     g_values=[1.0],
-    row=3,
+    row=8,
     p=4,
     nqubits=3,
-    maxiter=3000,
+    maxiter=5000,
     measure_first=:Z,
-    seed=123,
+    seed=12,
     verbose=true,
     output_dir=joinpath(@__DIR__, "results"),
     share_params=true

@@ -67,3 +67,72 @@ function sample_quantum_channel(gates, row, nqubits; conv_step=100, samples=1000
     
     return rho, Z_samples, X_samples
 end
+
+"""
+    track_convergence_to_steady_state(gates, row, nqubits; n_steps=30, n_trajectories=50)
+
+Track how ⟨Z⟩ converges to steady state from random initial states.
+
+The deviation from equilibrium decays as λ₂^k, where λ₂ is the second largest
+eigenvalue of the transfer matrix. This verifies the transfer matrix gap.
+
+# Arguments
+- `gates`: Vector of gate matrices
+- `row`: Number of rows in PEPS
+- `nqubits`: Number of qubits per gate
+- `n_steps`: Number of steps to track (default: 30)
+- `n_trajectories`: Number of random initial states to average over (default: 50)
+
+# Returns
+- `Z_deviations`: RMS deviation from equilibrium at each step (decays as λ₂^k)
+- `Z_equilibrium`: Equilibrium value of ⟨Z⟩
+"""
+function track_convergence_to_steady_state(gates, row, nqubits; n_steps=30, n_trajectories=50)
+    total_qubits = Int((nqubits-1)/2)*(row+1) + 1
+    boundary_qubits = total_qubits - 1
+    fixed_qubits = (nqubits+1)÷2
+    remaining_qubits = (nqubits-1)÷2
+    d = 2^boundary_qubits
+    
+    Z_op = put(total_qubits, 1 => Z)
+    
+    # Helper: apply one channel step (partial trace + gate)
+    function apply_step(rho, j)
+        rho_mat = Matrix(rho)
+        rho_boundary = zeros(ComplexF64, d, d)
+        for ii in 1:d, jj in 1:d
+            rho_boundary[ii, jj] = rho_mat[2ii-1, 2jj-1] + rho_mat[2ii, 2jj]
+        end
+        rho_new = zeros(ComplexF64, 2^total_qubits, 2^total_qubits)
+        for ii in 1:d, jj in 1:d
+            rho_new[2ii-1, 2jj-1] = rho_boundary[ii, jj]
+        end
+        rho = DensityMatrix(rho_new)
+        qubit_positions = tuple((1:fixed_qubits)..., (fixed_qubits + (j-1)*remaining_qubits + 1:fixed_qubits + j*remaining_qubits)...)
+        return Yao.apply(rho, put(total_qubits, qubit_positions => matblock(gates[j])))
+    end
+    
+    # Find equilibrium ⟨Z⟩ by running until convergence
+    rho_eq = density_matrix(zero_state(total_qubits))
+    for _ in 1:100
+        for j in 1:row
+            rho_eq = apply_step(rho_eq, j)
+        end
+    end
+    Z_eq = real(tr(Matrix(rho_eq) * Matrix(mat(Z_op))))
+    
+    # Track deviations from random initial states
+    Z_deviations = zeros(n_steps)
+    for _ in 1:n_trajectories
+        rho = density_matrix(rand_state(total_qubits))
+        for step in 1:n_steps
+            j = ((step - 1) % row) + 1
+            rho = apply_step(rho, j)
+            Z_exp = real(tr(Matrix(rho) * Matrix(mat(Z_op))))
+            Z_deviations[step] += (Z_exp - Z_eq)^2
+        end
+    end
+    Z_deviations = sqrt.(Z_deviations ./ n_trajectories)
+    
+    return Z_deviations, Z_eq
+end

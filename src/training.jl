@@ -128,7 +128,7 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
         gates = build_unitary_gate(x, p, row, nqubits; share_params=share_params)
         
         # Run circuit 11 times with 1000 samples each (in parallel)
-        n_runs = 1
+        n_runs = 11
         Z_samples_all = Vector{Vector{Float64}}(undef, n_runs)
         X_samples_all = Vector{Vector{Float64}}(undef, n_runs)
         
@@ -144,11 +144,11 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
                                                                 measure_first=measure_first)
             # Discard convergence samples from each run
             if measure_first == :X
-                Z_samples_all[run_idx] = Z_samples
+                Z_samples_all[run_idx] = Z_samples[conv_step:end]
                 X_samples_all[run_idx] = X_samples[conv_step:end]
             else
                 Z_samples_all[run_idx] = Z_samples[conv_step:end]
-                X_samples_all[run_idx] = X_samples
+                X_samples_all[run_idx] = X_samples[conv_step:end]
             end
         end
         

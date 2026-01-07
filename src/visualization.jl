@@ -357,16 +357,28 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
 end
 
 """
-    compute_acf(data::Vector{Float64}; max_lag::Int=100) -> (lags, acf, acf_err)
+    compute_acf(data::Vector{Float64}; max_lag::Int=100, normalize::Bool=true) -> (lags, acf, acf_err)
 
-Compute autocorrelation function with bootstrap error estimation.
+Compute normalized autocorrelation function with bootstrap error estimation.
+
+# Arguments
+- `data`: Time series data
+- `max_lag`: Maximum lag to compute (default: 100)
+- `n_bootstrap`: Number of bootstrap samples for error estimation (default: 100)
+- `normalize`: If true, normalize so ACF(0) = 1 (default: true)
+
+# Returns
+- `lags`: Lag values (0 to max_lag-1)
+- `acf`: Autocorrelation values (normalized if normalize=true)
+- `acf_err`: Bootstrap standard errors
 """
-function compute_acf(data::Vector{Float64}; max_lag::Int=100, n_bootstrap::Int=100)
+function compute_acf(data::Vector{Float64}; max_lag::Int=100, n_bootstrap::Int=100, normalize::Bool=true)
     N = length(data)
     max_lag = min(max_lag, div(N, 2))
     
     μ = mean(data)
     centered = data .- μ
+    variance = mean(centered.^2)  # Variance for normalization
     
     acf = zeros(max_lag)
     acf_err = zeros(max_lag)
@@ -374,7 +386,9 @@ function compute_acf(data::Vector{Float64}; max_lag::Int=100, n_bootstrap::Int=1
     for k in 1:max_lag
         lag = k - 1
         n_pairs = N - lag
-        acf[k] = abs(mean(centered[i] * centered[i + lag] for i in 1:n_pairs))
+        # Compute ACF without abs() to preserve sign (important for oscillating correlations)
+        raw_acf = mean(centered[i] * centered[i + lag] for i in 1:n_pairs)
+        acf[k] = normalize ? raw_acf / variance : raw_acf
         
         # Bootstrap error estimation
         block_size = min(50, div(N, 10))
@@ -391,9 +405,11 @@ function compute_acf(data::Vector{Float64}; max_lag::Int=100, n_bootstrap::Int=1
             if length(boot_sample) > lag
                 boot_μ = mean(boot_sample)
                 boot_centered = boot_sample .- boot_μ
+                boot_var = mean(boot_centered.^2)
                 n_boot_pairs = min(length(boot_sample) - lag, n_pairs)
-                if n_boot_pairs > 0
-                    bootstrap_vals[b] = abs(mean(boot_centered[i] * boot_centered[i + lag] for i in 1:n_boot_pairs))
+                if n_boot_pairs > 0 && boot_var > 0
+                    raw_boot = mean(boot_centered[i] * boot_centered[i + lag] for i in 1:n_boot_pairs)
+                    bootstrap_vals[b] = normalize ? raw_boot / boot_var : raw_boot
                 end
             end
         end
@@ -404,14 +420,54 @@ function compute_acf(data::Vector{Float64}; max_lag::Int=100, n_bootstrap::Int=1
 end
 
 """
-    fit_acf_exponential(lags, acf) -> (A, ξ)
+    fit_acf_exponential(lags, acf; use_log_fit::Bool=true) -> (A, ξ)
 
 Fit ACF to exponential decay A·exp(-lag/ξ).
-Fits the absolute values to extract the decay length.
+
+For normalized ACF (ACF(0)=1), use use_log_fit=true for more robust fitting
+by fitting log(|ACF|) vs lag linearly.
+
+# Arguments
+- `lags`: Lag values
+- `acf`: Autocorrelation values
+- `use_log_fit`: If true, use linear fit on log scale (more robust for exponential decay)
+
+# Returns
+- `A`: Amplitude (should be ≈1 for normalized ACF)
+- `ξ`: Correlation length (= 1/gap from transfer matrix theory)
 """
-function fit_acf_exponential(lags::AbstractVector, acf::AbstractVector)
-    # Fit to absolute values to get decay length
+function fit_acf_exponential(lags::AbstractVector, acf::AbstractVector; use_log_fit::Bool=true)
     abs_acf = abs.(acf)
+    
+    if use_log_fit
+        # Use linear fit on log scale: log|ACF| = log(A) - lag/ξ
+        # This is more robust for exponential decay
+        # Skip lag=0 if ACF(0)=1 (normalized), and skip very small values
+        valid_mask = (abs_acf .> 1e-10) .& (collect(lags) .> 0)
+        if sum(valid_mask) < 2
+            # Fall back to nonlinear fit if not enough valid points
+            valid_mask = abs_acf .> 1e-10
+        end
+        
+        valid_lags = collect(lags)[valid_mask]
+        valid_log_acf = log.(abs_acf[valid_mask])
+        
+        if length(valid_lags) >= 2
+            # Linear regression: log|ACF| = a + b*lag, where b = -1/ξ
+            X = hcat(ones(length(valid_lags)), valid_lags)
+            coeffs = X \ valid_log_acf
+            a, b = coeffs
+            A = exp(a)
+            ξ = -1.0 / b
+            
+            # Sanity check: ξ should be positive
+            if ξ > 0
+                return (A, ξ)
+            end
+        end
+    end
+    
+    # Fallback: nonlinear least squares fit
     model(x, p) = p[1] .* exp.(-x ./ p[2])
     
     A_init = abs_acf[1]
@@ -423,11 +479,16 @@ function fit_acf_exponential(lags::AbstractVector, acf::AbstractVector)
             break
         end
     end
-    ξ_init = clamp(ξ_init, 1.0, length(lags) / 2.0)
+    ξ_init = clamp(ξ_init, 0.1, length(lags) * 2.0)
     
-    fit = curve_fit(model, collect(lags), collect(abs_acf), [A_init, ξ_init])
-    A, ξ = coef(fit)
-    return (A, ξ)
+    try
+        fit = curve_fit(model, collect(lags), collect(abs_acf), [A_init, ξ_init])
+        A, ξ = coef(fit)
+        return (abs(A), abs(ξ))
+    catch
+        # If fit fails, return rough estimate
+        return (A_init, ξ_init)
+    end
 end
 
 """

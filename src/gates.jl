@@ -156,6 +156,6 @@ function compute_energy(X_samples, Z_samples, g, J, row)
         # Both contribute to energy
         ZZ_mean = ZZ_vert + ZZ_horiz
     end
-   @show X_mean, ZZ_mean
+
     return -g * X_mean - J * ZZ_mean
 end

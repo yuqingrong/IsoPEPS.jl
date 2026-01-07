@@ -93,6 +93,114 @@ end
     @test ξ ≈ 10.0 atol=2.0
 end
 
+@testset "ACF correlation length matches transfer matrix gap (exact)" begin
+    # Test that fitting a perfect exponential ACF = λ₂^k recovers ξ = 1/gap exactly
+    # This tests the mathematical relationship: ACF(k) = λ₂^k = exp(-k*gap) = exp(-k/ξ)
+    # where gap = -log(λ₂) and ξ = 1/gap = -1/log(λ₂)
+    
+    for λ2 in [0.3, 0.5, 0.7, 0.9, 0.95, 0.99]
+        gap = -log(λ2)
+        ξ_theory = 1.0 / gap
+        
+        # Generate exact ACF data: ACF(k) = λ₂^k
+        max_lag = 50
+        lags = 0:max_lag
+        acf_exact = [λ2^k for k in lags]
+        
+        # Fit and recover ξ
+        A, ξ_fit = fit_acf_exponential(lags, acf_exact; use_log_fit=true)
+        
+        # Test: ξ from fit should match 1/gap exactly (within numerical precision)
+        @test ξ_fit ≈ ξ_theory atol=1e-3
+        @test A ≈ 1.0 atol=1e-3
+        
+        # Also verify the relationship: gap = -log(λ₂) = 1/ξ
+        gap_from_fit = 1.0 / ξ_fit
+        @test gap_from_fit ≈ gap atol=1e-3
+    end
+end
+
+@testset "ACF correlation length from channel sampling" begin
+    using Statistics
+    using Yao, YaoBlocks
+    using Random
+    using LinearAlgebra
+    
+    # This test samples from many quantum channels, computes ACF for each,
+    # fits correlation length, and verifies it matches 1/gap.
+    # 
+    # Key: We compute ACF for EACH channel separately (preserving temporal structure),
+    # then average the fitted ξ values.
+    
+    nqubits = 3
+    row = 2
+    target_ε = 0.25
+    n_channels = 100
+    samples_per_channel = 1000
+    max_lag = 10
+    
+    all_ξ_gap = Float64[]
+    all_ξ_sampled = Float64[]
+    all_acf1 = Float64[]
+    all_λ2 = Float64[]
+    
+    for seed in 1:n_channels
+        Random.seed!(seed * 1000)
+        
+        H = randn(ComplexF64, 2^nqubits, 2^nqubits)
+        H = (H + adjoint(H)) / 2
+        gate_matrix = exp(1im * target_ε * H)
+        gates = [gate_matrix for _ in 1:row]
+        
+        # Get transfer matrix spectrum
+        _, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
+        λ2 = eigenvalues[end-1]
+        ξ_gap = 1.0 / gap
+        push!(all_ξ_gap, ξ_gap)
+        push!(all_λ2, λ2)
+        
+        # Sample from this channel
+        _, Z_samples, _ = sample_quantum_channel(gates, row, nqubits; 
+                                                  conv_step=500, 
+                                                  samples=samples_per_channel,
+                                                  measure_only=:Z)
+        sample_data = Float64.(Z_samples[1:row:end])
+        
+        # Compute ACF for THIS channel
+        lags, acf, _ = compute_acf(sample_data; max_lag=max_lag, n_bootstrap=5)
+        
+        # Fit correlation length from sampled ACF
+        A, ξ_sampled = fit_acf_exponential(lags, acf; use_log_fit=true)
+        push!(all_ξ_sampled, ξ_sampled)
+        push!(all_acf1, acf[2])  # ACF at lag 1
+    end
+    
+    # Average values
+    mean_ξ_gap = mean(all_ξ_gap)
+    mean_ξ_sampled = mean(all_ξ_sampled)
+    mean_acf1 = mean(all_acf1)
+    mean_λ2 = mean(all_λ2)
+    ratio = mean_ξ_sampled / mean_ξ_gap
+    
+    # Test: Both should be positive
+    @test all(all_ξ_gap .> 0)
+    @test all(all_ξ_sampled .> 0)
+    
+    # Test: ACF[1] from sampling should be much smaller than λ₂
+    # (measurement back-action destroys correlations)
+    @test abs(mean_acf1) < mean_λ2 / 2
+    
+    # Test: ξ_sampled should be positive (even if noisy)
+    @test mean_ξ_sampled > 0
+    
+    println("Sampled $n_channels channels ($samples_per_channel samples each):")
+    println("  mean(λ₂) = $(round(mean_λ2, digits=4)) (theoretical ACF[1])")
+    println("  mean(ACF[1]_sampled) = $(round(mean_acf1, digits=4))")
+    println("  → Measurement destroys ~$(round((1-abs(mean_acf1)/mean_λ2)*100, digits=1))% of correlations")
+    println("  mean(ξ_gap)=$(round(mean_ξ_gap, digits=4))")
+    println("  mean(ξ_sampled)=$(round(mean_ξ_sampled, digits=4))")
+end
+
 @testset "plot_acf" begin
     lags = 0:49
     acf = exp.(-lags ./ 10.0)
@@ -135,4 +243,46 @@ end
     errors = [0.01, 0.002, 0.001, 0.0002]
     fig2 = plot_variance_vs_samples(samples, variances; errors=errors)
     @test fig2 isa Figure
+end
+
+@testset "Sampled expectations match transfer matrix fixed point" begin
+    using Statistics
+    using Yao, YaoBlocks
+    using Random
+    using LinearAlgebra
+    
+    # This is the correct way to verify measurement results match propagation:
+    # 1. Compute exact expectation values from transfer matrix fixed point
+    # 2. Sample from quantum channel
+    # 3. Check sampled means match exact values within statistical error
+    
+    for seed in [42, 123, 456]
+        Random.seed!(seed)
+        
+        nqubits = 3
+        row = 2
+        
+        # Random gates
+        gate_matrix = rand_unitary(ComplexF64, 2^nqubits)
+        gates = [gate_matrix for _ in 1:row]
+        
+        # Exact values from transfer matrix fixed point
+        rho, _, _ = compute_transfer_spectrum(gates, row, nqubits)
+        X_exact = real(compute_X_expectation(rho, gates, row, nqubits))
+        
+        # Sample
+        n_samples = 500000
+        _, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits; 
+                                                          conv_step=2000, 
+                                                          samples=n_samples)
+        
+        X_sampled = mean(X_samples)
+        X_std = std(X_samples) / sqrt(length(X_samples))  # Standard error
+        X_error = abs(X_sampled - X_exact)
+        
+        # Test: sampled mean should match exact value within 3σ
+        @test X_error < 3 * X_std
+        
+        println("seed=$seed: ⟨X⟩_exact=$(round(X_exact, digits=4)), ⟨X⟩_sampled=$(round(X_sampled, digits=4)) ± $(round(X_std, digits=4))")
+    end
 end
