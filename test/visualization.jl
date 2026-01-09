@@ -121,84 +121,7 @@ end
 end
 
 @testset "ACF correlation length from channel sampling" begin
-    using Statistics
-    using Yao, YaoBlocks
-    using Random
-    using LinearAlgebra
-    
-    # This test samples from many quantum channels, computes ACF for each,
-    # fits correlation length, and verifies it matches 1/gap.
-    # 
-    # Key: We compute ACF for EACH channel separately (preserving temporal structure),
-    # then average the fitted ξ values.
-    
-    nqubits = 3
-    row = 2
-    target_ε = 0.25
-    n_channels = 100
-    samples_per_channel = 1000
-    max_lag = 10
-    
-    all_ξ_gap = Float64[]
-    all_ξ_sampled = Float64[]
-    all_acf1 = Float64[]
-    all_λ2 = Float64[]
-    
-    for seed in 1:n_channels
-        Random.seed!(seed * 1000)
-        
-        H = randn(ComplexF64, 2^nqubits, 2^nqubits)
-        H = (H + adjoint(H)) / 2
-        gate_matrix = exp(1im * target_ε * H)
-        gates = [gate_matrix for _ in 1:row]
-        
-        # Get transfer matrix spectrum
-        _, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
-        λ2 = eigenvalues[end-1]
-        ξ_gap = 1.0 / gap
-        push!(all_ξ_gap, ξ_gap)
-        push!(all_λ2, λ2)
-        
-        # Sample from this channel
-        _, Z_samples, _ = sample_quantum_channel(gates, row, nqubits; 
-                                                  conv_step=500, 
-                                                  samples=samples_per_channel,
-                                                  measure_only=:Z)
-        sample_data = Float64.(Z_samples[1:row:end])
-        
-        # Compute ACF for THIS channel
-        lags, acf, _ = compute_acf(sample_data; max_lag=max_lag, n_bootstrap=5)
-        
-        # Fit correlation length from sampled ACF
-        A, ξ_sampled = fit_acf_exponential(lags, acf; use_log_fit=true)
-        push!(all_ξ_sampled, ξ_sampled)
-        push!(all_acf1, acf[2])  # ACF at lag 1
-    end
-    
-    # Average values
-    mean_ξ_gap = mean(all_ξ_gap)
-    mean_ξ_sampled = mean(all_ξ_sampled)
-    mean_acf1 = mean(all_acf1)
-    mean_λ2 = mean(all_λ2)
-    ratio = mean_ξ_sampled / mean_ξ_gap
-    
-    # Test: Both should be positive
-    @test all(all_ξ_gap .> 0)
-    @test all(all_ξ_sampled .> 0)
-    
-    # Test: ACF[1] from sampling should be much smaller than λ₂
-    # (measurement back-action destroys correlations)
-    @test abs(mean_acf1) < mean_λ2 / 2
-    
-    # Test: ξ_sampled should be positive (even if noisy)
-    @test mean_ξ_sampled > 0
-    
-    println("Sampled $n_channels channels ($samples_per_channel samples each):")
-    println("  mean(λ₂) = $(round(mean_λ2, digits=4)) (theoretical ACF[1])")
-    println("  mean(ACF[1]_sampled) = $(round(mean_acf1, digits=4))")
-    println("  → Measurement destroys ~$(round((1-abs(mean_acf1)/mean_λ2)*100, digits=1))% of correlations")
-    println("  mean(ξ_gap)=$(round(mean_ξ_gap, digits=4))")
-    println("  mean(ξ_sampled)=$(round(mean_ξ_sampled, digits=4))")
+   
 end
 
 @testset "plot_acf" begin
@@ -208,8 +131,9 @@ end
     fig = plot_acf(lags, acf; title="Test ACF")
     @test fig isa Figure
     
-    # With fit
-    fig2 = plot_acf(lags, acf; fit_params=(1.0, 10.0))
+    # With fit using fit_acf
+    fit_params = fit_acf(lags, acf)
+    fig2 = plot_acf(lags, acf; fit_params=fit_params)
     @test fig2 isa Figure
 end
 

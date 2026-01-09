@@ -30,11 +30,11 @@ function save_result(filename::String, result::CircuitOptimizationResult, input_
     data = Dict{Symbol, Any}(
         :type => "CircuitOptimizationResult",
         :energy_history => result.energy_history,
-        :params => result.params,
-        :energy => result.energy,
+        :params => result.final_params,
+        :energy => result.final_cost,
         :converged => result.converged,
-        :Z_samples => result.Z_samples,
-        :X_samples => result.X_samples,
+        :Z_samples => result.final_Z_samples,
+        :X_samples => result.final_X_samples,
         :input_args => input_args
     )
     
@@ -280,6 +280,71 @@ function plot_correlation_heatmap(result::CircuitOptimizationResult; kwargs...)
 end
 
 """
+    fit_acf(lags::AbstractVector, acf::AbstractVector; fit_range::Union{Tuple{Int,Int},Nothing}=nothing)
+
+Fit ACF data using linear regression on log|C(r)|.
+
+The model is: log|C(r)| = a + b·r, which corresponds to |C(r)| = A·|λ₂|^r
+
+# Arguments
+- `lags`: Lag values
+- `acf`: ACF values  
+- `fit_range`: (start_lag, end_lag) range for fitting (default: use all data)
+
+# Returns
+- `NamedTuple` with fields:
+  - `a`: Intercept (log(A))
+  - `b`: Slope (log|λ₂|)
+  - `A`: Amplitude exp(a)
+  - `λ₂`: Second eigenvalue exp(b)
+  - `ξ`: Correlation length -1/b
+  - `fit_lags`: Lags used for fitting
+"""
+function fit_acf(lags::AbstractVector, acf::AbstractVector; 
+                 fit_range::Union{Tuple{Int,Int},Nothing}=nothing)
+    lags_vec = collect(lags)
+    abs_acf = abs.(collect(acf))
+    
+    # Filter out zeros and very small values
+    valid_mask = abs_acf .> 1e-15
+    
+    # Apply fit range if specified
+    if !isnothing(fit_range)
+        start_lag, end_lag = fit_range
+        range_mask = (lags_vec .>= start_lag) .& (lags_vec .<= end_lag)
+        valid_mask = valid_mask .& range_mask
+    end
+    
+    fit_lags = lags_vec[valid_mask]
+    fit_acf_vals = abs_acf[valid_mask]
+    
+    if length(fit_lags) < 2
+        error("Not enough valid data points for fitting")
+    end
+    
+    # Linear regression on log|C(r)|: y = a + b·r
+    y = log.(fit_acf_vals)
+    x = fit_lags
+    n = length(x)
+    
+    # Least squares: b = (n·Σxy - Σx·Σy) / (n·Σx² - (Σx)²)
+    Σx = sum(x)
+    Σy = sum(y)
+    Σxy = sum(x .* y)
+    Σx² = sum(x .^ 2)
+    
+    b = (n * Σxy - Σx * Σy) / (n * Σx² - Σx^2)
+    a = (Σy - b * Σx) / n
+    
+    # Derived quantities
+    A = exp(a)
+    λ₂ = exp(b)
+    ξ = -1 / b
+    
+    return (a=a, b=b, A=A, λ₂=λ₂, ξ=ξ, fit_lags=fit_lags)
+end
+
+"""
     plot_acf(lags::AbstractVector, acf::AbstractVector; kwargs...)
 
 Plot autocorrelation function with optional exponential fit.
@@ -288,7 +353,8 @@ Plot autocorrelation function with optional exponential fit.
 - `lags`: Lag values
 - `acf`: ACF values
 - `acf_err`: Error bars (optional)
-- `fit_params`: (A, ξ) for exponential fit A·exp(-lag/ξ) (optional)
+- `fit_range`: (start_lag, end_lag) for automatic fitting (optional)
+- `fit_params`: Pre-computed fit params from `fit_acf` (optional, overrides fit_range)
 - `title`: Plot title
 - `logscale`: Use log scale for y-axis (default: true)
 - `save_path`: Path to save figure (optional)
@@ -298,7 +364,8 @@ Plot autocorrelation function with optional exponential fit.
 """
 function plot_acf(lags::AbstractVector, acf::AbstractVector;
                   acf_err::Union{AbstractVector,Nothing}=nothing,
-                  fit_params::Union{Tuple{<:Real,<:Real},Nothing}=nothing,
+                  fit_range::Union{Tuple{Int,Int},Nothing}=nothing,
+                  fit_params::Union{NamedTuple,Nothing}=nothing,
                   title::String="Autocorrelation Function",
                   logscale::Bool=true,
                   save_path::Union{String,Nothing}=nothing)
@@ -331,11 +398,17 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
     end
     scatter!(ax, lags_vec, plot_y, markersize=8, label="Data")
     
-    # Plot exponential fit
+    # Compute fit if fit_range provided but no fit_params
+    if isnothing(fit_params) && !isnothing(fit_range)
+        fit_params = fit_acf(lags, acf; fit_range=fit_range)
+    end
+    
+    # Plot fit: log|C(r)| = a + b·r, i.e., |C(r)| = A·|λ₂|^r
     if !isnothing(fit_params)
-        A, ξ = fit_params
-        A_pos = abs(A)
-        fit_curve = A_pos .* exp.(-lags_vec ./ ξ)
+        A = fit_params.A
+        λ₂ = fit_params.λ₂
+        ξ = fit_params.ξ
+        fit_curve = A .* (λ₂ .^ lags_vec)
         
         if logscale
             # Clamp to min threshold to avoid log10(0)
@@ -343,7 +416,7 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
         end
         
         lines!(ax, lags_vec, fit_curve, linewidth=2, linestyle=:dash, color=:red,
-               label="Fit: A·exp(-lag/$(round(ξ, digits=2)))")
+               label="Fit: λ₂=$(round(λ₂, digits=4)), ξ=$(round(ξ, digits=2))")
     end
     
     axislegend(ax, position=:rt)
@@ -482,8 +555,8 @@ function fit_acf_exponential(lags::AbstractVector, acf::AbstractVector; use_log_
     ξ_init = clamp(ξ_init, 0.1, length(lags) * 2.0)
     
     try
-        fit = curve_fit(model, collect(lags), collect(abs_acf), [A_init, ξ_init])
-        A, ξ = coef(fit)
+    fit = curve_fit(model, collect(lags), collect(abs_acf), [A_init, ξ_init])
+    A, ξ = coef(fit)
         return (abs(A), abs(ξ))
     catch
         # If fit fails, return rough estimate

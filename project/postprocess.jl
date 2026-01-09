@@ -236,23 +236,24 @@ function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=t
     # This should match the transfer matrix which also describes one layer
     lags, acf, acf_err = compute_acf(sample_data[100:row:end]; max_lag=max_lag, n_bootstrap=50)
     @show acf, acf_err
-    A, ξ = fit_acf_exponential(lags, acf; use_log_fit=true)
+    fit_params = fit_acf(lags, acf)
     
     println("\n--- Correlation Length Comparison ---")
     println("Transfer matrix gap:        gap = $(round(gap, digits=4))")
     println("Transfer matrix ξ:          1/gap = $(round(ξ_transfer, digits=4))")
-    println("ACF correlation length:     ξ_ACF = $(round(ξ, digits=4))")
-    println("Ratio (ξ_ACF / ξ_transfer): $(round(ξ / ξ_transfer, digits=4))")
+    println("ACF correlation length:     ξ_ACF = $(round(fit_params.ξ, digits=4))")
+    println("Ratio (ξ_ACF / ξ_transfer): $(round(fit_params.ξ / ξ_transfer, digits=4))")
     println("Second eigenvalue |λ₂|:     $(round(eigenvalues[2], digits=6))")
+    println("Fitted |λ₂|:                $(round(fit_params.λ₂, digits=6))")
     
-    title_text = "ACF $(basename(filename))\nξ_ACF=$(round(ξ, digits=2)), 1/gap=$(round(ξ_transfer, digits=2))"
+    title_text = "ACF $(basename(filename))\nξ_ACF=$(round(fit_params.ξ, digits=2)), 1/gap=$(round(ξ_transfer, digits=2))"
     if resample
         title_text *= " [resampled]"
     end
     
     fig = plot_acf(lags, acf; 
                     acf_err=acf_err,
-                    fit_params=(A, ξ),
+                    fit_params=fit_params,
                     logscale=false,
                     title=title_text)
     display(fig)
@@ -267,13 +268,14 @@ function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=t
     data = open(filename, "r") do io
         JSON3.read(io, Dict)
     end
-    data["correlation_length"] = ξ  # Use string key, not Symbol
+    data["correlation_length"] = fit_params.ξ  # Use string key, not Symbol
+    data["lambda2"] = fit_params.λ₂
     open(filename, "w") do io
         JSON3.pretty(io, data)
     end
-    println("Correlation length ξ=$(round(ξ, digits=3)) saved to result file")
+    println("Correlation length ξ=$(round(fit_params.ξ, digits=3)) saved to result file")
     
-    return lags, acf, ξ
+    return lags, acf, fit_params
 end
 
 """
@@ -556,9 +558,9 @@ end
 
 # Example usage (commented out)
 # Analyze a single result
-g = 2.0; row=3 ; nqubits=3
+g = 0.5; row=1 ; nqubits=3
 data_dir = joinpath(@__DIR__, "results")
-datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
+datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_p=4_nqubits=$(nqubits).json")
 result, args = analyze_result(datafile)
 
 # Compare two results
@@ -572,7 +574,7 @@ gates, rho, gap, eigenvalues = reconstruct_gates(datafile)
 visualize_correlation(datafile)
 
 # Analyze autocorrelation (using saved samples)
-lags, acf, ξ = analyze_acf(datafile,row; max_lag=6, resample=false, samples=1000000)
+lags, acf, fit_params = analyze_acf(datafile, row; max_lag=6, resample=false, samples=1000000)
 
 # Analyze autocorrelation with fresh resampled data
 # lags, acf, ξ = analyze_acf(datafile; max_lag=10, resample=true, samples=50000)

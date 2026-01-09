@@ -31,6 +31,7 @@ using MPSKitModels: transverse_field_ising, InfiniteStrip, InfiniteCylinder,
                     @mpoham, InfiniteChain, nearest_neighbours, vertices
 using PEPSKit: InfiniteSquare
 using Optimization, OptimizationCMAEvolutionStrategy
+using CMAEvolutionStrategy
 using Manifolds, Manopt
 using Optim
 using CairoMakie
@@ -59,7 +60,7 @@ include("exact.jl")
 # =============================================================================
 # Quantum Channel Simulation
 # =============================================================================
-export sample_quantum_channel, track_convergence_to_steady_state
+export sample_quantum_channel, track_convergence_to_steady_state, estimate_correlation_length_from_sampling, estimate_correlation_length_exact
 
 # =============================================================================
 # Gate Construction & Energy
@@ -88,7 +89,7 @@ export mpskit_ground_state, mpskit_ground_state_1d, pepskit_ground_state
 # Data I/O & Visualization
 # =============================================================================
 export save_result, load_result, save_results, load_results
-export plot_correlation_heatmap, plot_acf, compute_acf, fit_acf_exponential
+export plot_correlation_heatmap, plot_acf, compute_acf, fit_acf, fit_acf_exponential
 export plot_training_history, plot_variance_vs_samples
 export plot_corr_scale
 end
