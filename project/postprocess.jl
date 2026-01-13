@@ -14,9 +14,7 @@ function analyze_result(filename::String)
     
     println("=== Training Result Analysis ===")
     println("Type: ", typeof(result))
-    println("Final energy: ", result.energy)
-    println("Converged: ", result.converged)
-    println("Iterations: ", length(result.energy_history))
+    println("Final energy: ", result.final_cost)
     
     if haskey(input_args, :g)
         println("\nModel parameters:")
@@ -78,38 +76,6 @@ function compare_results(file1::String, file2::String; labels=nothing)
 end
 
 """
-    reconstruct_gates(filename::String; share_params=true)
-
-Reconstruct gates from optimization result stored in JSON file and analyze transfer spectrum.
-
-# Arguments
-- `filename`: Path to JSON result file
-- `share_params`: Share parameters across circuit layers (default: true)
-
-# Returns
-- Tuple of (gates, rho, gap, eigenvalues)
-"""
-function reconstruct_gates(filename::String; share_params=true)
-    result, input_args = load_result(filename)
-    
-    p = input_args[:p]
-    row = input_args[:row]
-    nqubits = input_args[:nqubits]
-    
-    gates = build_unitary_gate(result.params, p, row, nqubits; share_params=share_params)
-    
-    # Compute transfer spectrum
-    rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
-    
-    println("=== Gate Analysis for $(basename(filename)) ===")
-    println("Spectral gap: ", gap)
-    println("Largest eigenvalue: ", maximum(abs.(eigenvalues)))
-    println("Second largest eigenvalue: ", sort(abs.(eigenvalues))[end-1])
-    
-    return gates, rho, gap, eigenvalues
-end
-
-"""
     visualize_correlation(filename::String)
 
 Visualize spin-spin correlation from circuit optimization result stored in JSON file.
@@ -128,13 +94,13 @@ function visualize_correlation(filename::String)
         return nothing
     end
     
-    if isempty(result.Z_samples)
+    if isempty(result.final_Z_samples)
         @warn "No Z samples in result"
         return nothing
     end
     
     row = input_args[:row]
-    fig = plot_correlation_heatmap(result.Z_samples, row; 
+    fig = plot_correlation_heatmap(result.final_Z_samples, row; 
                                     title="Spin-Spin Correlation ($(basename(filename)))")
     display(fig)
     
@@ -197,21 +163,27 @@ function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=t
             @show length(X_samples_new), length(Z_samples_new)
         end
     else
-        sample_data = basis == :Z ? result.Z_samples : result.X_samples
+        # Samples are stored as matrices (n_chains × n_samples_per_chain)
+        # Keep as matrix to compute ACF per chain and average
+        sample_matrix = basis == :Z ? result.final_Z_samples : result.final_X_samples
+        sample_data = sample_matrix
         sample_source = "saved"
+        n_chains = size(sample_matrix, 1)
         
-        # Compute and display energy from saved samples
-        min_len = min(length(result.X_samples), length(result.Z_samples))
+        # Compute and display energy from saved samples (need to flatten for energy computation)
+        Z_vec = vec(result.final_Z_samples)
+        X_vec = vec(result.final_X_samples)
+        min_len = min(length(X_vec), length(Z_vec))
         try
-            energy_computed = compute_energy(result.X_samples[1:min_len], result.Z_samples[1:min_len], 
+            energy_computed = compute_energy(X_vec[1:min_len], Z_vec[1:min_len], 
                                             input_args[:g], input_args[:J], input_args[:row])
             println("\n=== Energy from Saved Samples ===")
             println("Energy (recomputed): $energy_computed")
-            println("Energy (stored):     $(result.energy)")
-            println("Difference:          $(abs(energy_computed - result.energy))")
+            println("Energy (stored):     $(result.final_cost)")
+            println("Difference:          $(abs(energy_computed - result.final_cost))")
         catch e
             println("Error computing energy: $e")
-            @show length(result.X_samples), length(result.Z_samples)
+            @show length(X_vec), length(Z_vec)
         end
     end
     
@@ -222,19 +194,32 @@ function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=t
     
     println("\n=== ACF Analysis ($(sample_source) samples) ===")
     println("Basis: $basis")
-    println("Number of samples: $(length(sample_data))")
+    if sample_data isa Matrix
+        println("Number of chains: $(size(sample_data, 1))")
+        println("Samples per chain: $(size(sample_data, 2))")
+        println("Total samples: $(length(sample_data))")
+    else
+        println("Number of samples: $(length(sample_data))")
+    end
     
     # Compute transfer matrix gap for comparison
     p = input_args[:p]
     nqubits = input_args[:nqubits]
     share_params = get(input_args, :share_params, true)
-    gates = build_unitary_gate(result.params, p, row, nqubits; share_params=share_params)
+    gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
     _, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
     ξ_transfer = 1.0 / gap  # Theoretical correlation length from transfer matrix
     
     # Subsample every `row` steps so each lag = one full layer
     # This should match the transfer matrix which also describes one layer
-    lags, acf, acf_err = compute_acf(sample_data[100:row:end]; max_lag=max_lag, n_bootstrap=50)
+    if sample_data isa Matrix
+        # For matrix: subsample each chain independently
+        subsampled = sample_data[:, 100:row:end]
+        lags, acf, acf_err = compute_acf(subsampled; max_lag=max_lag, n_bootstrap=50)
+    else
+        # For vector: subsample directly
+        lags, acf, acf_err = compute_acf(sample_data[100:row:end]; max_lag=max_lag, n_bootstrap=50)
+    end
     @show acf, acf_err
     fit_params = fit_acf(lags, acf)
     
@@ -254,7 +239,7 @@ function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=t
     fig = plot_acf(lags, acf; 
                     acf_err=acf_err,
                     fit_params=fit_params,
-                    logscale=false,
+                    logscale=true,
                     title=title_text)
     display(fig)
     
@@ -264,16 +249,8 @@ function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=t
     save(output_path, fig)
     println("Figure saved to: $output_path")
     
-    # Save correlation length ξ back to the result file
-    data = open(filename, "r") do io
-        JSON3.read(io, Dict)
-    end
-    data["correlation_length"] = fit_params.ξ  # Use string key, not Symbol
-    data["lambda2"] = fit_params.λ₂
-    open(filename, "w") do io
-        JSON3.pretty(io, data)
-    end
-    println("Correlation length ξ=$(round(fit_params.ξ, digits=3)) saved to result file")
+    # Correlation length computed but not saved to file
+    println("Correlation length ξ=$(round(fit_params.ξ, digits=3))")
     
     return lags, acf, fit_params
 end
@@ -376,7 +353,7 @@ function plot_energy_vs_g(data_dir::String; J=1.0, row=3)
     # Load results and extract g, energy pairs
     data = map(files) do file
         result, input_args = load_result(file)
-        (g=input_args[:g], energy=result.energy, converged=result.converged)
+        (g=input_args[:g], energy=result.final_cost, converged=result.converged)
     end
     
     # Sort by g
@@ -558,23 +535,29 @@ end
 
 # Example usage (commented out)
 # Analyze a single result
-g = 0.5; row=1 ; nqubits=3
+g = 0.5; row=1 ; nqubits=3; p=7
 data_dir = joinpath(@__DIR__, "results")
-datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_p=4_nqubits=$(nqubits).json")
+datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
 result, args = analyze_result(datafile)
+
+# Reconstruct gates and analyze
+gates, rho, gap, eigenvalues = reconstruct_gates(datafile)
+
+# Save the plot
+save(joinpath(dirname(datafile), replace(basename(datafile), ".json" => "_eigenvalues.pdf")), fig)
+
+# Analyze autocorrelation (using saved samples)
+lags, acf, fit_params = analyze_acf(datafile, row; max_lag=5, resample=false, samples=1000000)
+
 
 # Compare two results
 # exact_datafile = joinpath(data_dir, "exact_J=1.0_g=2.0_row=3.json")
 # result1, result2 = compare_results(datafile, exact_datafile)
 
-# Reconstruct gates and analyze
-gates, rho, gap, eigenvalues = reconstruct_gates(datafile)
-
 # Visualize correlation
 visualize_correlation(datafile)
 
-# Analyze autocorrelation (using saved samples)
-lags, acf, fit_params = analyze_acf(datafile, row; max_lag=6, resample=false, samples=1000000)
+
 
 # Analyze autocorrelation with fresh resampled data
 # lags, acf, ξ = analyze_acf(datafile; max_lag=10, resample=true, samples=50000)

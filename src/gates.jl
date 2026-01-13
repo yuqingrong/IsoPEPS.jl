@@ -78,28 +78,28 @@ function _build_layer(params, r, nqubits)
     # Nearest-neighbor CNOTs: (1,2), (2,3), (3,4), (4,5), ...
     cnot_nn = Matrix{ComplexF64}(I, dim, dim)
     for i in 1:nqubits-1
-        cnot_nn *= Matrix(cnot(nqubits, i+1, i))  # control=i, target=i+1
+        cnot_nn *= Matrix(cnot(nqubits, i+1, i))  # control=i+1, target=i
     end
     
     # Next-nearest-neighbor CNOTs: (1,3), (2,4), (3,5), ...
     cnot_nnn = Matrix{ComplexF64}(I, dim, dim)
     for i in 1:nqubits-2
-        cnot_nnn *= Matrix(cnot(nqubits, i+2, i))  # control=i, target=i+2
+        cnot_nnn *= Matrix(cnot(nqubits, i, i+2))  # control=i+2, target=i
     end
     
     # Skip-2 CNOTs: (1,4), (2,5), ... (only if nqubits >= 4)
     cnot_skip2 = Matrix{ComplexF64}(I, dim, dim)
     if nqubits >= 4
         for i in 1:nqubits-3
-            cnot_skip2 *= Matrix(cnot(nqubits, i+3, i))  # control=i, target=i+3
+            cnot_skip2 *= Matrix(cnot(nqubits, i+3, i))  # control=i+3, target=i
         end
     end
     
-    # Full-range CNOT: 1→nqubits (wrap-around, only if nqubits >= 5)
     cnot_full = Matrix{ComplexF64}(I, dim, dim)
-    if nqubits >= 5
-        cnot_full *= Matrix(cnot(nqubits, nqubits, 1))  # 1→5 for nqubits=5
-    end
+   if nqubits >= 5  
+    cnot_full *= Matrix(cnot(nqubits, 1, nqubits))  # 1→5 
+   end
+    
     
     # Combine: single-qubit gates -> NN -> NNN -> Skip-2 -> Full-range
     return Matrix(gate) * cnot_nn * cnot_nnn * cnot_skip2 * cnot_full

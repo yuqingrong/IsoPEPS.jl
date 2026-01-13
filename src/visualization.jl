@@ -27,14 +27,20 @@ function save_result(filename::String, result::CircuitOptimizationResult, input_
     dir = dirname(filename)
     !isempty(dir) && !isdir(dir) && mkpath(dir)
     
+    # Convert matrices to nested arrays (array of arrays) for proper JSON serialization
+    # Each row (chain) becomes a separate array
+    Z_nested = [result.final_Z_samples[i, :] for i in 1:size(result.final_Z_samples, 1)]
+    X_nested = [result.final_X_samples[i, :] for i in 1:size(result.final_X_samples, 1)]
+    
     data = Dict{Symbol, Any}(
         :type => "CircuitOptimizationResult",
         :energy_history => result.energy_history,
         :params => result.final_params,
         :energy => result.final_cost,
         :converged => result.converged,
-        :Z_samples => result.final_Z_samples,
-        :X_samples => result.final_X_samples,
+        :Z_samples => Z_nested,
+        :X_samples => X_nested,
+        :sample_shape => size(result.final_Z_samples),  # Store original shape for reference
         :input_args => input_args
     )
     
@@ -120,16 +126,49 @@ function load_result(filename::String; result_type::Symbol=:auto)
         get(dict, string(key), get(dict, Symbol(key), nothing))
     end
     
+    # Helper to convert samples to matrix
+    function samples_to_matrix(samples_data, input_args)
+        if samples_data === nothing || isempty(samples_data)
+            return Matrix{Float64}(undef, 0, 0)
+        end
+        
+        # Check if data is nested array (new format) or flat vector (old format)
+        if samples_data isa Vector && !isempty(samples_data) && samples_data[1] isa Vector
+            # New format: nested array (array of arrays)
+            # Each element is a row (chain) in the matrix
+            return reduce(vcat, [Vector{Float64}(row)' for row in samples_data])
+        else
+            # Old format: flat vector - need to reshape
+            samples_vec = Vector{Float64}(samples_data)
+            n_parallel_runs = get(input_args, :n_parallel_runs, 1)
+            
+            # Infer actual samples per run from the data size
+            actual_samples_per_run = div(length(samples_vec), n_parallel_runs)
+            
+            # Reshape: flat vector -> matrix (n_parallel_runs × actual_samples_per_run)
+            # The samples are stored in row-major order
+            return reshape(samples_vec, actual_samples_per_run, n_parallel_runs)'
+        end
+    end
+    
     # Reconstruct result based on type
     if result_type == :circuit
+        Z_samples_data = get(data, "Z_samples", get(data, :Z_samples, nothing))
+        X_samples_data = get(data, "X_samples", get(data, :X_samples, nothing))
+        
+        energy_history = get_data(data, :energy_history)
+        params = get_data(data, :params)
+        energy = get_data(data, :energy)
+        converged = get_data(data, :converged)
+        
         result = CircuitOptimizationResult(
-            Vector{Float64}(get_data(data, :energy_history)),
+            Vector{Float64}(energy_history === nothing ? Float64[] : energy_history),
             Vector{Matrix{ComplexF64}}[],  # Gates not saved to JSON
-            Vector{Float64}(get_data(data, :params)),
-            Float64(get_data(data, :energy)),
-            Vector{Float64}(get(data, "Z_samples", get(data, :Z_samples, Float64[]))),
-            Vector{Float64}(get(data, "X_samples", get(data, :X_samples, Float64[]))),
-            Bool(get_data(data, :converged))
+            Vector{Float64}(params === nothing ? Float64[] : params),
+            Float64(energy === nothing ? 0.0 : energy),
+            samples_to_matrix(Z_samples_data, input_args),
+            samples_to_matrix(X_samples_data, input_args),
+            Bool(converged === nothing ? false : converged)
         )
     elseif result_type == :exact
         result = ExactOptimizationResult(
@@ -197,39 +236,163 @@ end
 # ============================================================================
 # Visualization Functions
 # ============================================================================
-
 """
-    plot_correlation_heatmap(corr_matrix::Matrix; kwargs...)
+    reconstruct_gates(filename::String; share_params=true, plot=true, save_plot=false)
 
-Plot spin-spin correlation matrix as a heatmap.
+Reconstruct gates from optimization result stored in JSON file and analyze transfer spectrum.
 
 # Arguments
-- `corr_matrix`: Correlation matrix ⟨σᵢσⱼ⟩
-- `title`: Plot title (default: "Spin Correlation")
-- `colormap`: Colormap (default: :RdBu)
-- `colorrange`: Color range (default: auto)
-- `save_path`: Path to save figure (optional)
+- `filename`: Path to JSON result file
+- `share_params`: Share parameters across circuit layers (default: true)
+- `plot`: Display eigenvalue spectrum plot (default: true)
+- `save_plot`: Save plot to PDF file (default: false)
+
+# Returns
+- Tuple of (gates, rho, gap, eigenvalues)
+
+# Example
+```julia
+# With visualization (default)
+gates, rho, gap, eigenvalues = reconstruct_gates("result.json")
+
+# Without visualization
+gates, rho, gap, eigenvalues = reconstruct_gates("result.json"; plot=false)
+
+# Save the plot
+gates, rho, gap, eigenvalues = reconstruct_gates("result.json"; save_plot=true)
+```
+"""
+function reconstruct_gates(filename::String; share_params=true, plot=true, save_plot=true)
+    result, input_args = load_result(filename)
+    
+    p = input_args[:p]
+    row = input_args[:row]
+    nqubits = input_args[:nqubits]
+    
+    gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
+    
+    # Compute transfer spectrum
+    rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
+    
+    println("=== Gate Analysis for $(basename(filename)) ===")
+    println("Spectral gap: ", gap)
+    println("Largest eigenvalue: ", maximum(abs.(eigenvalues)))
+    println("Second largest eigenvalue: ", sort(abs.(eigenvalues))[end-1])
+    println("Correlation length ξ: ", round(1/gap, digits=2))
+    
+    # Count eigenvalues near 1
+    n_near_one = sum(eigenvalues .> 0.99)
+    println("Eigenvalues > 0.99: $n_near_one / $(length(eigenvalues))")
+    
+    # Status indicator
+    if gap > 0.1
+        println("Status: ✓ Good spectral gap")
+    elseif gap > 0.01
+        println("Status: ⚠ Poor spectral gap")
+    else
+        println("Status: ✗ Very small spectral gap - optimization issue likely")
+    end
+    
+    # Plot eigenvalue spectrum if requested
+    if plot
+        save_path = save_plot ? replace(filename, ".json" => "_eigenvalues.pdf") : nothing
+        fig = plot_eigenvalue_spectrum(eigenvalues; 
+                                        title=basename(filename), 
+                                        save_path=save_path,
+                                        show_gap=true)
+        display(fig)
+        
+        if save_plot
+            println("Plot saved to: $save_path")
+        end
+    end
+    
+    return gates, rho, gap, eigenvalues
+end
+
+"""
+    plot_eigenvalue_spectrum(eigenvalues; title="", save_path=nothing, show_gap=true)
+
+Visualize the transfer matrix eigenvalue spectrum.
+
+# Arguments
+- `eigenvalues`: Vector of eigenvalue magnitudes
+- `title`: Plot title (default: "")
+- `save_path`: Path to save figure (default: nothing, no save)
+- `show_gap`: Annotate spectral gap on plot (default: true)
 
 # Returns
 - `Figure` object
+
+# Example
+```julia
+gates, rho, gap, eigenvalues = reconstruct_gates("result.json")
+fig = plot_eigenvalue_spectrum(eigenvalues; title="My Circuit")
+```
 """
-function plot_correlation_heatmap(corr_matrix::Matrix;
-                                   title::String="Spin Correlation",
-                                   colormap=:RdBu,
-                                   colorrange=nothing,
-                                   save_path::Union{String,Nothing}=nothing)
-    n = size(corr_matrix, 1)
+function plot_eigenvalue_spectrum(eigenvalues::AbstractVector; 
+                                   title::String="",
+                                   save_path::Union{String,Nothing}=nothing,
+                                   show_gap::Bool=true)
+    sorted_eigs = sort(eigenvalues, rev=true)
+    n = length(sorted_eigs)
     
-    fig = Figure(size=(550, 500))
-    ax = Axis(fig[1, 1], 
-              xlabel="Site i", ylabel="Site j",
-              title=title,
-              xticks=1:n, yticks=1:n,
-              aspect=DataAspect())
+    # Compute gap
+    λ₁ = sorted_eigs[1]
+    λ₂ = sorted_eigs[2]
+    gap = -log(λ₂)
+    ξ = 1 / gap
     
-    cr = isnothing(colorrange) ? extrema(corr_matrix) : colorrange
-    hm = heatmap!(ax, 1:n, 1:n, corr_matrix, colormap=colormap, colorrange=cr)
-    Colorbar(fig[1, 2], hm, label="⟨σᵢσⱼ⟩")
+    # Create figure with two panels
+    fig = Figure(size=(1200, 500))
+    
+    # Left panel: Bar plot of all eigenvalues (sorted descending)
+    ax1 = Axis(fig[1, 1], 
+               xlabel="Eigenvalue index (sorted)", 
+               ylabel="Eigenvalue magnitude |λ|",
+               title=isempty(title) ? "Eigenvalue Spectrum" : title)
+    
+    # Color by distance from 1
+    colors = [λ > 0.99 ? :red : (λ > 0.9 ? :orange : :steelblue) for λ in sorted_eigs]
+    
+    barplot!(ax1, 1:n, sorted_eigs, color=colors, strokewidth=0.5, strokecolor=:black)
+    
+    # Reference line at 1.0
+    hlines!(ax1, [1.0], color=:black, linestyle=:dash, linewidth=1.5, label="λ=1")
+    hlines!(ax1, [0.99], color=:red, linestyle=:dot, linewidth=1, alpha=0.5, label="λ=0.99")
+    
+    # Highlight λ₁ and λ₂
+    scatter!(ax1, [1], [λ₁], markersize=15, color=:green, marker=:star5, label="λ₁=$(round(λ₁, digits=4))")
+    scatter!(ax1, [2], [λ₂], markersize=12, color=:purple, marker=:diamond, label="λ₂=$(round(λ₂, digits=4))")
+    
+    axislegend(ax1, position=:rb)
+    
+    # Right panel: Histogram showing distribution near 1
+    ax2 = Axis(fig[1, 2],
+               xlabel="Eigenvalue magnitude |λ|",
+               ylabel="Count",
+               title="Distribution of Eigenvalues")
+    
+    hist!(ax2, sorted_eigs, bins=20, color=:steelblue, strokewidth=1, strokecolor=:black)
+    
+    # Add vertical lines
+    vlines!(ax2, [1.0], color=:black, linestyle=:dash, linewidth=2, label="λ=1")
+    vlines!(ax2, [λ₂], color=:purple, linestyle=:solid, linewidth=2, label="λ₂")
+    
+    axislegend(ax2, position=:lt)
+    
+    # Add text annotation for gap and ξ
+    if show_gap
+        text_str = "Gap = $(round(gap, digits=6))\nξ = $(round(ξ, digits=2))"
+        
+        # Color code the status
+        status_color = gap > 0.1 ? :green : (gap > 0.01 ? :orange : :red)
+        status_text = gap > 0.1 ? "✓ Good" : (gap > 0.01 ? "⚠ Poor" : "✗ Bad")
+        
+        Label(fig[0, 1:2], 
+              "Spectral Gap: $(round(gap, digits=6))  |  ξ = $(round(ξ, digits=2))  |  $status_text",
+              fontsize=16, font=:bold, color=status_color, halign=:center)
+    end
     
     if !isnothing(save_path)
         save(save_path, fig)
@@ -239,45 +402,6 @@ function plot_correlation_heatmap(corr_matrix::Matrix;
     return fig
 end
 
-"""
-    plot_correlation_heatmap(Z_samples::Vector{Float64}, row::Int; kwargs...)
-
-Compute and plot spin correlation heatmap from Z measurement samples.
-"""
-function plot_correlation_heatmap(Z_samples::Vector{Float64}, row::Int; kwargs...)
-    # Build correlation matrix
-    n_steps = div(length(Z_samples) - row, row)
-    endpoint = row + n_steps * row
-    
-    corr = zeros(row, row)
-    for i in 1:row
-        for j in i:row
-            Zi = Z_samples[i:row:endpoint]
-            Zj = Z_samples[j:row:endpoint]
-            corr[i,j] = mean(Zi .* Zj)
-            corr[j,i] = corr[i,j]
-        end
-    end
-    
-    plot_correlation_heatmap(corr; kwargs...)
-end
-
-"""
-    plot_correlation_heatmap(result::CircuitOptimizationResult; kwargs...)
-
-Plot correlation heatmap from circuit optimization result.
-"""
-function plot_correlation_heatmap(result::CircuitOptimizationResult; kwargs...)
-    if isempty(result.Z_samples)
-        @warn "No Z samples in result"
-        return nothing
-    end
-    
-    # Infer row from samples length (this is approximate)
-    # For now, just use the samples directly
-    @warn "Row size not stored in result, correlation plot may be incorrect"
-    return nothing
-end
 
 """
     fit_acf(lags::AbstractVector, acf::AbstractVector; fit_range::Union{Tuple{Int,Int},Nothing}=nothing)
@@ -430,64 +554,74 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
 end
 
 """
-    compute_acf(data::Vector{Float64}; max_lag::Int=100, normalize::Bool=true) -> (lags, acf, acf_err)
+    compute_acf(data; max_lag::Int=100, n_bootstrap::Int=100, normalize::Bool=true)
 
-Compute normalized autocorrelation function with bootstrap error estimation.
+Compute autocorrelation function with error estimates.
+
+Accepts either:
+- `Matrix{Float64}`: Each row is an independent chain (preferred for parallel sampling)
+- `Vector{Float64}`: Single time series (uses bootstrap for errors)
+
+When given a matrix (multiple chains), uses ALL pairs from ALL chains to compute ACF.
+For example, with 2 chains of length 5, lag=1 uses pairs:
+  chain1: (1,2), (2,3), (3,4), (4,5)
+  chain2: (1,2), (2,3), (3,4), (4,5)
+Total: 8 pairs for better statistics.
+
+Error bars from standard error across chains (each chain contributes one ACF estimate).
 
 # Arguments
-- `data`: Time series data
+- `data`: Time series data (Vector or Matrix)
 - `max_lag`: Maximum lag to compute (default: 100)
-- `n_bootstrap`: Number of bootstrap samples for error estimation (default: 100)
-- `normalize`: If true, normalize so ACF(0) = 1 (default: true)
+- `n_bootstrap`: Number of bootstrap samples for error estimation (only used for Vector input)
+- `normalize`: Whether to normalize by variance (default: true)
 
 # Returns
 - `lags`: Lag values (0 to max_lag-1)
-- `acf`: Autocorrelation values (normalized if normalize=true)
-- `acf_err`: Bootstrap standard errors
+- `acf`: Autocorrelation at each lag (using all pairs from all chains)
+- `acf_err`: Standard error at each lag (from variance across chains)
 """
-function compute_acf(data::Vector{Float64}; max_lag::Int=100, n_bootstrap::Int=100, normalize::Bool=true)
-    N = length(data)
-    max_lag = min(max_lag, div(N, 2))
+function compute_acf(data::Matrix{Float64}; max_lag::Int=100, n_bootstrap::Int=100, normalize::Bool=true)
+    n_chains, n_samples = size(data)
+    max_lag = min(max_lag, div(n_samples, 2))
     
-    μ = mean(data)
-    centered = data .- μ
-    variance = mean(centered.^2)  # Variance for normalization
+    # Compute global mean and variance using all data
+    μ_global = mean(data)
+    centered_global = data .- μ_global
+    var_global = mean(centered_global.^2)
     
     acf = zeros(max_lag)
-    acf_err = zeros(max_lag)
+    acf_per_chain = zeros(n_chains, max_lag)
     
+    # Compute ACF using all pairs from all chains
     for k in 1:max_lag
         lag = k - 1
-        n_pairs = N - lag
-        # Compute ACF without abs() to preserve sign (important for oscillating correlations)
-        raw_acf = mean(centered[i] * centered[i + lag] for i in 1:n_pairs)
-        acf[k] = normalize ? raw_acf / variance : raw_acf
         
-        # Bootstrap error estimation
-        block_size = min(50, div(N, 10))
-        bootstrap_vals = zeros(n_bootstrap)
-        for b in 1:n_bootstrap
-            n_blocks = div(N, block_size)
-            boot_sample = Float64[]
-            for _ in 1:n_blocks
-                start = rand(1:N)
-                for j in 0:(block_size-1)
-                    push!(boot_sample, data[mod1(start + j, N)])
-                end
-            end
-            if length(boot_sample) > lag
-                boot_μ = mean(boot_sample)
-                boot_centered = boot_sample .- boot_μ
-                boot_var = mean(boot_centered.^2)
-                n_boot_pairs = min(length(boot_sample) - lag, n_pairs)
-                if n_boot_pairs > 0 && boot_var > 0
-                    raw_boot = mean(boot_centered[i] * boot_centered[i + lag] for i in 1:n_boot_pairs)
-                    bootstrap_vals[b] = normalize ? raw_boot / boot_var : raw_boot
-                end
+        # Collect all pairs from all chains
+        all_products = Float64[]
+        
+        for i in 1:n_chains
+            chain_centered = centered_global[i, :]
+            for j in 1:(n_samples - lag)
+                push!(all_products, chain_centered[j] * chain_centered[j + lag])
             end
         end
-        acf_err[k] = std(bootstrap_vals)
+        
+        # Mean over all pairs
+        raw_acf = mean(all_products)
+        acf[k] = normalize ? raw_acf / var_global : raw_acf
+        
+        # Also compute ACF per chain for error estimation
+        for i in 1:n_chains
+            chain_centered = centered_global[i, :]
+            n_pairs = n_samples - lag
+            raw_acf_chain = mean(chain_centered[j] * chain_centered[j + lag] for j in 1:n_pairs)
+            acf_per_chain[i, k] = normalize ? raw_acf_chain / var_global : raw_acf_chain
+        end
     end
+    
+    # Standard error from variance across chains
+    acf_err = vec(std(acf_per_chain, dims=1) / sqrt(n_chains))
     
     return 0:(max_lag-1), acf, acf_err
 end

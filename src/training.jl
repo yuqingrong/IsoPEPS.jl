@@ -307,7 +307,6 @@ function optimize_circuit(
         :sample_description => "Matrix: rows=chains, cols=samples"
     )
     
-    save_result("data/circuit_g=$(g)_row=$(row)_nqubits=$(nqubits).json", result, input_args)
     
     return result
 end

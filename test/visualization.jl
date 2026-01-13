@@ -75,6 +75,7 @@ end
 end
 
 @testset "compute_acf" begin
+    # Test with vector input (single chain)
     data = randn(1000)
     lags, acf, acf_err = compute_acf(data; max_lag=50, n_bootstrap=10)
     
@@ -82,6 +83,33 @@ end
     @test length(acf) == 50
     @test length(acf_err) == 50
     @test all(acf_err .>= 0)
+    
+    # Test with matrix input (multiple chains)
+    data_matrix = randn(10, 1000)  # 10 chains, 1000 samples each
+    lags_mat, acf_mat, acf_err_mat = compute_acf(data_matrix; max_lag=50)
+    
+    @test length(lags_mat) == 50
+    @test length(acf_mat) == 50
+    @test length(acf_err_mat) == 50
+    @test all(acf_err_mat .>= 0)
+    
+    # ACF at lag 0 should be ≈ 1.0 (normalized)
+    @test acf_mat[1] ≈ 1.0 atol=0.1
+    
+    # Test pooling behavior: matrix with multiple chains should use all pairs
+    # Create simple test case: 2 chains with identical data
+    test_data = [1.0 2.0 3.0 4.0 5.0;
+                 1.0 2.0 3.0 4.0 5.0]
+    lags_pool, acf_pool, _ = compute_acf(test_data; max_lag=3)
+    
+    # Flatten and compute ACF to verify pooling
+    flat_data = vec(test_data')  # [1,1,2,2,3,3,4,4,5,5]
+    lags_flat, acf_flat, _ = compute_acf(flat_data; max_lag=3, n_bootstrap=5)
+    
+    # The pooled ACF should use pairs: from chain1: (1,2),(2,3),(3,4),(4,5)
+    # and from chain2: (1,2),(2,3),(3,4),(4,5)
+    # This gives better statistics than treating chains independently
+    @test length(acf_pool) == 3
 end
 
 @testset "fit_acf_exponential" begin

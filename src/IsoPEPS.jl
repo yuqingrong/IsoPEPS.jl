@@ -78,7 +78,8 @@ export optimize_circuit, optimize_exact, optimize_manifold
 # =============================================================================
 export compute_transfer_spectrum, compute_single_transfer
 export compute_X_expectation, compute_ZZ_expectation
-export contract_transfer_matrix, compute_exact_energy
+export contract_transfer_matrix, compute_exact_energy, gates_to_tensors
+export get_transfer_matrix
 
 # =============================================================================
 # Reference Implementations
@@ -89,7 +90,8 @@ export mpskit_ground_state, mpskit_ground_state_1d, pepskit_ground_state
 # Data I/O & Visualization
 # =============================================================================
 export save_result, load_result, save_results, load_results
-export plot_correlation_heatmap, plot_acf, compute_acf, fit_acf, fit_acf_exponential
+export plot_acf, compute_acf, fit_acf, fit_acf_exponential
 export plot_training_history, plot_variance_vs_samples
 export plot_corr_scale
+export plot_eigenvalue_spectrum, reconstruct_gates
 end

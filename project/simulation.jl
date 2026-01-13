@@ -114,7 +114,7 @@ function simulation(;
         verbose && println("\n[$i/$n] Starting simulation for g = $g")
         
         # Set seed for reproducibility (different for each g value)
-        sim_seed = seed + i
+        sim_seed = seed
         Random.seed!(sim_seed)
         
         # Initialize parameters
@@ -195,7 +195,7 @@ simulation(
     p = 4,
     nqubits = 3,
     # Optimization settings
-    maxiter = 5,
+    maxiter = 1000,
     abstol = 0.02,
     xtol = 1e-3,
     sigma0 = 1.0,
@@ -207,7 +207,7 @@ simulation(
     n_parallel_runs = 11,
     conv_step = 100,
     # Other
-    seed = 12,
+    seed = 123,
     verbose = true,
     output_dir = joinpath(@__DIR__, "results")
 )

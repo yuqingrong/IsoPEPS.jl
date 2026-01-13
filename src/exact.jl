@@ -1,12 +1,12 @@
 """
-    compute_transfer_spectrum(gates, row, nqubits; num_eigenvalues=2, use_iterative=:auto, matrix_free=:auto)
+    compute_transfer_spectrum(gates, row, virtual_qubits; num_eigenvalues=2, use_iterative=:auto, matrix_free=:auto)
 
 Compute the transfer matrix spectrum and fixed point.
 
 # Arguments
 - `gates`: Vector of gate matrices
 - `row`: Number of rows
-- `nqubits`: Number of qubits per gate
+- `virtual_qubits`: Number of virtual qubits
 - `num_eigenvalues`: Number of eigenvalues to compute (default: 2 for gap calculation)
 - `use_iterative`: `:auto` (default), `:always`, or `:never` for iterative solver
 - `matrix_free`: `:auto` (default), `:always`, or `:never` for matrix-free approach
@@ -23,11 +23,11 @@ For large systems (row >= 5), uses a matrix-free approach that never forms the f
 transfer matrix, instead computing T*v on-the-fly via tensor contraction.
 The spectral gap quantifies how quickly the channel converges to its fixed point.
 """
-function compute_transfer_spectrum(gates, row, nqubits; num_eigenvalues=2, use_iterative=:auto, matrix_free=:auto)
-    A_tensors = _gates_to_tensors(gates, row, nqubits)
-    total_qubits = Int((row+1)*(nqubits-1)/2)
-    matrix_size = 4^total_qubits
-    
+function compute_transfer_spectrum(gates, row, virtual_qubits; num_eigenvalues=2, use_iterative=:auto, matrix_free=:auto)
+    A_tensors = gates_to_tensors(gates, row, virtual_qubits)
+    @show size(A_tensors[1])
+    total_qubits = 1 + virtual_qubits + virtual_qubits * row
+    matrix_size = 4^(total_qubits-1)
     # Decide whether to use matrix-free approach (essential for large row)
     should_use_matrix_free = if matrix_free == :auto
         matrix_size > 1024  # Use matrix-free for matrices larger than 1024x1024
@@ -101,6 +101,7 @@ function compute_transfer_spectrum(gates, row, nqubits; num_eigenvalues=2, use_i
         # Full eigendecomposition for small matrices
         _, T = contract_transfer_matrix([A_tensors[i] for i in 1:row], 
                                          [conj(A_tensors[i]) for i in 1:row], row)
+        @show size(T)
         T = reshape(T, matrix_size, matrix_size)
         
         eig_result = LinearAlgebra.eigen(T)
@@ -111,199 +112,179 @@ function compute_transfer_spectrum(gates, row, nqubits; num_eigenvalues=2, use_i
         fixed_point = reshape(eig_result.vectors[:, end], 
                               Int(sqrt(matrix_size)), Int(sqrt(matrix_size)))
     end
-    
     rho = fixed_point ./ tr(fixed_point)
     
     return rho, gap, eigenvalues
 end
 
+function get_transfer_matrix(gates, row, virtual_qubits)
+    A_tensors = gates_to_tensors(gates, row, virtual_qubits)
+    total_qubits = 1 + virtual_qubits + virtual_qubits * row
+    matrix_size = 4^(total_qubits-1)
+    _, T = contract_transfer_matrix([A_tensors[i] for i in 1:row], 
+                                         [conj(A_tensors[i]) for i in 1:row], row)
+    T = reshape(T, matrix_size, matrix_size)
+    return T
+end
+
 """
-Build the contraction code for transfer matrix application (without computing the full matrix).
+    build_transfer_code(tensor_ket, tensor_bra, row; for_matvec=false, optimizer=GreedyMethod())
+
+Build contraction code for transfer matrix operations.
+
+Each tensor should have 5 legs: [physical, down, right, up, left].
+Dimensions are automatically inferred from tensor shapes.
+
+# Arguments
+- `tensor_ket`: Vector of ket tensors (length = row)
+- `tensor_bra`: Vector of bra tensors, typically conj.(tensor_ket)
+- `row`: Number of rows in the tensor network
+- `for_matvec`: If true, build code for T*v (matrix-vector product); if false, build full transfer matrix
+- `optimizer`: Contraction order optimizer (default: GreedyMethod())
+
+# Returns
+When `for_matvec=false` (default):
+- `code`: Optimized contraction code
+- `result`: Contracted transfer matrix with open left/right boundary indices
+
+When `for_matvec=true`:
+- `code`: Optimized contraction code for T*v operation
+- `total_legs`: Number of legs on each side (for reshaping)
+
+# Modes
+- **Full matrix mode** (`for_matvec=false`): Both left and right boundaries are open indices.
+  Use this to build the explicit transfer matrix T.
+  
+- **Matrix-vector mode** (`for_matvec=true`): Left boundary connects to input vector,
+  only right boundary is open. Use this for matrix-free eigensolvers where you only
+  need T*v without forming T explicitly.
 """
-function _build_transfer_contraction_code(A_tensors, row, total_qubits; optimizer=GreedyMethod())
+function build_transfer_code(tensor_ket, tensor_bra, row; for_matvec=false, optimizer=GreedyMethod())
     store = IndexStore()
-    index_bra = Vector{Int}[]
     index_ket = Vector{Int}[]
-    
-    # Input vector indices (left side of transfer matrix)
-    input_indices = [newindex!(store) for _ in 1:2*total_qubits]
-    # Output vector indices (right side of transfer matrix)  
+    index_bra = Vector{Int}[]
     output_indices = Int[]
     
-    # Initialize boundary indices
+    # For matvec mode, create input indices for the left boundary
+    # Infer total_legs from tensor dimensions: left leg count = 1 (periodic) + row
+    total_legs = row + 1  # periodic boundary index + row left indices
+    input_indices = for_matvec ? [newindex!(store) for _ in 1:2*total_legs] : Int[]
+    
+    # Initialize boundary indices for periodic vertical boundary
     first_down_ket = newindex!(store)
     first_up_ket = newindex!(store)
     first_down_bra = newindex!(store)
     first_up_bra = newindex!(store)
-    previdx_down_ket = first_down_ket
-    previdx_down_bra = first_down_bra
+    prev_down_ket = first_down_ket
+    prev_down_bra = first_down_bra
     
-    # Build index structure for each row
+    # Build index structure for each tensor
+    # Tensor leg ordering: [physical, down, right, up, left]
     for i in 1:row
-        phyidx = newindex!(store)
-        left_ket = newindex!(store)
-        right_ket = newindex!(store)
-        left_bra = newindex!(store)
-        right_bra = newindex!(store)
+        phyidx = newindex!(store)  # Shared between ket and bra (contracted)
+        left_ket, right_ket = newindex!(store), newindex!(store)
+        left_bra, right_bra = newindex!(store), newindex!(store)
         
-        next_up_ket = i == 1 ? first_up_ket : previdx_down_ket
-        next_up_bra = i == 1 ? first_up_bra : previdx_down_bra
-        next_down_ket = i == 1 ? first_down_ket : newindex!(store)
-        next_down_bra = i == 1 ? first_down_bra : newindex!(store)
+        # Handle periodic boundary: row 1's up connects to row N's down
+        up_ket = (i == 1) ? first_up_ket : prev_down_ket
+        up_bra = (i == 1) ? first_up_bra : prev_down_bra
+        down_ket = (i == 1) ? first_down_ket : newindex!(store)
+        down_bra = (i == 1) ? first_down_bra : newindex!(store)
         
-        push!(index_ket, [phyidx, next_down_ket, right_ket, next_up_ket, left_ket])
-        push!(index_bra, [phyidx, next_down_bra, right_bra, next_up_bra, left_bra])
+        push!(index_ket, [phyidx, down_ket, right_ket, up_ket, left_ket])
+        push!(index_bra, [phyidx, down_bra, right_bra, up_bra, left_bra])
         
-        previdx_down_ket = next_down_ket
-        previdx_down_bra = next_down_bra
+        prev_down_ket = down_ket
+        prev_down_bra = down_bra
     end
 
-    # Output indices (right side)
-    append!(output_indices, index_ket[row][2])
+    # Right boundary indices (always in output)
+    push!(output_indices, index_ket[row][2])  # Periodic boundary index
     append!(output_indices, [index_ket[i][3] for i in 1:row])
-    append!(output_indices, index_bra[row][2])
+    push!(output_indices, index_bra[row][2])
     append!(output_indices, [index_bra[i][3] for i in 1:row])
     
-    # Connect input indices to left side
-    # The input vector connects to the left indices of the transfer matrix
-    left_indices_ket = [index_ket[1][4], [index_ket[i][end] for i in 1:row]...]
-    left_indices_bra = [index_bra[1][4], [index_bra[i][end] for i in 1:row]...]
+    # Left boundary handling depends on mode
+    left_indices_ket = [index_ket[1][4], [index_ket[i][5] for i in 1:row]...]
+    left_indices_bra = [index_bra[1][4], [index_bra[i][5] for i in 1:row]...]
     
-    # Map input_indices to the left side
-    for (j, idx) in enumerate(left_indices_ket)
-        # Replace with input indices
-        for k in 1:row
-            for l in 1:5
-                if index_ket[k][l] == idx
+    if for_matvec
+        # Matrix-vector mode: connect left boundary to input vector indices
+        # Replace left indices in tensor index lists with input_indices
+        for (j, old_idx) in enumerate(left_indices_ket)
+            for k in 1:row, l in 1:5
+                if index_ket[k][l] == old_idx
                     index_ket[k][l] = input_indices[j]
                 end
             end
         end
-    end
-    for (j, idx) in enumerate(left_indices_bra)
-        for k in 1:row
-            for l in 1:5
-                if index_bra[k][l] == idx
-                    index_bra[k][l] = input_indices[total_qubits + j]
+        for (j, old_idx) in enumerate(left_indices_bra)
+            for k in 1:row, l in 1:5
+                if index_bra[k][l] == old_idx
+                    index_bra[k][l] = input_indices[total_legs + j]
                 end
             end
         end
+        
+        # Build tensor index list with input vector
+        all_indices = [index_ket..., index_bra..., collect(input_indices)]
+        dummy_input = zeros(ComplexF64, ntuple(_ -> 2, 2*total_legs)...)
+        all_tensors = [tensor_ket..., tensor_bra..., dummy_input]
+        
+        size_dict = OMEinsum.get_size_dict(all_indices, all_tensors)
+        code = optimize_code(DynamicEinCode(all_indices, output_indices), size_dict, optimizer)
+        
+        return code, total_legs
+    else
+        # Full matrix mode: left boundary indices are also in output
+        append!(output_indices, left_indices_ket)
+        append!(output_indices, left_indices_bra)
+        
+        all_indices = [index_ket..., index_bra...]
+        all_tensors = [tensor_ket..., tensor_bra...]
+        
+        size_dict = OMEinsum.get_size_dict(all_indices, all_tensors)
+        code = optimize_code(DynamicEinCode(all_indices, output_indices), size_dict, optimizer)
+        
+        return code, code(all_tensors...)
     end
-    
-    # Build tensor index list
-    index_tensors = [index_ket..., index_bra...]
-    # Add input vector
-    push!(index_tensors, collect(input_indices))
-    
-    size_dict = OMEinsum.get_size_dict(index_tensors, [A_tensors..., [conj(A_tensors[i]) for i in 1:row]..., 
-                                                        zeros(ComplexF64, ntuple(_ -> 2, 2*total_qubits)...)])
-    code = optimize_code(DynamicEinCode(index_tensors, output_indices), size_dict, optimizer)
-    
-    return code, output_indices
 end
 
 """
+Convert gate matrices to tensor form for contraction.
+"""
+function gates_to_tensors(gates, row, virtual_qubits)
+    bond_dim = 2^virtual_qubits
+    A_size = (2, bond_dim, bond_dim, 2, bond_dim, bond_dim)
+    indices = (ntuple(_ -> Colon(), 3)..., 1, ntuple(_ -> Colon(), 2)...)
+    return [reshape(gates[i], A_size)[indices...] for i in 1:row]
+end
+
+"""
+    apply_transfer_matvec(code, tensor_ket, tensor_bra, v_tensor, total_legs)
+
 Apply transfer matrix to a vector using precomputed contraction code.
 """
-function _apply_transfer_to_vector(code, tensor_ket, tensor_bra, v_tensor, total_qubits)
+function apply_transfer_matvec(code, tensor_ket, tensor_bra, v_tensor, total_legs)
     result = code(tensor_ket..., tensor_bra..., v_tensor)
-    return reshape(result, ntuple(_ -> 2, 2*total_qubits)...)
+    return reshape(result, ntuple(_ -> 2, 2*total_legs)...)
 end
 
-"""
-    compute_single_transfer(gates, nqubits)
+# Backward compatibility aliases
+contract_transfer_matrix(tensor_ket, tensor_bra, row; optimizer=GreedyMethod()) = 
+    build_transfer_code(tensor_ket, tensor_bra, row; for_matvec=false, optimizer=optimizer)
 
-Compute transfer matrix for a single gate (row=1 case).
-"""
-function compute_single_transfer(gates, nqubits)
-    A_size = ntuple(i -> 2, 2*nqubits)
-    indices = (ntuple(_ -> Colon(), nqubits)..., 1, ntuple(_ -> Colon(), nqubits-1)...)
-    A_single = reshape(gates[1], A_size)[indices...]
-    
-    T = ein"iabcd,iefgh-> abefcdgh"(A_single, conj(A_single))
-    T = reshape(T, 4^(nqubits-1), 4^(nqubits-1))
-    
-    eigenvalues = sort(abs.(LinearAlgebra.eigen(T).values))
-    gap = -log(eigenvalues[end-1])
-    @assert eigenvalues[end] ≈ 1.0 "Largest eigenvalue should be 1"
-    
-    fixed_point = reshape(LinearAlgebra.eigen(T).vectors[:, end], 
-                          Int(sqrt(4^(nqubits-1))), Int(sqrt(4^(nqubits-1))))
-    rho = fixed_point ./ tr(fixed_point)
-    
-    return rho, gap, eigenvalues
+function _build_transfer_contraction_code(A_tensors, row, total_qubits; optimizer=GreedyMethod())
+    tensor_ket = [A_tensors[i] for i in 1:row]
+    tensor_bra = [conj(A_tensors[i]) for i in 1:row]
+    return build_transfer_code(tensor_ket, tensor_bra, row; for_matvec=true, optimizer=optimizer)
 end
 
-"""
-    contract_transfer_matrix(tensor_ket, tensor_bra, row; optimizer=GreedyMethod())
-
-Contract tensors to form the transfer matrix.
-
-# Arguments
-- `tensor_ket`: Ket tensors (row of them)
-- `tensor_bra`: Bra tensors (conjugates)
-- `row`: Number of rows
-- `optimizer`: Contraction order optimizer
-
-# Returns
-- `code`: Optimized contraction code
-- `result`: Contracted transfer matrix
-"""
-function contract_transfer_matrix(tensor_ket, tensor_bra, row; optimizer=GreedyMethod())
-    store = IndexStore()
-    index_bra = Vector{Int}[]
-    index_ket = Vector{Int}[]
-    index_output = Int[]
-    
-    # Initialize boundary indices
-    first_down_ket = newindex!(store)
-    first_up_ket = newindex!(store)
-    first_down_bra = newindex!(store)
-    first_up_bra = newindex!(store)
-    previdx_down_ket = first_down_ket
-    previdx_down_bra = first_down_bra
-    
-    # Build index structure for each row
-    for i in 1:row
-        phyidx = newindex!(store)
-        left_ket = newindex!(store)
-        right_ket = newindex!(store)
-        left_bra = newindex!(store)
-        right_bra = newindex!(store)
-        
-        next_up_ket = i == 1 ? first_up_ket : previdx_down_ket
-        next_up_bra = i == 1 ? first_up_bra : previdx_down_bra
-        next_down_ket = i == 1 ? first_down_ket : newindex!(store)
-        next_down_bra = i == 1 ? first_down_bra : newindex!(store)
-        
-        push!(index_ket, [phyidx, next_down_ket, right_ket, next_up_ket, left_ket])
-        push!(index_bra, [phyidx, next_down_bra, right_bra, next_up_bra, left_bra])
-        
-        previdx_down_ket = next_down_ket
-        previdx_down_bra = next_down_bra
-    end
-
-    # Collect output indices
-    append!(index_output, index_ket[row][2])
-    append!(index_output, [index_ket[i][3] for i in 1:row])
-    append!(index_output, index_bra[row][2])
-    append!(index_output, [index_bra[i][3] for i in 1:row])
-
-    append!(index_output, index_ket[1][4])
-    append!(index_output, [index_ket[i][end] for i in 1:row])
-    append!(index_output, index_bra[1][4])
-    append!(index_output, [index_bra[i][end] for i in 1:row])
-    
-    index = [index_ket..., index_bra...]
-
-    size_dict = OMEinsum.get_size_dict(index, [tensor_ket..., tensor_bra...])
-    code = optimize_code(DynamicEinCode(index, index_output), size_dict, optimizer)
-    
-    return code, code(tensor_ket..., tensor_bra...)
-end
+_apply_transfer_to_vector(code, tensor_ket, tensor_bra, v_tensor, total_qubits) = 
+    apply_transfer_matvec(code, tensor_ket, tensor_bra, v_tensor, total_qubits)
 
 """
-    compute_X_expectation(rho, gates, row, nqubits; optimizer=GreedyMethod())
+    compute_X_expectation(rho, gates, row, virtual_qubits; optimizer=GreedyMethod())
 
 Compute ⟨X⟩ expectation value from fixed point density matrix.
 
@@ -311,19 +292,19 @@ Compute ⟨X⟩ expectation value from fixed point density matrix.
 - `rho`: Fixed point density matrix
 - `gates`: Gate matrices
 - `row`: Number of rows
-- `nqubits`: Number of qubits per gate
+- `virtual_qubits`: Number of virtual qubits
 - `optimizer`: Contraction optimizer
 
 # Returns
 Average X expectation value across all sites.
 """
-function compute_X_expectation(rho, gates, row, nqubits; optimizer=GreedyMethod())
-    total_qubits = Int((row+1)*(nqubits-1)/2)
+function compute_X_expectation(rho, gates, row, virtual_qubits; optimizer=GreedyMethod())
+    total_qubits = 1 + virtual_qubits + virtual_qubits * row
     env_size = ntuple(i -> 2, 2*total_qubits)
     rho = reshape(rho, env_size...)
     R = reshape(Matrix(I, Int(sqrt(4^total_qubits)), Int(sqrt(4^total_qubits))), env_size)
     
-    A_tensors = _gates_to_tensors(gates, row, nqubits)
+    A_tensors = _gates_to_tensors(gates, row, virtual_qubits)
     AX_tensors = [ein"iabcd,ij -> jabcd"(A_tensors[i], Matrix(X)) for i in 1:row]
     tensor_bra = [conj(A_tensors[i]) for i in 1:row]
     
@@ -346,7 +327,7 @@ function compute_X_expectation(rho, gates, row, nqubits; optimizer=GreedyMethod(
 end
 
 """
-    compute_ZZ_expectation(rho, gates, row, nqubits; optimizer=GreedyMethod())
+    compute_ZZ_expectation(rho, gates, row, virtual_qubits; optimizer=GreedyMethod())
 
 Compute ⟨ZZ⟩ expectation values (vertical and horizontal bonds).
 
@@ -354,20 +335,20 @@ Compute ⟨ZZ⟩ expectation values (vertical and horizontal bonds).
 - `rho`: Fixed point density matrix
 - `gates`: Gate matrices
 - `row`: Number of rows
-- `nqubits`: Number of qubits per gate
+- `virtual_qubits`: Number of virtual qubits
 - `optimizer`: Contraction optimizer
 
 # Returns
 - `ZZ_vertical`: Vertical bond ⟨ZᵢZᵢ₊₁⟩
 - `ZZ_horizontal`: Horizontal bond ⟨ZᵢZᵢ₊ᵣₒw⟩
 """
-function compute_ZZ_expectation(rho, gates, row, nqubits; optimizer=GreedyMethod())
-    total_qubits = Int((row+1)*(nqubits-1)/2)
+function compute_ZZ_expectation(rho, gates, row, virtual_qubits; optimizer=GreedyMethod())
+    total_qubits = 1 + virtual_qubits + virtual_qubits * row
     env_size = ntuple(i -> 2, 2*total_qubits)
     rho = reshape(rho, env_size...)
     R = reshape(Matrix(I, Int(sqrt(4^total_qubits)), Int(sqrt(4^total_qubits))), env_size)
     
-    A_tensors = _gates_to_tensors(gates, row, nqubits)
+    A_tensors = _gates_to_tensors(gates, row, virtual_qubits)
     AZ_tensors = [ein"iabcd,ij -> jabcd"(A_tensors[i], Matrix(Z)) for i in 1:row]
     tensor_bra = [conj(A_tensors[i]) for i in 1:row]
 
@@ -402,17 +383,10 @@ function _contract_ZZ(tensor_ket_a, tensor_ket_b, tensor_bra, rho, R, row, total
     return code(list1, list2, rho, R)[]
 end
 
-"""
-Convert gate matrices to tensor form for contraction.
-"""
-function _gates_to_tensors(gates, row, nqubits)
-    A_size = ntuple(i -> 2, 2 * nqubits)
-    indices = (ntuple(_ -> Colon(), nqubits)..., 1, ntuple(_ -> Colon(), nqubits-1)...)
-    return [reshape(gates[i], A_size)[indices...] for i in 1:row]
-end
+
 
 """
-    compute_exact_energy(params, g, J, p, row, nqubits; optimizer=GreedyMethod())
+    compute_exact_energy(params, g, J, p, row, virtual_qubits; optimizer=GreedyMethod())
 
 Compute exact energy from parameters using tensor contraction.
 
@@ -422,7 +396,7 @@ Compute exact energy from parameters using tensor contraction.
 - `J`: Coupling strength
 - `p`: Number of circuit layers
 - `row`: Number of rows
-- `nqubits`: Number of qubits per gate
+- `virtual_qubits`: Number of virtual qubits
 - `optimizer`: Contraction optimizer
 
 # Returns
@@ -430,12 +404,12 @@ Compute exact energy from parameters using tensor contraction.
 - `energy`: Ground state energy estimate
 """
 function compute_exact_energy(params::Vector{Float64}, g::Float64, J::Float64, 
-                               p::Int, row::Int, nqubits::Int; optimizer=GreedyMethod())
-    gates = build_unitary_gate(params, p, row, nqubits; share_params=true)
-    rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
+                               p::Int, row::Int, virtual_qubits::Int; optimizer=GreedyMethod())
+    gates = build_unitary_gate(params, p, row, virtual_qubits; share_params=true)
+    rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, virtual_qubits)
     
-    X_cost = real(compute_X_expectation(rho, gates, row, nqubits; optimizer=optimizer))
-    ZZ_vert, ZZ_horiz = compute_ZZ_expectation(rho, gates, row, nqubits; optimizer=optimizer)
+    X_cost = real(compute_X_expectation(rho, gates, row, virtual_qubits; optimizer=optimizer))
+    ZZ_vert, ZZ_horiz = compute_ZZ_expectation(rho, gates, row, virtual_qubits; optimizer=optimizer)
     ZZ_vert = real(ZZ_vert)
     ZZ_horiz = real(ZZ_horiz)
     
