@@ -118,7 +118,7 @@ function simulation(;
         Random.seed!(sim_seed)
         
         # Initialize parameters
-        params = ones(n_params)
+        params = rand(n_params)
         
         # Run optimization with all settings
         result = optimize_circuit(
@@ -190,13 +190,13 @@ end
 
 simulation(
     J = 1.0,
-    g_values = [0.5],
+    g_values = [0.0],
     row = 1,
     p = 4,
     nqubits = 3,
     # Optimization settings
     maxiter = 1000,
-    abstol = 0.02,
+    abstol = 0.01,
     xtol = 1e-3,
     sigma0 = 1.0,
     popsize = 30,
@@ -204,10 +204,10 @@ simulation(
     measure_first = :Z,
     share_params = true,
     samples_per_run = 1000,
-    n_parallel_runs = 11,
+    n_parallel_runs = 44,
     conv_step = 100,
     # Other
-    seed = 123,
+    seed = 12,
     verbose = true,
     output_dir = joinpath(@__DIR__, "results")
 )

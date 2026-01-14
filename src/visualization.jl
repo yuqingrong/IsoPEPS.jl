@@ -272,7 +272,7 @@ function reconstruct_gates(filename::String; share_params=true, plot=true, save_
     gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
     
     # Compute transfer spectrum
-    rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
+    rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, 1)
     
     println("=== Gate Analysis for $(basename(filename)) ===")
     println("Spectral gap: ", gap)

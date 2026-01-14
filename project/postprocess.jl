@@ -535,13 +535,15 @@ end
 
 # Example usage (commented out)
 # Analyze a single result
-g = 0.5; row=1 ; nqubits=3; p=7
+J=1.0;g = 0.0; row=1 ; nqubits=3; p=4
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
 result, args = analyze_result(datafile)
-
 # Reconstruct gates and analyze
 gates, rho, gap, eigenvalues = reconstruct_gates(datafile)
+@show gates[1]
+rho, Z_samples, X_samples=sample_quantum_channel(gates, row, nqubits; conv_step=100, samples=100000, measure_first=:Z)
+compute_energy(X_samples[100:end], Z_samples[100:end], g, J, row) |> println
 
 # Save the plot
 save(joinpath(dirname(datafile), replace(basename(datafile), ".json" => "_eigenvalues.pdf")), fig)

@@ -25,7 +25,7 @@ The spectral gap quantifies how quickly the channel converges to its fixed point
 """
 function compute_transfer_spectrum(gates, row, virtual_qubits; num_eigenvalues=2, use_iterative=:auto, matrix_free=:auto)
     A_tensors = gates_to_tensors(gates, row, virtual_qubits)
-    @show size(A_tensors[1])
+
     total_qubits = 1 + virtual_qubits + virtual_qubits * row
     matrix_size = 4^(total_qubits-1)
     # Decide whether to use matrix-free approach (essential for large row)
@@ -51,17 +51,18 @@ function compute_transfer_spectrum(gates, row, virtual_qubits; num_eigenvalues=2
         # This avoids O(n²) memory for large matrices
         
         # Precompute the contraction code for applying transfer matrix
-        code, _ = _build_transfer_contraction_code(A_tensors, row, total_qubits)
+        boundary_qubits = total_qubits - 1  # qubits on each boundary side
+        code, _ = _build_transfer_contraction_code(A_tensors, row, boundary_qubits)
         tensor_ket = [A_tensors[i] for i in 1:row]
         tensor_bra = [conj(A_tensors[i]) for i in 1:row]
         
         # Define the linear map T*v
         function apply_transfer(v)
-            # v is a vector of length 4^total_qubits
-            # Reshape to tensor form for left indices
-            v_tensor = reshape(v, ntuple(_ -> 2, 2*total_qubits)...)
+            # v is a vector of length 4^boundary_qubits = matrix_size
+            # Reshape to tensor form for left indices (2*boundary_qubits indices, each dim 2)
+            v_tensor = reshape(v, ntuple(_ -> 2, 2*boundary_qubits)...)
             # Apply transfer matrix via contraction
-            result = _apply_transfer_to_vector(code, tensor_ket, tensor_bra, v_tensor, total_qubits)
+            result = _apply_transfer_to_vector(code, tensor_ket, tensor_bra, v_tensor, boundary_qubits)
             return vec(result)
         end
         
@@ -101,7 +102,6 @@ function compute_transfer_spectrum(gates, row, virtual_qubits; num_eigenvalues=2
         # Full eigendecomposition for small matrices
         _, T = contract_transfer_matrix([A_tensors[i] for i in 1:row], 
                                          [conj(A_tensors[i]) for i in 1:row], row)
-        @show size(T)
         T = reshape(T, matrix_size, matrix_size)
         
         eig_result = LinearAlgebra.eigen(T)

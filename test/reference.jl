@@ -20,7 +20,7 @@ end
     D = 4
     nqubits = 3
     row = 1
-    
+    virtual_qubits = 1 
     result = mpskit_ground_state_1d(d, D, g)
     
     exact_A = Array{ComplexF64}(undef, D, 2, D)
@@ -32,7 +32,6 @@ end
     A_matrix = vcat(exact_A, nullspace_A)
     A_matrix_list = [A_matrix for _ in 1:row]
     
-    rho, gap, eigenval = compute_transfer_spectrum(A_matrix_list, row, nqubits)
+    rho, gap, eigenval = compute_transfer_spectrum(A_matrix_list, row,virtual_qubits)
     @test gap ≈ 1 / result.correlation_length atol = 1e-5
 end
-
