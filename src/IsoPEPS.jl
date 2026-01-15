@@ -80,6 +80,7 @@ export compute_transfer_spectrum, compute_single_transfer
 export compute_X_expectation, compute_ZZ_expectation
 export contract_transfer_matrix, compute_exact_energy, gates_to_tensors
 export get_transfer_matrix
+export diagnose_transfer_channel, diagnose_from_params
 
 # =============================================================================
 # Reference Implementations
@@ -93,5 +94,5 @@ export save_result, load_result, save_results, load_results
 export plot_acf, compute_acf, fit_acf, fit_acf_exponential
 export plot_training_history, plot_variance_vs_samples
 export plot_corr_scale
-export plot_eigenvalue_spectrum, reconstruct_gates
+export plot_eigenvalue_spectrum, plot_diagnosis, reconstruct_gates
 end
