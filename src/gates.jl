@@ -115,7 +115,7 @@ function _build_layer(params, r, nqubits)
     # Next-nearest-neighbor CNOTs: (1,3), (2,4), (3,5), ...
     cnot_nnn = Matrix{ComplexF64}(I, dim, dim)
     for i in 1:nqubits-2
-        cnot_nnn *= Matrix(cnot(nqubits, i, i+2))  # control=i+2, target=i
+        cnot_nnn *= Matrix(cnot(nqubits, i+2, i))  # control=i+2, target=i
     end
     
     # Skip-2 CNOTs: (1,4), (2,5), ... (only if nqubits >= 4)

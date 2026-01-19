@@ -262,7 +262,7 @@ gates, rho, gap, eigenvalues = reconstruct_gates("result.json"; plot=false)
 gates, rho, gap, eigenvalues = reconstruct_gates("result.json"; save_plot=true)
 ```
 """
-function reconstruct_gates(filename::String; share_params=false, plot=true, save_plot=true)
+function reconstruct_gates(filename::String; share_params=true, plot=true, save_plot=true)
     result, input_args = load_result(filename)
     
     p = input_args[:p]

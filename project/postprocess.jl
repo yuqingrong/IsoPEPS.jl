@@ -207,7 +207,7 @@ function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=t
     nqubits = input_args[:nqubits]
     share_params = get(input_args, :share_params, true)
     gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
-    _, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
+    _, gap, eigenvalues = compute_transfer_spectrum(gates, row, 1)
     ξ_transfer = 1.0 / gap  # Theoretical correlation length from transfer matrix
     
     # Subsample every `row` steps so each lag = one full layer
@@ -535,9 +535,9 @@ end
 
 # Example usage (commented out)
 # Analyze a single result
-J=1.0;g = 0.5; row=1 ; nqubits=3; p=3
+J=1.0;g = 0.5; row=2 ; nqubits=3; p=4
 data_dir = joinpath(@__DIR__, "results")
-datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
+datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 result, args = analyze_result(datafile)
 # Reconstruct gates and analyze
 gates, rho, gap, eigenvalues = reconstruct_gates(datafile)
@@ -549,7 +549,7 @@ compute_energy(X_samples[100:end], Z_samples[100:end], g, J, row) |> println
 save(joinpath(dirname(datafile), replace(basename(datafile), ".json" => "_eigenvalues.pdf")), fig)
 
 # Analyze autocorrelation (using saved samples)
-lags, acf, fit_params = analyze_acf(datafile, row; max_lag=5, resample=false, samples=1000000)
+lags, acf, fit_params = analyze_acf(datafile, row; max_lag=300, resample=false, samples=1000000)
 
 
 # Compare two results
