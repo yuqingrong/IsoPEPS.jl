@@ -62,6 +62,10 @@ function simulation(;
     xtol::Float64 = 1e-6,
     sigma0::Float64 = 1.0,
     popsize::Union{Int,Nothing} = nothing,
+    # Gap regularization
+    gap_regularization::Bool = false,
+    gap_weight::Float64 = 1.0,
+    gap_threshold::Float64 = 0.1,
     # Sampling settings
     measure_first::Symbol = :Z,
     share_params::Bool = true,
@@ -98,6 +102,9 @@ function simulation(;
         println("Optimization settings:")
         println("  CMA-ES: popsize = $actual_popsize, σ₀ = $sigma0")
         println("  Stopping: maxiter=$maxiter, ftol=$abstol, xtol=$xtol")
+        if gap_regularization
+            println("  Gap regularization: weight=$gap_weight, threshold=$gap_threshold")
+        end
         println()
         println("Sampling settings:")
         println("  samples_per_run = $samples_per_run, n_parallel_runs = $n_parallel_runs")
@@ -129,6 +136,10 @@ function simulation(;
             xtol = xtol,
             sigma0 = sigma0,
             popsize = actual_popsize,
+            # Gap regularization
+            gap_regularization = gap_regularization,
+            gap_weight = gap_weight,
+            gap_threshold = gap_threshold,
             # Sampling settings
             measure_first = measure_first,
             share_params = share_params,
@@ -155,6 +166,10 @@ function simulation(;
             :xtol => xtol,
             :sigma0 => sigma0,
             :popsize => actual_popsize,
+            # Gap regularization
+            :gap_regularization => gap_regularization,
+            :gap_weight => gap_weight,
+            :gap_threshold => gap_threshold,
             # Sampling settings
             :measure_first => String(measure_first),
             :share_params => share_params,
@@ -190,18 +205,22 @@ end
 
 simulation(
     J = 1.0,
-    g_values = [0.75],
-    row = 3,
-    p = 4,
+    g_values = [0.5],
+    row = 1,
+    p = 3,
     nqubits = 3,
     # Optimization settings
     maxiter = 2000,
     abstol = 0.01,
     #xtol = 1e-6,
     sigma0 = 1.0,
-    popsize = 30,
+    popsize = nothing,
+    # Gap regularization (uncomment to enable)
+    gap_regularization = false,
+    gap_weight = 10.0,
+    gap_threshold = 0.1,
     # Sampling settings
-    measure_first = :Z,
+    measure_first = :X,
     share_params = true,
     samples_per_run = 1000,
     n_parallel_runs = 11,

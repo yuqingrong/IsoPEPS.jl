@@ -94,5 +94,5 @@ export save_result, load_result, save_results, load_results
 export plot_acf, compute_acf, fit_acf, fit_acf_exponential
 export plot_training_history, plot_variance_vs_samples
 export plot_corr_scale
-export plot_eigenvalue_spectrum, plot_diagnosis, reconstruct_gates
+export plot_eigenvalue_spectrum, reconstruct_gates, plot_diagnosis
 end

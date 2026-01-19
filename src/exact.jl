@@ -260,7 +260,7 @@ Convert gate matrices to tensor form for contraction.
 function gates_to_tensors(gates, row, virtual_qubits)
     bond_dim = 2^virtual_qubits
     A_size = (2, bond_dim, bond_dim, 2, bond_dim, bond_dim)
-    indices = (ntuple(_ -> Colon(), 3)..., 1, ntuple(_ -> Colon(), 2)...)
+    indices = (ntuple(_ -> Colon(), 3)..., 1,ntuple(_ -> Colon(), 2)...)
     return [reshape(gates[i], A_size)[indices...] for i in 1:row]
 end
 
@@ -503,7 +503,7 @@ function diagnose_transfer_channel(gates, row, virtual_qubits; verbose=true)
         TP_check = K0' * K0 + K1' * K1
         TP_deviation = norm(TP_check - I(d_boundary))
         
-        # Check unital: Σᵢ KᵢKᵢ† = I (this makes channel "reversible")
+        # Check unital: Σᵢ KᵢKᵢ† = I 
         unital_check = K0 * K0' + K1 * K1'
         unitality = norm(unital_check - I(d_boundary))
         is_unital = unitality < 0.01

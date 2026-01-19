@@ -3,7 +3,7 @@ using JSON3
 using Yao, YaoBlocks
 
 # Load your result
-J=1.0; g = 0.75; row=1; nqubits=3; p=4
+J=1.0; g = 0.75; row=1; nqubits=3; p=3
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
 

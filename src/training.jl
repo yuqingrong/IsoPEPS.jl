@@ -125,7 +125,10 @@ function optimize_circuit(
     abstol::Float64 = 0.02,
     xtol::Float64 = 1e-3,
     sigma0::Float64 = 1.0,
-    popsize::Union{Int,Nothing} = nothing)
+    popsize::Union{Int,Nothing} = nothing,
+    gap_regularization::Bool = false,
+    gap_weight::Float64 = 1.0,
+    gap_threshold::Float64 = 0.1)
     # Validate inputs
     measure_first ∈ (:X, :Z) || throw(ArgumentError("measure_first must be :X or :Z"))
     
@@ -152,6 +155,9 @@ function optimize_circuit(
     
     has_logged_threads = Ref(false)
     
+    # virtual_qubits for gap computation
+    virtual_qubits = (nqubits - 1) ÷ 2
+    
     function objective(x)
         eval_count[] += 1
         eval_in_iter = (eval_count[] - 1) % popsize + 1  # 1 to popsize
@@ -166,6 +172,9 @@ function optimize_circuit(
             @info "Using $(Threads.nthreads()) threads for parallel sampling"
             @info "CMA-ES settings: popsize=$popsize, σ₀=$sigma0"
             @info "Stopping criteria: maxiter=$maxiter, ftol=$abstol, xtol=$xtol"
+            if gap_regularization
+                @info "Gap regularization: weight=$gap_weight, threshold=$gap_threshold (computed for ALL population members)"
+            end
             has_logged_threads[] = true
         end
         
@@ -189,7 +198,21 @@ function optimize_circuit(
         X_combined = vec(X_matrix)
         energy = real(compute_energy(X_combined, Z_combined, g, J, row))
         
-        # Track best within current CMA-ES iteration
+        # Compute gap penalty for THIS evaluation (expensive but accurate!)
+        gap_penalty = 0.0
+        current_gap = 0.0
+        if gap_regularization
+            _, current_gap, _, _ = compute_transfer_spectrum(gates, row, virtual_qubits; 
+                                                              num_eigenvalues=2, 
+                                                              use_iterative=:auto)
+            if current_gap < gap_threshold
+                gap_penalty = gap_weight * (gap_threshold - current_gap)
+            end
+        end
+        
+        total_cost = energy + gap_penalty
+        
+        # Track best within current CMA-ES iteration (based on raw energy)
         if eval_in_iter == 1
             # Reset for new iteration
             current_iter_best_energy[] = Inf
@@ -202,9 +225,21 @@ function optimize_circuit(
             current_iter_best_X[] = X_matrix
         end
         
-        # End of CMA-ES iteration: save best from this iteration
+        # End of CMA-ES iteration: save best and recompute gap for logging
         if eval_in_iter == popsize
-            push!(energy_history, current_iter_best_energy[])
+            # Recompute gap for the best candidate (for logging only)
+            best_gap = 0.0
+            if gap_regularization
+                best_gates = build_unitary_gate(current_iter_best_params[], p, row, nqubits; share_params=share_params)
+                _, best_gap, _, _ = compute_transfer_spectrum(best_gates, row, virtual_qubits; 
+                                                               num_eigenvalues=2, 
+                                                               use_iterative=:auto)
+            end
+            
+            # Raw energy for history (without penalty)
+            raw_energy = current_iter_best_energy[]
+            
+            push!(energy_history, raw_energy)
             push!(params_history, copy(current_iter_best_params[]))
             push!(Z_samples_history, copy(current_iter_best_Z[]))
             push!(X_samples_history, copy(current_iter_best_X[]))
@@ -213,11 +248,16 @@ function optimize_circuit(
             global_best = minimum(energy_history)
             
             if cma_iter % 10 == 0
-                @info "TFIM J=$J g=$g $(row)×∞ PEPS | CMA-ES Iter $cma_iter | Best this iter: $(round(current_iter_best_energy[], digits=6)) | Global best: $(round(global_best, digits=6))"
+                if gap_regularization
+                    best_penalty = best_gap < gap_threshold ? gap_weight * (gap_threshold - best_gap) : 0.0
+                    @info "TFIM J=$J g=$g $(row)×∞ | Iter $cma_iter | E=$(round(raw_energy, digits=6)) | gap=$(round(best_gap, digits=4)) | penalty=$(round(best_penalty, digits=4)) | Best=$(round(global_best, digits=6))"
+                else
+                    @info "TFIM J=$J g=$g $(row)×∞ PEPS | CMA-ES Iter $cma_iter | Best this iter: $(round(raw_energy, digits=6)) | Global best: $(round(global_best, digits=6))"
+                end
             end
         end
         
-        return energy
+        return total_cost
     end
     
     @info "=" ^ 60
@@ -226,6 +266,10 @@ function optimize_circuit(
     @info "  Population: $popsize"
     @info "  Max iterations: $maxiter"
     @info "  Stopping: ftol=$abstol, xtol=$xtol"
+    if gap_regularization
+        @info "  Gap regularization: weight=$gap_weight, threshold=$gap_threshold"
+        @info "  ⚠️  Computing gap for ALL $popsize population members (slow but accurate)"
+    end
     @info "=" ^ 60
     
     # Use CMAEvolutionStrategy.jl with full stopping criteria
@@ -292,6 +336,10 @@ function optimize_circuit(
         # CMA-ES settings
         :sigma0 => sigma0,
         :popsize => popsize,
+        # Gap regularization
+        :gap_regularization => gap_regularization,
+        :gap_weight => gap_weight,
+        :gap_threshold => gap_threshold,
         # Stopping criteria
         :maxiter => maxiter,
         :abstol => abstol,

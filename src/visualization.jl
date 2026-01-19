@@ -262,7 +262,7 @@ gates, rho, gap, eigenvalues = reconstruct_gates("result.json"; plot=false)
 gates, rho, gap, eigenvalues = reconstruct_gates("result.json"; save_plot=true)
 ```
 """
-function reconstruct_gates(filename::String; share_params=true, plot=true, save_plot=true)
+function reconstruct_gates(filename::String; share_params=false, plot=true, save_plot=true)
     result, input_args = load_result(filename)
     
     p = input_args[:p]
@@ -405,180 +405,6 @@ function plot_eigenvalue_spectrum(eigenvalues_raw::AbstractVector{<:Complex};
         Label(fig[0, 1:2], 
               "Spectral Gap: $(round(gap, digits=6))  |  ξ = $(round(ξ, digits=2))  |  $status_text",
               fontsize=16, font=:bold, color=status_color, halign=:center)
-    end
-    
-    if !isnothing(save_path)
-        save(save_path, fig)
-        @info "Figure saved to $save_path"
-    end
-    
-    return fig
-end
-
-
-"""
-    plot_diagnosis(diag; title="", save_path=nothing)
-
-Visualize the transfer channel diagnosis results.
-
-# Arguments
-- `diag`: Named tuple returned by `diagnose_transfer_channel`
-- `title`: Plot title (default: "")
-- `save_path`: Path to save figure (default: nothing, no save)
-
-# Returns
-- `Figure` object
-
-# Example
-```julia
-diag = diagnose_transfer_channel(gates, row, virtual_qubits)
-fig = plot_diagnosis(diag; title="Channel Diagnosis")
-```
-"""
-function plot_diagnosis(diag; title::String="", save_path::Union{String,Nothing}=nothing)
-    # Extract data from diagnosis
-    λs_complex = diag.eigenvalues_complex
-    λs_mags = diag.eigenvalues
-    gap = diag.gap
-    unitality = diag.unitality
-    is_unital = diag.is_unital
-    is_unitary = diag.is_unitary_channel
-    kraus_info = diag.kraus_structure
-    
-    # Create figure with 2x2 layout
-    fig = Figure(size=(1400, 1000))
-    
-    # === Top-left: Eigenvalues in complex plane (unit disc) ===
-    ax1 = Axis(fig[1, 1],
-               xlabel="Re(λ)",
-               ylabel="Im(λ)",
-               title="Transfer Matrix Eigenvalues",
-               aspect=DataAspect())
-    
-    # Draw unit circle
-    θ = range(0, 2π, length=100)
-    lines!(ax1, cos.(θ), sin.(θ), color=:black, linestyle=:dash, linewidth=1.5, label="Unit circle")
-    lines!(ax1, 0.99 .* cos.(θ), 0.99 .* sin.(θ), color=:red, linestyle=:dot, linewidth=1, alpha=0.5, label="|λ|=0.99")
-    
-    # Plot eigenvalues
-    re_parts = real.(λs_complex)
-    im_parts = imag.(λs_complex)
-    colors = [abs(λ) > 0.99 ? :red : (abs(λ) > 0.9 ? :orange : :steelblue) for λ in λs_complex]
-    scatter!(ax1, re_parts, im_parts, color=colors, markersize=10, strokewidth=0.5, strokecolor=:black)
-    
-    # Highlight top 2 eigenvalues
-    sorted_idx = sortperm(λs_mags, rev=true)
-    λ1_idx, λ2_idx = sorted_idx[1], sorted_idx[2]
-    scatter!(ax1, [re_parts[λ1_idx]], [im_parts[λ1_idx]], markersize=18, color=:green, marker=:star5, label="λ₁=$(round(λs_mags[λ1_idx], digits=4))")
-    scatter!(ax1, [re_parts[λ2_idx]], [im_parts[λ2_idx]], markersize=14, color=:purple, marker=:diamond, label="λ₂=$(round(λs_mags[λ2_idx], digits=4))")
-    
-    axislegend(ax1, position=:lt)
-    
-    # === Top-right: Eigenvalue magnitudes bar plot ===
-    ax2 = Axis(fig[1, 2],
-               xlabel="Eigenvalue index (sorted)",
-               ylabel="Eigenvalue magnitude |λ|",
-               title="Eigenvalue Spectrum")
-    
-    sorted_mags = sort(λs_mags, rev=true)
-    n = length(sorted_mags)
-    colors_bar = [λ > 0.99 ? :red : (λ > 0.9 ? :orange : :steelblue) for λ in sorted_mags]
-    barplot!(ax2, 1:n, sorted_mags, color=colors_bar, strokewidth=0.5, strokecolor=:black)
-    hlines!(ax2, [1.0], color=:black, linestyle=:dash, linewidth=1.5)
-    hlines!(ax2, [0.99], color=:red, linestyle=:dot, linewidth=1, alpha=0.5)
-    
-    # === Bottom-left: Kraus operator analysis ===
-    ax3 = Axis(fig[2, 1],
-               xlabel="Kraus operator index",
-               ylabel="Value",
-               title="Kraus Operator Analysis")
-    
-    if haskey(kraus_info, "kraus_unitarity_info")
-        # Multi-row case
-        info_list = kraus_info["kraus_unitarity_info"]
-        n_kraus = length(info_list)
-        norms = [info["norm"] for info in info_list]
-        iso_devs = [min(info["isometry_deviation"], 5.0) for info in info_list]  # Cap for visualization
-        coiso_devs = [min(info["coisometry_deviation"], 5.0) for info in info_list]
-        
-        x_positions = 1:n_kraus
-        barplot!(ax3, x_positions .- 0.25, norms, width=0.2, color=:steelblue, label="||K||")
-        barplot!(ax3, x_positions, iso_devs, width=0.2, color=:orange, label="||K†K-I||")
-        barplot!(ax3, x_positions .+ 0.25, coiso_devs, width=0.2, color=:purple, label="||KK†-I||")
-        
-        # Mark unitary operators
-        for (i, info) in enumerate(info_list)
-            if info["is_unitary"]
-                scatter!(ax3, [i], [max(norms[i], iso_devs[i], coiso_devs[i]) + 0.2], 
-                        marker=:star5, markersize=15, color=:green)
-            end
-        end
-        
-        axislegend(ax3, position=:rt)
-    elseif haskey(kraus_info, "K0_norm")
-        # Row=1 case
-        norms = [kraus_info["K0_norm"], kraus_info["K1_norm"]]
-        iso_devs = [kraus_info["K0_isometry_deviation"], kraus_info["K1_isometry_deviation"]]
-        coiso_devs = [kraus_info["K0_coisometry_deviation"], kraus_info["K1_coisometry_deviation"]]
-        
-        x_positions = [1, 2]
-        barplot!(ax3, x_positions .- 0.25, norms, width=0.2, color=:steelblue, label="||K||")
-        barplot!(ax3, x_positions, iso_devs, width=0.2, color=:orange, label="||K†K-I||")
-        barplot!(ax3, x_positions .+ 0.25, coiso_devs, width=0.2, color=:purple, label="||KK†-I||")
-        
-        ax3.xticks = ([1, 2], ["K₀", "K₁"])
-        axislegend(ax3, position=:rt)
-    end
-    
-    # === Bottom-right: Channel properties summary ===
-    ax4 = Axis(fig[2, 2],
-               title="Channel Properties Summary")
-    hidedecorations!(ax4)
-    hidespines!(ax4)
-    
-    # Create summary text
-    gap_status = gap > 0.1 ? "✓ Good" : (gap > 0.01 ? "⚠ Poor" : "✗ Bad")
-    gap_color = gap > 0.1 ? :green : (gap > 0.01 ? :orange : :red)
-    
-    unital_status = is_unital ? "⚠️ YES (unital)" : "✓ NO (non-unital)"
-    unital_color = is_unital ? :orange : :green
-    
-    unitary_status = is_unitary ? "⚠️ YES (unitary channel)" : "✓ NO (proper channel)"
-    unitary_color = is_unitary ? :red : :green
-    
-    # Compute correlation length
-    ξ = 1 / gap
-    
-    # Draw summary boxes
-    y_pos = 0.9
-    text!(ax4, 0.5, y_pos, text="SPECTRAL GAP", fontsize=18, font=:bold, align=(:center, :center))
-    y_pos -= 0.12
-    text!(ax4, 0.5, y_pos, text="gap = $(round(gap, digits=6))  |  ξ = $(round(ξ, digits=2))  |  $gap_status", 
-          fontsize=16, color=gap_color, align=(:center, :center))
-    
-    y_pos -= 0.2
-    text!(ax4, 0.5, y_pos, text="UNITALITY CHECK: Σᵢ KᵢKᵢ† = I", fontsize=18, font=:bold, align=(:center, :center))
-    y_pos -= 0.12
-    text!(ax4, 0.5, y_pos, text="deviation = $(round(unitality, digits=6))  |  $unital_status", 
-          fontsize=16, color=unital_color, align=(:center, :center))
-    
-    y_pos -= 0.2
-    text!(ax4, 0.5, y_pos, text="UNITARITY CHECK: ∃ K: K†K = KK† = I", fontsize=18, font=:bold, align=(:center, :center))
-    y_pos -= 0.12
-    text!(ax4, 0.5, y_pos, text=unitary_status, fontsize=16, color=unitary_color, align=(:center, :center))
-    
-    # Number of eigenvalues near 1
-    y_pos -= 0.2
-    n_near_1 = count(x -> x > 0.99, λs_mags)
-    text!(ax4, 0.5, y_pos, text="Eigenvalues > 0.99: $n_near_1 / $(length(λs_mags))", 
-          fontsize=14, align=(:center, :center))
-    
-    xlims!(ax4, 0, 1)
-    ylims!(ax4, 0, 1)
-    
-    # Title
-    if !isempty(title)
-        Label(fig[0, 1:2], title, fontsize=20, font=:bold)
     end
     
     if !isnothing(save_path)
@@ -1057,4 +883,153 @@ save(save_path, fig)
 end
 
 return fig
+end
+
+"""
+    plot_diagnosis(diag::NamedTuple; title::String="", save_path::Union{String,Nothing}=nothing)
+
+Visualize the transfer channel diagnosis results.
+
+# Arguments
+- `diag`: Named tuple returned by `diagnose_transfer_channel`
+- `title`: Plot title (default: "")
+- `save_path`: Path to save figure (default: nothing, no save)
+
+# Returns
+- `Figure` object
+
+# Example
+```julia
+diag = diagnose_transfer_channel(gates, row, virtual_qubits)
+fig = plot_diagnosis(diag; title="Channel Diagnosis", save_path="diagnosis.pdf")
+```
+"""
+function plot_diagnosis(diag::NamedTuple; 
+                        title::String="",
+                        save_path::Union{String,Nothing}=nothing)
+    # Extract data from diagnosis
+    eigenvalues_raw = diag.eigenvalues_complex
+    gap = diag.gap
+    unitality = diag.unitality
+    is_unital = diag.is_unital
+    is_unitary_channel = diag.is_unitary_channel
+    dist_to_identity = diag.dist_to_identity
+    
+    # Sort eigenvalues by magnitude
+    sorted_indices = sortperm(abs.(eigenvalues_raw), rev=true)
+    sorted_raw = eigenvalues_raw[sorted_indices]
+    sorted_eigs = abs.(sorted_raw)
+    n = length(sorted_eigs)
+    
+    # Compute correlation length
+    ξ = gap > 0 ? 1 / gap : Inf
+    
+    # Create figure with three panels
+    fig = Figure(size=(1400, 500))
+    
+    # === Left panel: Bar plot of eigenvalue magnitudes ===
+    ax1 = Axis(fig[1, 1], 
+               xlabel="Eigenvalue index (sorted)", 
+               ylabel="Eigenvalue magnitude |λ|",
+               title="Eigenvalue Spectrum")
+    
+    # Color by distance from 1
+    colors = [λ > 0.99 ? :red : (λ > 0.9 ? :orange : :steelblue) for λ in sorted_eigs]
+    
+    barplot!(ax1, 1:n, sorted_eigs, color=colors, strokewidth=0.5, strokecolor=:black)
+    
+    # Reference lines
+    hlines!(ax1, [1.0], color=:black, linestyle=:dash, linewidth=1.5, label="λ=1")
+    hlines!(ax1, [0.99], color=:red, linestyle=:dot, linewidth=1, alpha=0.5, label="λ=0.99")
+    
+    # Highlight λ₁ and λ₂
+    λ₁ = sorted_eigs[1]
+    λ₂ = length(sorted_eigs) > 1 ? sorted_eigs[2] : 0.0
+    scatter!(ax1, [1], [λ₁], markersize=15, color=:green, marker=:star5, label="λ₁=$(round(λ₁, digits=4))")
+    if length(sorted_eigs) > 1
+        scatter!(ax1, [2], [λ₂], markersize=12, color=:purple, marker=:diamond, label="λ₂=$(round(λ₂, digits=4))")
+    end
+    
+    axislegend(ax1, position=:rb)
+    
+    # === Middle panel: Complex plane ===
+    ax2 = Axis(fig[1, 2],
+               xlabel="Re(λ)",
+               ylabel="Im(λ)",
+               title="Eigenvalues in Complex Plane",
+               aspect=DataAspect())
+    
+    # Draw unit circle
+    θ = range(0, 2π, length=100)
+    lines!(ax2, cos.(θ), sin.(θ), color=:black, linestyle=:dash, linewidth=1.5, label="Unit circle")
+    lines!(ax2, 0.99 .* cos.(θ), 0.99 .* sin.(θ), color=:red, linestyle=:dot, linewidth=1, alpha=0.5, label="|λ|=0.99")
+    
+    # Plot all eigenvalues
+    re_parts = real.(sorted_raw)
+    im_parts = imag.(sorted_raw)
+    colors_scatter = [abs(λ) > 0.99 ? :red : (abs(λ) > 0.9 ? :orange : :steelblue) for λ in sorted_raw]
+    scatter!(ax2, re_parts, im_parts, color=colors_scatter, markersize=8, strokewidth=0.5, strokecolor=:black)
+    
+    # Highlight λ₁ and λ₂
+    scatter!(ax2, [real(sorted_raw[1])], [imag(sorted_raw[1])], markersize=15, color=:green, marker=:star5, label="λ₁")
+    if length(sorted_raw) > 1
+        scatter!(ax2, [real(sorted_raw[2])], [imag(sorted_raw[2])], markersize=12, color=:purple, marker=:diamond, label="λ₂")
+    end
+    
+    axislegend(ax2, position=:lt)
+    
+    # === Right panel: Diagnosis summary ===
+    ax3 = Axis(fig[1, 3],
+               title="Channel Properties",
+               limits=(0, 1, 0, 1))
+    hidedecorations!(ax3)
+    hidespines!(ax3)
+    
+    # Build summary text
+    status_gap = gap > 0.1 ? "✓ Good" : (gap > 0.01 ? "⚠ Poor" : "✗ Bad")
+    status_color = gap > 0.1 ? :green : (gap > 0.01 ? :orange : :red)
+    
+    unital_status = is_unital ? "⚠ Yes (preserves I/d)" : "✓ No"
+    unitary_status = is_unitary_channel ? "⚠ Yes (problematic)" : "✓ No"
+    
+    n_near_1 = count(x -> x > 0.99, sorted_eigs)
+    n_near_095 = count(x -> x > 0.95, sorted_eigs)
+    
+    lines = [
+        ("Spectral Gap:", "$(round(gap, digits=4)) ($status_gap)", status_color),
+        ("Correlation Length ξ:", "$(round(ξ, digits=2))", :black),
+        ("", "", :black),
+        ("λ₁ (largest):", "$(round(λ₁, digits=6))", :black),
+        ("λ₂ (2nd largest):", "$(round(λ₂, digits=6))", :black),
+        ("", "", :black),
+        ("|λ| > 0.99:", "$n_near_1 / $n", n_near_1 > 1 ? :orange : :black),
+        ("|λ| > 0.95:", "$n_near_095 / $n", :black),
+        ("", "", :black),
+        ("Unital:", unital_status, is_unital ? :orange : :green),
+        ("Unitary Channel:", unitary_status, is_unitary_channel ? :red : :green),
+        ("Unitality Deviation:", "$(round(unitality, digits=4))", :black),
+        ("Dist to Identity:", "$(round(dist_to_identity, digits=4))", :black),
+    ]
+    
+    y_pos = 0.95
+    for (label, value, color) in lines
+        if !isempty(label)
+            text!(ax3, 0.05, y_pos, text=label, fontsize=12, align=(:left, :center))
+            text!(ax3, 0.55, y_pos, text=value, fontsize=12, align=(:left, :center), color=color)
+        end
+        y_pos -= 0.07
+    end
+    
+    # Add title at top
+    if !isempty(title)
+        Label(fig[0, 1:3], title, fontsize=18, font=:bold, halign=:center)
+    end
+    
+    # Save if requested
+    if !isnothing(save_path)
+        save(save_path, fig)
+        @info "Figure saved to $save_path"
+    end
+    
+    return fig
 end
