@@ -417,7 +417,7 @@ function fit_acf_exponential(lags::AbstractVector, acf::AbstractVector)
     A_init = abs_acf[1]
     # Estimate ξ from where |ACF| drops to 1/e
     ξ_init = 10.0
-    for i in 2:length(abs_acf)
+    for i in 1:length(abs_acf)
         if abs_acf[i] < abs_acf[1] / ℯ
             ξ_init = Float64(i - 1)
             break

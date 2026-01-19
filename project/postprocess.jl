@@ -225,6 +225,15 @@ function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=t
     println("Number of samples: $(length(sample_data))")
     
     lags, acf, acf_err = compute_acf(sample_data[100:row:end]; max_lag=max_lag, n_bootstrap=50)
+    
+    # Discard C(0) term (lag 0)
+    if length(lags) > 1 && lags[1] == 0
+        lags = lags[1:end]
+        acf = acf[1:end]
+        acf_err = acf_err[1:end]
+        println("Discarded C(0) term, using lags 1:$(max_lag)")
+    end
+    
     @show acf, acf_err
     A, ξ = fit_acf_exponential(lags, acf)
     println("Autocorrelation length ($(basis)-basis): ξ = ", ξ)
@@ -237,7 +246,7 @@ function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=t
     fig = plot_acf(lags, acf; 
                     acf_err=acf_err,
                     fit_params=(A, ξ),
-                    logscale=false,
+                    logscale=true,
                     title=title_text)
     display(fig)
     
@@ -540,7 +549,7 @@ end
 
 # Example usage (commented out)
 # Analyze a single result
-g = 1.0; row=5 ; nqubits=5
+g = 0.5; row=2 ; nqubits=3
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 result, args = analyze_result(datafile)
@@ -556,7 +565,7 @@ gates, rho, gap, eigenvalues = reconstruct_gates(datafile)
 visualize_correlation(datafile)
 
 # Analyze autocorrelation (using saved samples)
-lags, acf, ξ = analyze_acf(datafile,row; max_lag=6, resample=false, samples=1000000)
+lags, acf, ξ = analyze_acf(datafile,row; max_lag=200, resample=false, samples=1000000)
 
 # Analyze autocorrelation with fresh resampled data
 # lags, acf, ξ = analyze_acf(datafile; max_lag=10, resample=true, samples=50000)

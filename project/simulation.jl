@@ -78,11 +78,11 @@ end
 
 simulation(;
     J=1.0,
-    g_values=[1.0],
-    row=3,
+    g_values=[0.5],
+    row=2,
     p=4,
     nqubits=3,
-    maxiter=3000,
+    maxiter=1000,
     measure_first=:Z,
     seed=123,
     verbose=true,
