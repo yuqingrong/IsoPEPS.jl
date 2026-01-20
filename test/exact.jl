@@ -170,19 +170,19 @@ end
         
         # Method 1: Full eigendecomposition (use_iterative=:never, matrix_free=:never)
         rho_full, gap_full, eigs_full = compute_transfer_spectrum(
-            gates, row, virtual_qubits; 
+            gates, row, nqubits; 
             use_iterative=:never, matrix_free=:never
         )
         
         # Method 2: Iterative solver with full matrix (use_iterative=:always, matrix_free=:never)
         rho_iter, gap_iter, eigs_iter = compute_transfer_spectrum(
-            gates, row, virtual_qubits; 
+            gates, row, nqubits; 
             use_iterative=:always, matrix_free=:never
         )
         
         # Method 3: Matrix-free approach (matrix_free=:always)
         rho_mfree, gap_mfree, eigs_mfree = compute_transfer_spectrum(
-            gates, row, virtual_qubits; 
+            gates, row, nqubits; 
             matrix_free=:always
         )
         
@@ -316,7 +316,7 @@ end
     for row in [1, 2, 3]
         gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
         gates = [Matrix(gate) for _ in 1:row]
-        rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, virtual_qubits)
+        rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
         X_exp = compute_X_expectation(rho, gates, row, virtual_qubits)
         @test abs(imag(X_exp)) < 1e-10
         @test -1.0 ≤ real(X_exp) ≤ 1.0
@@ -329,7 +329,7 @@ end
     for row in [1, 2, 3]
         gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
         gates = [Matrix(gate) for _ in 1:row]
-        rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, virtual_qubits)
+        rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
         ZZ_vert, ZZ_horiz = compute_ZZ_expectation(rho, gates, row, virtual_qubits)
         @test abs(imag(ZZ_vert)) < 1e-10
         @test -1.0 ≤ real(ZZ_vert) ≤ 1.0

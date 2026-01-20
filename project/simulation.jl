@@ -4,7 +4,6 @@ using Random
 using CairoMakie
 using Yao, Manifolds
 using LinearAlgebra, OMEinsum
-using CMAEvolutionStrategy
 """
     simulation(; J, g_values, row, p, nqubits, ...)
 
@@ -59,9 +58,6 @@ function simulation(;
     # Optimization settings
     maxiter::Int = 5000,
     abstol::Float64 = 0.02,
-    xtol::Float64 = 1e-6,
-    sigma0::Float64 = 1.0,
-    popsize::Union{Int,Nothing} = nothing,
     # Gap regularization
     gap_regularization::Bool = false,
     gap_weight::Float64 = 1.0,
@@ -87,9 +83,6 @@ function simulation(;
     n_params = 2 * nqubits * p
     results = Vector{CircuitOptimizationResult}(undef, n)
     
-    # Auto-calculate population size if not provided
-    actual_popsize = popsize === nothing ? 4 + floor(Int, 3 * log(n_params)) : popsize
-    
     if verbose
         println("=" ^ 60)
         println("TFIM Circuit Optimization")
@@ -100,8 +93,7 @@ function simulation(;
         println("  n_params = $n_params")
         println()
         println("Optimization settings:")
-        println("  CMA-ES: popsize = $actual_popsize, σ₀ = $sigma0")
-        println("  Stopping: maxiter=$maxiter, ftol=$abstol, xtol=$xtol")
+        println("  Stopping: maxiter=$maxiter, abstol=$abstol")
         if gap_regularization
             println("  Gap regularization: weight=$gap_weight, threshold=$gap_threshold")
         end
@@ -120,22 +112,19 @@ function simulation(;
         
         verbose && println("\n[$i/$n] Starting simulation for g = $g")
         
-        # Set seed for reproducibility (different for each g value)
+        # Set seed for reproducibility
         sim_seed = seed
         Random.seed!(sim_seed)
         
         # Initialize parameters
-        params = rand(n_params)
-        @show params
+        params = ones(n_params)
+        
         # Run optimization with all settings
         result = optimize_circuit(
             params, J, g, p, row, nqubits;
             # Optimization settings
             maxiter = maxiter,
             abstol = abstol,
-            xtol = xtol,
-            sigma0 = sigma0,
-            popsize = actual_popsize,
             # Gap regularization
             gap_regularization = gap_regularization,
             gap_weight = gap_weight,
@@ -163,9 +152,6 @@ function simulation(;
             # Optimization settings
             :maxiter => maxiter,
             :abstol => abstol,
-            :xtol => xtol,
-            :sigma0 => sigma0,
-            :popsize => actual_popsize,
             # Gap regularization
             :gap_regularization => gap_regularization,
             :gap_weight => gap_weight,
@@ -205,17 +191,14 @@ end
 
 simulation(
     J = 1.0,
-    g_values = [0.5],
-    row = 1,
-    p = 3,
+    g_values = [4.0],
+    row = 3,
+    p = 4,
     nqubits = 3,
     # Optimization settings
-    maxiter = 2000,
+    maxiter = 1000,
     abstol = 0.01,
-    #xtol = 1e-6,
-    sigma0 = 1.0,
-    popsize = nothing,
-    # Gap regularization (uncomment to enable)
+    # Gap regularization
     gap_regularization = false,
     gap_weight = 10.0,
     gap_threshold = 0.1,
@@ -226,7 +209,7 @@ simulation(
     n_parallel_runs = 11,
     conv_step = 100,
     # Other
-    seed = 12,
+    seed = 123,
     verbose = true,
     output_dir = joinpath(@__DIR__, "results")
 )

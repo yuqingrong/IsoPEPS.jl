@@ -24,7 +24,8 @@ For large systems (row >= 5), uses a matrix-free approach that never forms the f
 transfer matrix, instead computing T*v on-the-fly via tensor contraction.
 The spectral gap quantifies how quickly the channel converges to its fixed point.
 """
-function compute_transfer_spectrum(gates, row, virtual_qubits; num_eigenvalues=2, use_iterative=:auto, matrix_free=:auto)
+function compute_transfer_spectrum(gates, row, nqubits; num_eigenvalues=2, use_iterative=:auto, matrix_free=:auto)
+    virtual_qubits = (nqubits - 1) ÷ 2
     A_tensors = gates_to_tensors(gates, row, virtual_qubits)
 
     total_qubits = 1 + virtual_qubits + virtual_qubits * row

@@ -123,9 +123,6 @@ function optimize_circuit(
     n_parallel_runs::Int = 44,
     maxiter::Int = 5000,
     abstol::Float64 = 0.02,
-    xtol::Float64 = 1e-3,
-    sigma0::Float64 = 1.0,
-    popsize::Union{Int,Nothing} = nothing,
     gap_regularization::Bool = false,
     gap_weight::Float64 = 1.0,
     gap_threshold::Float64 = 0.1)
@@ -135,33 +132,22 @@ function optimize_circuit(
     initial_params = copy(params)
     n_params = length(params)
     
-    # Auto-calculate population size if not provided
-    if popsize === nothing
-        popsize = 4 + floor(Int, 3 * log(n_params))
-    end
-    
-    # History storage (one entry per CMA-ES iteration, not per evaluation)
+    # History storage (one entry per CMA-ES generation)
     energy_history = Float64[]
     params_history = Vector{Vector{Float64}}()
     Z_samples_history = Vector{Matrix{Float64}}()
     X_samples_history = Vector{Matrix{Float64}}()
     
-    # Current iteration tracking
-    eval_count = Ref(0)
-    current_iter_best_energy = Ref(Inf)
-    current_iter_best_params = Ref(copy(params))
-    current_iter_best_Z = Ref(Matrix{Float64}(undef, 0, 0))
-    current_iter_best_X = Ref(Matrix{Float64}(undef, 0, 0))
+    # Track energies within each generation
+    generation_energies = Float64[]
+    generation_params = Vector{Vector{Float64}}()
+    generation_Z_samples = Vector{Matrix{Float64}}()
+    generation_X_samples = Vector{Matrix{Float64}}()
+    generation_count = Ref(0)
     
     has_logged_threads = Ref(false)
     
-    # virtual_qubits for gap computation
-    virtual_qubits = (nqubits - 1) ÷ 2
-    
-    function objective(x)
-        eval_count[] += 1
-        eval_in_iter = (eval_count[] - 1) % popsize + 1  # 1 to popsize
-        
+    function objective(x, _)
         gates = build_unitary_gate(x, p, row, nqubits; share_params=share_params)
         
         # Store samples per chain (not combined)
@@ -170,10 +156,9 @@ function optimize_circuit(
         
         if !has_logged_threads[]
             @info "Using $(Threads.nthreads()) threads for parallel sampling"
-            @info "CMA-ES settings: popsize=$popsize, σ₀=$sigma0"
-            @info "Stopping criteria: maxiter=$maxiter, ftol=$abstol, xtol=$xtol"
+            @info "Parallel runs: $n_parallel_runs, samples per run: $samples_per_run"
             if gap_regularization
-                @info "Gap regularization: weight=$gap_weight, threshold=$gap_threshold (computed for ALL population members)"
+                @info "Gap regularization: weight=$gap_weight, threshold=$gap_threshold"
             end
             has_logged_threads[] = true
         end
@@ -190,19 +175,18 @@ function optimize_circuit(
         end
         
         # Convert to matrix: rows = chains, cols = samples
-        Z_matrix = reduce(hcat, Z_samples_per_chain)'  # n_parallel_runs × n_samples
-        X_matrix = reduce(hcat, X_samples_per_chain)'  # n_parallel_runs × n_samples
+        Z_matrix = reduce(hcat, Z_samples_per_chain)'
+        X_matrix = reduce(hcat, X_samples_per_chain)'
         
         # Compute energy using all samples
         Z_combined = vec(Z_matrix)
         X_combined = vec(X_matrix)
         energy = real(compute_energy(X_combined, Z_combined, g, J, row))
         
-        # Compute gap penalty for THIS evaluation (expensive but accurate!)
+        # Compute gap penalty if enabled
         gap_penalty = 0.0
-        current_gap = 0.0
         if gap_regularization
-            _, current_gap, _, _ = compute_transfer_spectrum(gates, row, virtual_qubits; 
+            _, current_gap, _, _ = compute_transfer_spectrum(gates, row, nqubits; 
                                                               num_eigenvalues=2, 
                                                               use_iterative=:auto)
             if current_gap < gap_threshold
@@ -212,99 +196,97 @@ function optimize_circuit(
         
         total_cost = energy + gap_penalty
         
-        # Track best within current CMA-ES iteration (based on raw energy)
-        if eval_in_iter == 1
-            # Reset for new iteration
-            current_iter_best_energy[] = Inf
-        end
-        
-        if energy < current_iter_best_energy[]
-            current_iter_best_energy[] = energy
-            current_iter_best_params[] = copy(x)
-            current_iter_best_Z[] = Z_matrix
-            current_iter_best_X[] = X_matrix
-        end
-        
-        # End of CMA-ES iteration: save best and recompute gap for logging
-        if eval_in_iter == popsize
-            # Recompute gap for the best candidate (for logging only)
-            best_gap = 0.0
-            if gap_regularization
-                best_gates = build_unitary_gate(current_iter_best_params[], p, row, nqubits; share_params=share_params)
-                _, best_gap, _, _ = compute_transfer_spectrum(best_gates, row, virtual_qubits; 
-                                                               num_eigenvalues=2, 
-                                                               use_iterative=:auto)
-            end
-            
-            # Raw energy for history (without penalty)
-            raw_energy = current_iter_best_energy[]
-            
-            push!(energy_history, raw_energy)
-            push!(params_history, copy(current_iter_best_params[]))
-            push!(Z_samples_history, copy(current_iter_best_Z[]))
-            push!(X_samples_history, copy(current_iter_best_X[]))
-            
-            cma_iter = length(energy_history)
-            global_best = minimum(energy_history)
-            
-            if cma_iter % 10 == 0
-                if gap_regularization
-                    best_penalty = best_gap < gap_threshold ? gap_weight * (gap_threshold - best_gap) : 0.0
-                    @info "TFIM J=$J g=$g $(row)×∞ | Iter $cma_iter | E=$(round(raw_energy, digits=6)) | gap=$(round(best_gap, digits=4)) | penalty=$(round(best_penalty, digits=4)) | Best=$(round(global_best, digits=6))"
-                else
-                    @info "TFIM J=$J g=$g $(row)×∞ PEPS | CMA-ES Iter $cma_iter | Best this iter: $(round(raw_energy, digits=6)) | Global best: $(round(global_best, digits=6))"
-                end
-            end
-        end
+        # Store in generation arrays (raw energy, not penalized)
+        push!(generation_energies, energy)
+        push!(generation_params, copy(x))
+        push!(generation_Z_samples, Z_matrix)
+        push!(generation_X_samples, X_matrix)
         
         return total_cost
     end
     
+    # Callback to track minimum energy per generation
+    function callback(state, loss)
+        if !isempty(generation_energies)
+            min_idx = argmin(generation_energies)
+            min_energy = generation_energies[min_idx]
+            best_params = generation_params[min_idx]
+            best_Z_samples = generation_Z_samples[min_idx]
+            best_X_samples = generation_X_samples[min_idx]
+            
+            # Store the minimum energy and associated data
+            push!(energy_history, min_energy)
+            push!(params_history, best_params)
+            push!(Z_samples_history, best_Z_samples)
+            push!(X_samples_history, best_X_samples)
+            
+            generation_count[] += 1
+            global_best = minimum(energy_history)
+            
+            if generation_count[] % 10 == 0
+                if gap_regularization
+                    # Recompute gap for best candidate for logging
+                    best_gates = build_unitary_gate(best_params, p, row, nqubits; share_params=share_params)
+                    _, best_gap, _, _ = compute_transfer_spectrum(best_gates, row, virtual_qubits; 
+                                                                   num_eigenvalues=2, 
+                                                                   use_iterative=:auto)
+                    best_penalty = best_gap < gap_threshold ? gap_weight * (gap_threshold - best_gap) : 0.0
+                    @info "TFIM J=$J g=$g $(row)×∞ | Gen $(generation_count[]) | E=$(round(min_energy, digits=6)) | gap=$(round(best_gap, digits=4)) | penalty=$(round(best_penalty, digits=4)) | Best=$(round(global_best, digits=6))"
+                else
+                    @info "TFIM J=$J g=$g $(row)×∞ PEPS | Generation $(generation_count[]) | Min Energy: $(round(min_energy, digits=6)) | Global Best: $(round(global_best, digits=6))"
+                end
+            end
+            
+            # Clear generation arrays for next generation
+            empty!(generation_energies)
+            empty!(generation_params)
+            empty!(generation_Z_samples)
+            empty!(generation_X_samples)
+        end
+        return false  # Continue optimization
+    end
+    
     @info "=" ^ 60
-    @info "Starting CMA-ES optimization"
+    @info "Starting CMA-ES optimization (Optimization.jl interface)"
     @info "  Parameters: $n_params"
-    @info "  Population: $popsize"
     @info "  Max iterations: $maxiter"
-    @info "  Stopping: ftol=$abstol, xtol=$xtol"
+    @info "  Stopping: abstol=$abstol"
     if gap_regularization
         @info "  Gap regularization: weight=$gap_weight, threshold=$gap_threshold"
-        @info "  ⚠️  Computing gap for ALL $popsize population members (slow but accurate)"
     end
     @info "=" ^ 60
     
-    # Use CMAEvolutionStrategy.jl with full stopping criteria
-    result_cma = CMAEvolutionStrategy.minimize(
-        objective,
-        params,
-        sigma0;
-        lower = zeros(n_params),
-        upper = fill(2π, n_params),
-        maxiter = maxiter,
-        popsize = popsize,
-        verbosity = 0,
-        ftol = abstol,
-        xtol = xtol,
-    )
+    f = OptimizationFunction(objective)
+    prob = Optimization.OptimizationProblem(f, params, 
+                                             lb=zeros(n_params), 
+                                             ub=fill(2π, n_params))
+   
+    sol = solve(prob, CMAEvolutionStrategyOpt(), 
+                maxiters=maxiter, abstol=abstol, callback=callback)
     
-    # Determine convergence
-    stop_reason = result_cma.stop.reason
-    converged = stop_reason ∉ ("maxiter",)
+    converged = sol.retcode == :Success || sol.retcode == :Default
     
     # Find the best iteration from history
-    best_idx = argmin(energy_history)
-    final_cost = energy_history[best_idx]
-    final_params = params_history[best_idx]
-    final_Z_samples = Z_samples_history[best_idx]
-    final_X_samples = X_samples_history[best_idx]
+    if !isempty(energy_history)
+        best_idx = argmin(energy_history)
+        final_cost = energy_history[best_idx]
+        final_params = params_history[best_idx]
+        final_Z_samples = Z_samples_history[best_idx]
+        final_X_samples = X_samples_history[best_idx]
+        @info "Best energy at generation $best_idx: $(round(final_cost, digits=6))"
+    else
+        final_params = sol.u
+        final_cost = sol.objective
+        final_Z_samples = Matrix{Float64}(undef, 0, 0)
+        final_X_samples = Matrix{Float64}(undef, 0, 0)
+    end
+    
     final_gates = build_unitary_gate(final_params, p, row, nqubits; share_params=share_params)
     
     @info "=" ^ 60
     @info "Optimization complete"
-    @info "  Stop reason: $stop_reason"
     @info "  Converged: $converged"
-    @info "  Best energy: $(round(final_cost, digits=6)) at CMA-ES iteration $best_idx"
-    @info "  Total CMA-ES iterations: $(length(energy_history))"
-    @info "  Total evaluations: $(eval_count[])"
+    @info "  Total generations: $(generation_count[])"
     @info "=" ^ 60
     
     result = CircuitOptimizationResult(
@@ -333,9 +315,6 @@ function optimize_circuit(
         :conv_step => conv_step,
         :samples_per_run => samples_per_run,
         :n_parallel_runs => n_parallel_runs,
-        # CMA-ES settings
-        :sigma0 => sigma0,
-        :popsize => popsize,
         # Gap regularization
         :gap_regularization => gap_regularization,
         :gap_weight => gap_weight,
@@ -343,18 +322,16 @@ function optimize_circuit(
         # Stopping criteria
         :maxiter => maxiter,
         :abstol => abstol,
-        :xtol => xtol,
         # Results metadata
-        :best_iteration => best_idx,
-        :total_cma_iterations => length(energy_history),
-        :total_evaluations => eval_count[],
-        :stop_reason => stop_reason,
+        :total_generations => generation_count[],
         :converged => converged,
+        :note => "energy_history contains minimum energy per CMA-ES generation",
         # Sample shape info
         :sample_shape => (n_parallel_runs, samples_per_run),
         :sample_description => "Matrix: rows=chains, cols=samples"
     )
     
+    save_result("data/circuit_g=$(g)_row=$(row)_nqubits=$(nqubits).json", result, input_args)
     
     return result
 end
