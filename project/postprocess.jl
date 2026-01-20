@@ -549,7 +549,7 @@ end
 
 # Example usage (commented out)
 # Analyze a single result
-g = 1.0; row=3 ; nqubits=3
+g = 0.5; row=2 ; nqubits=5
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 result, args = analyze_result(datafile)
@@ -565,7 +565,7 @@ gates, rho, gap, eigenvalues = reconstruct_gates(datafile)
 visualize_correlation(datafile)
 
 # Analyze autocorrelation (using saved samples)
-lags, acf, ξ = analyze_acf(datafile,row; max_lag=200, resample=false, samples=1000000)
+lags, acf, ξ = analyze_acf(datafile,row; max_lag=10, resample=false, samples=1000000)
 
 # Analyze autocorrelation with fresh resampled data
 # lags, acf, ξ = analyze_acf(datafile; max_lag=10, resample=true, samples=50000)

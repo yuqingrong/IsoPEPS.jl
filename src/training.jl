@@ -126,7 +126,7 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
         gates = build_unitary_gate(x, p, row, nqubits; share_params=share_params)
         
         # Run circuit with samples
-        n_runs = 11
+        n_runs = 44
         Z_samples_all = Vector{Vector{Float64}}(undef, n_runs)
         X_samples_all = Vector{Vector{Float64}}(undef, n_runs)
         
