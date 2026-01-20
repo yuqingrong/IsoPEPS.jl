@@ -339,6 +339,131 @@ function resample_circuit(filename::String; conv_step=1000, samples=100000, meas
 end
 
 """
+    run_energy_evolution(filename::String; n_runs=10, conv_step=100, samples=10000, window=100)
+
+Load parameters from file, run the quantum channel multiple times, and plot energy evolution.
+
+# Arguments
+- `filename`: Path to JSON result file
+- `n_runs`: Number of independent runs (default: 10)
+- `conv_step`: Convergence steps before sampling (default: 100)
+- `samples`: Number of samples per run (default: 10000)
+- `window`: Window size for computing running average energy (default: 100)
+
+# Returns
+- `fig`: Figure object with energy vs time plot
+- `energies`: Matrix of energy values (n_runs × n_steps)
+"""
+function run_energy_evolution(filename::String; n_runs=10, conv_step=100, samples=10000, window=100)
+    result, input_args = load_result(filename)
+    
+    # Extract parameters
+    params = result.params
+    p = input_args[:p]
+    row = input_args[:row]
+    nqubits = input_args[:nqubits]
+    g = input_args[:g]
+    J = input_args[:J]
+    share_params = get(input_args, :share_params, true)
+    
+    println("=== Energy Evolution Analysis ===")
+    println("File: ", basename(filename))
+    println("Configuration: p=$p, row=$row, nqubits=$nqubits, g=$g, J=$J")
+    println("Running $n_runs independent channels...")
+    
+    # Reconstruct gates
+    gates = build_unitary_gate(params, p, row, nqubits; share_params=share_params)
+    
+    # Storage for all runs
+    all_Z_samples = Vector{Vector{Float64}}(undef, n_runs)
+    all_X_samples = Vector{Vector{Float64}}(undef, n_runs)
+    
+    # Run channels in parallel
+    Threads.@threads for run_idx in 1:n_runs
+        _, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits; 
+                                                          conv_step=conv_step, 
+                                                          samples=samples,
+                                                          measure_first=:Z)
+        all_Z_samples[run_idx] = Z_samples[conv_step+1:end]
+        all_X_samples[run_idx] = X_samples
+    end
+    
+    # Compute running average energy for each run
+    n_steps = length(all_Z_samples[1]) - window + 1
+    energies = zeros(n_runs, n_steps)
+    
+    for run_idx in 1:n_runs
+        Z = all_Z_samples[run_idx]
+        X = all_X_samples[run_idx]
+        
+        for t in 1:n_steps
+            # Use samples from 1:t+window-1 for running average
+            Z_window = Z[t:t+window-1]
+            X_window = isempty(X) ? Float64[] : X[min(t, length(X)):min(t+window-1, length(X))]
+            
+            # Compute energy for this window
+            if !isempty(X_window) && length(X_window) >= window
+                energies[run_idx, t] = compute_energy(X_window, Z_window, g, J, row)
+            else
+                # If X samples not available, compute only ZZ part
+                N = length(Z_window)
+                if row == 1
+                    ZZ_horiz = mean(Z_window[i] * Z_window[i+1] for i in 1:N-1)
+                    ZZ_mean = ZZ_horiz
+                else
+                    ZZ_vert = mean(Z_window[i] * Z_window[i+1] for i in 1:N-1 if i % row != 0)
+                    ZZ_horiz = mean(Z_window[i] * Z_window[i+row] for i in 1:N-row)
+                    ZZ_mean = (ZZ_vert + ZZ_horiz) / 2
+                end
+                energies[run_idx, t] = -J * ZZ_mean
+            end
+        end
+    end
+    
+    # Create plot
+    fig = Figure(size=(800, 500))
+    ax = Axis(fig[1, 1],
+              xlabel="Sampling Step",
+              ylabel="Energy (running avg, window=$window)",
+              title="Energy Evolution: $(basename(filename))\ng=$g, J=$J, row=$row")
+    
+    # Plot each run with transparency
+    times = collect(1:n_steps)
+    colors = cgrad(:viridis, n_runs, categorical=true)
+    
+    for run_idx in 1:n_runs
+        lines!(ax, times, energies[run_idx, :], 
+               color=(colors[run_idx], 0.5), linewidth=1,
+               label=run_idx == 1 ? "Individual runs" : nothing)
+    end
+    
+    # Plot mean and std
+    mean_energy = vec(mean(energies, dims=1))
+    std_energy = vec(std(energies, dims=1))
+    
+    band!(ax, times, mean_energy .- std_energy, mean_energy .+ std_energy, 
+          color=(:red, 0.2))
+    lines!(ax, times, mean_energy, color=:red, linewidth=2, label="Mean ± std")
+    
+    # Add horizontal line for final energy
+    final_energy = result.energy
+    hlines!(ax, [final_energy], color=:black, linestyle=:dash, linewidth=1.5,
+            label="Saved energy: $(round(final_energy, digits=4))")
+    
+    axislegend(ax, position=:rt)
+    
+    display(fig)
+    
+    # Print summary
+    println("\n--- Energy Statistics ---")
+    println("Final mean energy: $(round(mean(mean_energy[end-100:end]), digits=4))")
+    println("Final std: $(round(mean(std_energy[end-100:end]), digits=4))")
+    println("Saved energy: $(round(final_energy, digits=4))")
+    
+    return fig, energies
+end
+
+"""
     plot_energy_vs_g(data_dir::String; J=1.0, row=3)
 
 Load all results matching the pattern and plot energy vs g.
@@ -549,7 +674,7 @@ end
 
 # Example usage (commented out)
 # Analyze a single result
-g = 0.5; row=2 ; nqubits=5
+g = 0.5; row=3 ; nqubits=5
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 result, args = analyze_result(datafile)
