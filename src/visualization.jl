@@ -543,6 +543,8 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
     return fig
 end
 
+
+
 """
     plot_corr_scale(row, corr_length; kwargs...)
 

@@ -78,10 +78,10 @@ end
 
 simulation(;
     J=1.0,
-    g_values=[4.0],
-    row=3,
+    g_values=[2.0],
+    row=4,
     p=4,
-    nqubits=3,
+    nqubits=5,
     maxiter=500,
     measure_first=:Z,
     seed=42,
