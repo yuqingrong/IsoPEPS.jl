@@ -224,7 +224,7 @@ function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=t
     println("Basis: $basis")
     println("Number of samples: $(length(sample_data))")
     
-    lags, acf, acf_err = compute_acf(sample_data[100:row:end]; max_lag=max_lag, n_bootstrap=50)
+    lags, acf, acf_err = compute_acf(sample_data[1:row:end]; max_lag=max_lag, n_bootstrap=50)
     
     # Discard C(0) term (lag 0)
     if length(lags) > 1 && lags[1] == 0
@@ -549,7 +549,7 @@ end
 
 # Example usage (commented out)
 # Analyze a single result
-g = 0.5; row=2 ; nqubits=3
+g = 1.0; row=3 ; nqubits=3
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 result, args = analyze_result(datafile)
