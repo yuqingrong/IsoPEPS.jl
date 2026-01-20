@@ -28,8 +28,10 @@ function compute_transfer_spectrum(gates, row, nqubits; num_eigenvalues=2, use_i
     virtual_qubits = (nqubits - 1) ÷ 2
     A_tensors = gates_to_tensors(gates, row, virtual_qubits)
 
-    total_qubits = 1 + virtual_qubits + virtual_qubits * row
-    matrix_size = 4^(total_qubits-1)
+    # Matrix size: bond_dim^(2*total_legs) where total_legs = row + 1 (periodic + row bonds)
+    bond_dim = 2^virtual_qubits
+    total_legs = row + 1
+    matrix_size = bond_dim^(2*total_legs)
     # Decide whether to use matrix-free approach (essential for large row)
     should_use_matrix_free = if matrix_free == :auto
         matrix_size > 1024  # Use matrix-free for matrices larger than 1024x1024
@@ -53,18 +55,18 @@ function compute_transfer_spectrum(gates, row, nqubits; num_eigenvalues=2, use_i
         # This avoids O(n²) memory for large matrices
         
         # Precompute the contraction code for applying transfer matrix
-        boundary_qubits = total_qubits - 1  # qubits on each boundary side
-        code, _ = _build_transfer_contraction_code(A_tensors, row, boundary_qubits)
+        bond_dim = 2^virtual_qubits
+        code, total_legs = _build_transfer_contraction_code(A_tensors, row, virtual_qubits)
         tensor_ket = [A_tensors[i] for i in 1:row]
         tensor_bra = [conj(A_tensors[i]) for i in 1:row]
         
         # Define the linear map T*v
         function apply_transfer(v)
-            # v is a vector of length 4^boundary_qubits = matrix_size
-            # Reshape to tensor form for left indices (2*boundary_qubits indices, each dim 2)
-            v_tensor = reshape(v, ntuple(_ -> 2, 2*boundary_qubits)...)
+            # v is a vector of length bond_dim^(2*total_legs) = matrix_size
+            # Reshape to tensor form for left indices (2*total_legs indices, each dim bond_dim)
+            v_tensor = reshape(v, ntuple(_ -> bond_dim, 2*total_legs)...)
             # Apply transfer matrix via contraction
-            result = _apply_transfer_to_vector(code, tensor_ket, tensor_bra, v_tensor, boundary_qubits)
+            result = _apply_transfer_to_vector(code, tensor_ket, tensor_bra, v_tensor, total_legs)
             return vec(result)
         end
         
@@ -124,8 +126,9 @@ end
 
 function get_transfer_matrix(gates, row, virtual_qubits)
     A_tensors = gates_to_tensors(gates, row, virtual_qubits)
-    total_qubits = 1 + virtual_qubits + virtual_qubits * row
-    matrix_size = 4^(total_qubits-1)
+    bond_dim = 2^virtual_qubits
+    total_legs = row + 1
+    matrix_size = bond_dim^(2*total_legs)
     _, T = contract_transfer_matrix([A_tensors[i] for i in 1:row], 
                                          [conj(A_tensors[i]) for i in 1:row], row)
     T = reshape(T, matrix_size, matrix_size)
@@ -233,7 +236,9 @@ function build_transfer_code(tensor_ket, tensor_bra, row; for_matvec=false, opti
         
         # Build tensor index list with input vector
         all_indices = [index_ket..., index_bra..., collect(input_indices)]
-        dummy_input = zeros(ComplexF64, ntuple(_ -> 2, 2*total_legs)...)
+        # Infer bond dimension from tensors (index 2 is 'down' which has bond_dim size)
+        bond_dim = size(tensor_ket[1], 2)
+        dummy_input = zeros(ComplexF64, ntuple(_ -> bond_dim, 2*total_legs)...)
         all_tensors = [tensor_ket..., tensor_bra..., dummy_input]
         
         size_dict = OMEinsum.get_size_dict(all_indices, all_tensors)
@@ -272,7 +277,9 @@ Apply transfer matrix to a vector using precomputed contraction code.
 """
 function apply_transfer_matvec(code, tensor_ket, tensor_bra, v_tensor, total_legs)
     result = code(tensor_ket..., tensor_bra..., v_tensor)
-    return reshape(result, ntuple(_ -> 2, 2*total_legs)...)
+    # Infer bond dimension from the input tensor
+    bond_dim = size(v_tensor, 1)
+    return reshape(result, ntuple(_ -> bond_dim, 2*total_legs)...)
 end
 
 # Backward compatibility aliases

@@ -207,7 +207,7 @@ function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=t
     nqubits = input_args[:nqubits]
     share_params = get(input_args, :share_params, true)
     gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
-    _, gap, eigenvalues = compute_transfer_spectrum(gates, row, 1)
+    _, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
     ξ_transfer = 1.0 / gap  # Theoretical correlation length from transfer matrix
     
     # Subsample every `row` steps so each lag = one full layer
@@ -230,8 +230,11 @@ function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=t
     println("Ratio (ξ_ACF / ξ_transfer): $(round(fit_params.ξ / ξ_transfer, digits=4))")
     println("Second eigenvalue |λ₂|:     $(round(eigenvalues[2], digits=6))")
     println("Fitted |λ₂|:                $(round(fit_params.λ₂, digits=6))")
+    println("Oscillation frequency k:    $(round(fit_params.k, digits=4))")
+    println("Phase φ:                    $(round(fit_params.φ, digits=4))")
+    println("Amplitude A:                $(round(fit_params.A, digits=4))")
     
-    title_text = "ACF $(basename(filename))\nξ_ACF=$(round(fit_params.ξ, digits=2)), 1/gap=$(round(ξ_transfer, digits=2))"
+    title_text = "ACF $(basename(filename))\nξ=$(round(fit_params.ξ, digits=2)), k=$(round(fit_params.k, digits=3)), 1/gap=$(round(ξ_transfer, digits=2))"
     if resample
         title_text *= " [resampled]"
     end
@@ -239,7 +242,7 @@ function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=t
     fig = plot_acf(lags, acf; 
                     acf_err=acf_err,
                     fit_params=fit_params,
-                    logscale=true,
+                    logscale=false,
                     title=title_text)
     display(fig)
     
@@ -535,12 +538,12 @@ end
 
 # Example usage (commented out)
 # Analyze a single result
-J=1.0;g = 2.5; row=2 ; nqubits=3; p=4
+J=1.0;g = 3.0; row=2 ; nqubits=3; p=4
 data_dir = joinpath(@__DIR__, "results")
-datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
+datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 result, args = analyze_result(datafile)
 # Reconstruct gates and analyze
-gates, rho, gap, eigenvalues = reconstruct_gates(datafile)
+gates, rho, gap, eigenvalues = reconstruct_gates(datafile; use_iterative=false, matrix_free=false)
 @show gates[1]
 rho, Z_samples, X_samples=sample_quantum_channel(gates, row, nqubits; conv_step=100, samples=100000, measure_first=:Z)
 compute_energy(X_samples[100:end], Z_samples[100:end], g, J, row) |> println
@@ -549,7 +552,7 @@ compute_energy(X_samples[100:end], Z_samples[100:end], g, J, row) |> println
 save(joinpath(dirname(datafile), replace(basename(datafile), ".json" => "_eigenvalues.pdf")), fig)
 
 # Analyze autocorrelation (using saved samples)
-lags, acf, fit_params = analyze_acf(datafile, row; max_lag=300, resample=false, samples=1000000)
+lags, acf, fit_params = analyze_acf(datafile, row; max_lag=9, resample=false, samples=1000000)
 
 
 # Compare two results

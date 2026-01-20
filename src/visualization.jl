@@ -262,7 +262,7 @@ gates, rho, gap, eigenvalues = reconstruct_gates("result.json"; plot=false)
 gates, rho, gap, eigenvalues = reconstruct_gates("result.json"; save_plot=true)
 ```
 """
-function reconstruct_gates(filename::String; share_params=true, plot=true, save_plot=true)
+function reconstruct_gates(filename::String; share_params=true, plot=true, save_plot=true, use_iterative=:auto, matrix_free=:auto)
     result, input_args = load_result(filename)
     
     p = input_args[:p]
@@ -272,7 +272,7 @@ function reconstruct_gates(filename::String; share_params=true, plot=true, save_
     gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
     
     # Compute transfer spectrum
-    rho, gap, eigenvalues, eigenvalues_raw = compute_transfer_spectrum(gates, row, nqubits)
+    rho, gap, eigenvalues, eigenvalues_raw = compute_transfer_spectrum(gates, row, nqubits; use_iterative=use_iterative, matrix_free=matrix_free)
     
     println("=== Gate Analysis for $(basename(filename)) ===")
     println("Spectral gap: ", gap)
@@ -419,9 +419,7 @@ end
 """
     fit_acf(lags::AbstractVector, acf::AbstractVector; fit_range::Union{Tuple{Int,Int},Nothing}=nothing)
 
-Fit ACF data using linear regression on log|C(r)|.
-
-The model is: log|C(r)| = a + b·r, which corresponds to |C(r)| = A·|λ₂|^r
+Fit ACF data using damped oscillatory model: C(r) = A·cos(k·r + φ)·exp(-r/ξ)
 
 # Arguments
 - `lags`: Lag values
@@ -430,55 +428,95 @@ The model is: log|C(r)| = a + b·r, which corresponds to |C(r)| = A·|λ₂|^r
 
 # Returns
 - `NamedTuple` with fields:
-  - `a`: Intercept (log(A))
-  - `b`: Slope (log|λ₂|)
-  - `A`: Amplitude exp(a)
-  - `λ₂`: Second eigenvalue exp(b)
-  - `ξ`: Correlation length -1/b
+  - `A`: Amplitude
+  - `k`: Oscillation frequency
+  - `φ`: Phase shift
+  - `ξ`: Correlation length (decay constant)
+  - `λ₂`: Effective second eigenvalue exp(-1/ξ)
   - `fit_lags`: Lags used for fitting
 """
 function fit_acf(lags::AbstractVector, acf::AbstractVector; 
                  fit_range::Union{Tuple{Int,Int},Nothing}=nothing)
-    lags_vec = collect(lags)
-    abs_acf = abs.(collect(acf))
+    lags_vec = collect(Float64, lags)
+    acf_vec = collect(Float64, acf)
     
-    # Filter out zeros and very small values
-    valid_mask = abs_acf .> 1e-15
+    # Exclude first value (lag=0) from fitting
+    mask = lags_vec .> 0
     
     # Apply fit range if specified
     if !isnothing(fit_range)
         start_lag, end_lag = fit_range
         range_mask = (lags_vec .>= start_lag) .& (lags_vec .<= end_lag)
-        valid_mask = valid_mask .& range_mask
+        mask = mask .& range_mask
     end
     
-    fit_lags = lags_vec[valid_mask]
-    fit_acf_vals = abs_acf[valid_mask]
+    fit_lags = lags_vec[mask]
+    fit_acf_vals = acf_vec[mask]
     
-    if length(fit_lags) < 2
-        error("Not enough valid data points for fitting")
+    if length(fit_lags) < 4
+        error("Not enough valid data points for fitting (need at least 4)")
     end
     
-    # Linear regression on log|C(r)|: y = a + b·r
-    y = log.(fit_acf_vals)
-    x = fit_lags
-    n = length(x)
+    # Define the damped oscillatory model: C(r) = A·cos(k·r + φ)·exp(-r/ξ)
+    model(r, p) = p[1] .* cos.(p[2] .* r .+ p[3]) .* exp.(-r ./ p[4])
     
-    # Least squares: b = (n·Σxy - Σx·Σy) / (n·Σx² - (Σx)²)
-    Σx = sum(x)
-    Σy = sum(y)
-    Σxy = sum(x .* y)
-    Σx² = sum(x .^ 2)
+    # Initial parameter guesses: [A, k, φ, ξ]
+    A_init = abs(fit_acf_vals[1])
     
-    b = (n * Σxy - Σx * Σy) / (n * Σx² - Σx^2)
-    a = (Σy - b * Σx) / n
+    # Estimate oscillation frequency from zero crossings or FFT-like approach
+    k_init = 0.0
+    # Look for sign changes to estimate period
+    sign_changes = findall(diff(sign.(fit_acf_vals)) .!= 0)
+    if length(sign_changes) >= 2
+        # Estimate period from first two zero crossings
+        period_estimate = 2.0 * (fit_lags[sign_changes[2]] - fit_lags[sign_changes[1]])
+        k_init = 2π / period_estimate
+    else
+        # No oscillation detected, use k ≈ 0
+        k_init = 0.01
+    end
     
-    # Derived quantities
-    A = exp(a)
-    λ₂ = exp(b)
-    ξ = -1 / b
+    # Phase from first value
+    φ_init = fit_acf_vals[1] > 0 ? 0.0 : π
     
-    return (a=a, b=b, A=A, λ₂=λ₂, ξ=ξ, fit_lags=fit_lags)
+    # Estimate decay constant from envelope
+    # Use log of absolute values for exponential decay estimate
+    abs_acf = abs.(fit_acf_vals)
+    valid_idx = abs_acf .> 1e-15
+    if sum(valid_idx) >= 2
+        log_acf = log.(abs_acf[valid_idx])
+        valid_lags = fit_lags[valid_idx]
+        # Linear fit: log|C| ≈ log(A) - r/ξ
+        slope = (log_acf[end] - log_acf[1]) / (valid_lags[end] - valid_lags[1])
+        ξ_init = -1.0 / slope
+        ξ_init = clamp(ξ_init, 1.0, length(fit_lags) * 10.0)
+    else
+        ξ_init = length(fit_lags) / 2.0
+    end
+    
+    p0 = [A_init, k_init, φ_init, ξ_init]
+    
+    # Set parameter bounds: A > 0, k >= 0, φ ∈ [-π, π], ξ > 0
+    lower = [0.0, 0.0, -π, 0.1]
+    upper = [Inf, π, π, Inf]
+    
+    try
+        # Nonlinear least squares fit
+        fit_result = curve_fit(model, fit_lags, fit_acf_vals, p0, lower=lower, upper=upper)
+        A, k, φ, ξ = coef(fit_result)
+        
+        # Compute effective second eigenvalue
+        λ₂ = exp(-1.0/ξ)
+        
+        return (A=A, k=k, φ=φ, ξ=ξ, λ₂=λ₂, fit_lags=fit_lags, 
+                model=(r) -> model(r, [A, k, φ, ξ]))
+    catch e
+        @warn "Nonlinear fit failed: $e. Using initial guess."
+        A, k, φ, ξ = p0
+        λ₂ = exp(-1.0/ξ)
+        return (A=A, k=k, φ=φ, ξ=ξ, λ₂=λ₂, fit_lags=fit_lags,
+                model=(r) -> model(r, [A, k, φ, ξ]))
+    end
 end
 
 """
@@ -540,20 +578,32 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
         fit_params = fit_acf(lags, acf; fit_range=fit_range)
     end
     
-    # Plot fit: log|C(r)| = a + b·r, i.e., |C(r)| = A·|λ₂|^r
+    # Plot fit: C(r) = A·cos(k·r + φ)·exp(-r/ξ)
     if !isnothing(fit_params)
         A = fit_params.A
-        λ₂ = fit_params.λ₂
+        k = fit_params.k
+        φ = fit_params.φ
         ξ = fit_params.ξ
-        fit_curve = A .* (λ₂ .^ lags_vec)
+        λ₂ = fit_params.λ₂
+        
+        # Evaluate fit curve
+        fit_curve = A .* cos.(k .* lags_vec .+ φ) .* exp.(-lags_vec ./ ξ)
         
         if logscale
+            # For log scale, plot absolute value
+            fit_curve = abs.(fit_curve)
             # Clamp to min threshold to avoid log10(0)
             fit_curve = max.(fit_curve, min_threshold)
         end
         
+        # Format label with key parameters
+        label_text = "Fit: ξ=$(round(ξ, digits=2))"
+        if k > 0.01  # Only show k if oscillations are present
+            label_text *= ", k=$(round(k, digits=3))"
+        end
+        
         lines!(ax, lags_vec, fit_curve, linewidth=2, linestyle=:dash, color=:red,
-               label="Fit: λ₂=$(round(λ₂, digits=4)), ξ=$(round(ξ, digits=2))")
+               label=label_text)
     end
     
     axislegend(ax, position=:rt)
@@ -637,78 +687,6 @@ function compute_acf(data::Matrix{Float64}; max_lag::Int=100, n_bootstrap::Int=1
     acf_err = vec(std(acf_per_chain, dims=1) / sqrt(n_chains))
     
     return 0:(max_lag-1), acf, acf_err
-end
-
-"""
-    fit_acf_exponential(lags, acf; use_log_fit::Bool=true) -> (A, ξ)
-
-Fit ACF to exponential decay A·exp(-lag/ξ).
-
-For normalized ACF (ACF(0)=1), use use_log_fit=true for more robust fitting
-by fitting log(|ACF|) vs lag linearly.
-
-# Arguments
-- `lags`: Lag values
-- `acf`: Autocorrelation values
-- `use_log_fit`: If true, use linear fit on log scale (more robust for exponential decay)
-
-# Returns
-- `A`: Amplitude (should be ≈1 for normalized ACF)
-- `ξ`: Correlation length (= 1/gap from transfer matrix theory)
-"""
-function fit_acf_exponential(lags::AbstractVector, acf::AbstractVector; use_log_fit::Bool=true)
-    abs_acf = abs.(acf)
-    
-    if use_log_fit
-        # Use linear fit on log scale: log|ACF| = log(A) - lag/ξ
-        # This is more robust for exponential decay
-        # Skip lag=0 if ACF(0)=1 (normalized), and skip very small values
-        valid_mask = (abs_acf .> 1e-10) .& (collect(lags) .> 0)
-        if sum(valid_mask) < 2
-            # Fall back to nonlinear fit if not enough valid points
-            valid_mask = abs_acf .> 1e-10
-        end
-        
-        valid_lags = collect(lags)[valid_mask]
-        valid_log_acf = log.(abs_acf[valid_mask])
-        
-        if length(valid_lags) >= 2
-            # Linear regression: log|ACF| = a + b*lag, where b = -1/ξ
-            X = hcat(ones(length(valid_lags)), valid_lags)
-            coeffs = X \ valid_log_acf
-            a, b = coeffs
-            A = exp(a)
-            ξ = -1.0 / b
-            
-            # Sanity check: ξ should be positive
-            if ξ > 0
-                return (A, ξ)
-            end
-        end
-    end
-    
-    # Fallback: nonlinear least squares fit
-    model(x, p) = p[1] .* exp.(-x ./ p[2])
-    
-    A_init = abs_acf[1]
-    # Estimate ξ from where |ACF| drops to 1/e
-    ξ_init = 10.0
-    for i in 2:length(abs_acf)
-        if abs_acf[i] < abs_acf[1] / ℯ
-            ξ_init = Float64(i - 1)
-            break
-        end
-    end
-    ξ_init = clamp(ξ_init, 0.1, length(lags) * 2.0)
-    
-    try
-    fit = curve_fit(model, collect(lags), collect(abs_acf), [A_init, ξ_init])
-    A, ξ = coef(fit)
-        return (abs(A), abs(ξ))
-    catch
-        # If fit fails, return rough estimate
-        return (A_init, ξ_init)
-    end
 end
 
 """
