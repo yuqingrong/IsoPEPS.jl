@@ -192,18 +192,18 @@ end
 simulation(
     J = 1.0,
     g_values = [4.0],
-    row = 3,
+    row = 2,
     p = 4,
     nqubits = 3,
     # Optimization settings
-    maxiter = 1000,
+    maxiter = 500,
     abstol = 0.01,
     # Gap regularization
     gap_regularization = false,
     gap_weight = 10.0,
     gap_threshold = 0.1,
     # Sampling settings
-    measure_first = :X,
+    measure_first = :Z,
     share_params = true,
     samples_per_run = 1000,
     n_parallel_runs = 11,

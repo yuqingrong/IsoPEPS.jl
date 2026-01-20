@@ -299,40 +299,6 @@ function optimize_circuit(
         converged
     )
     
-    input_args = Dict{Symbol,Any}(
-        # Model parameters
-        :g => g,
-        :J => J,
-        :row => row,
-        :p => p,
-        :nqubits => nqubits,
-        :n_params => n_params,
-        # Initial state
-        :initial_params => initial_params,
-        # Sampling settings
-        :measure_first => String(measure_first),
-        :share_params => share_params,
-        :conv_step => conv_step,
-        :samples_per_run => samples_per_run,
-        :n_parallel_runs => n_parallel_runs,
-        # Gap regularization
-        :gap_regularization => gap_regularization,
-        :gap_weight => gap_weight,
-        :gap_threshold => gap_threshold,
-        # Stopping criteria
-        :maxiter => maxiter,
-        :abstol => abstol,
-        # Results metadata
-        :total_generations => generation_count[],
-        :converged => converged,
-        :note => "energy_history contains minimum energy per CMA-ES generation",
-        # Sample shape info
-        :sample_shape => (n_parallel_runs, samples_per_run),
-        :sample_description => "Matrix: rows=chains, cols=samples"
-    )
-    
-    save_result("data/circuit_g=$(g)_row=$(row)_nqubits=$(nqubits).json", result, input_args)
-    
     return result
 end
 
