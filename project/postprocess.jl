@@ -3,6 +3,7 @@ using CairoMakie
 using Random
 using LinearAlgebra
 using JSON3
+using Statistics
 
 """
     analyze_result(filename::String)
@@ -536,24 +537,134 @@ function extract_correlation_lengths(data_dir::String; J=1.0, g=3.0, nqubits=3, 
     return row_values, ξ_values
 end
 
+"""
+    run_energy_evolution(file1::String, file2::String; n_runs=50, conv_step=100, samples=10000, labels=nothing)
+
+Load parameters from two files, run the quantum channel multiple times for each, and plot energy comparison.
+
+# Arguments
+- `file1`: Path to first JSON result file
+- `file2`: Path to second JSON result file
+- `n_runs`: Number of independent runs per file (default: 50)
+- `conv_step`: Convergence steps before sampling (default: 100)
+- `samples`: Number of samples per run (default: 10000)
+- `labels`: Tuple of (label1, label2) for plot legend (default: use filenames)
+
+# Returns
+- `fig`: Figure object with energy comparison plot
+- `energies1`: Energy values from file1
+- `energies2`: Energy values from file2
+"""
+function run_energy_evolution(file1::String, file2::String; n_runs=50, conv_step=100, samples=10000, labels=nothing)
+    if isnothing(labels)
+        labels = (basename(file1), basename(file2))
+    end
+    
+    # Helper function to run circuits and get energies
+    function get_energies(filename, label_name)
+        result, input_args = load_result(filename)
+        
+        params = result.final_params
+        p = input_args[:p]
+        row = input_args[:row]
+        nqubits = input_args[:nqubits]
+        g = input_args[:g]
+        J = input_args[:J]
+        share_params = get(input_args, :share_params, true)
+        
+        println("=== $label_name ===")
+        println("File: ", basename(filename))
+        println("Configuration: p=$p, row=$row, nqubits=$nqubits, g=$g, J=$J")
+        println("Running $n_runs independent circuits...")
+        
+        gates = build_unitary_gate(params, p, row, nqubits; share_params=share_params)
+        
+        energies = zeros(n_runs)
+        Threads.@threads for run_idx in 1:n_runs
+            _, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits; 
+                                                              conv_step=conv_step, 
+                                                              samples=samples,
+                                                              measure_first=:Z)
+            # Z_samples includes burn-in period, X_samples does not (collected in second phase)
+            Z_valid = Z_samples[conv_step+1:end]
+            X_valid = X_samples  # Already post burn-in
+            energies[run_idx] = compute_energy(X_valid, Z_valid, g, J, row)
+        end
+        
+        return energies, g, J, row
+    end
+    
+    # Get energies from both files
+    energies1, g, J, row = get_energies(file1, labels[1])
+    energies2, _, _, _ = get_energies(file2, labels[2])
+    
+    # Create plot
+    fig = Figure(size=(900, 500))
+    ax = Axis(fig[1, 1],
+              xlabel="Run Number",
+              ylabel="Energy",
+              title="Energy Comparison (g=$g, J=$J, row=$row, samples=$samples)")
+    
+    # Plot energies for each file
+    scatter!(ax, 1:n_runs, energies1, markersize=8, color=:blue, label=labels[1])
+    scatter!(ax, 1:n_runs, energies2, markersize=8, color=:orange, label=labels[2])
+    
+    # Add horizontal lines for mean energies
+    mean1, std1 = mean(energies1), std(energies1)
+    mean2, std2 = mean(energies2), std(energies2)
+    
+    hlines!(ax, [mean1], color=:blue, linewidth=2, linestyle=:dash,
+            label="Mean1: $(round(mean1, digits=4)) ± $(round(std1, digits=4))")
+    hlines!(ax, [mean2], color=:orange, linewidth=2, linestyle=:dash,
+            label="Mean2: $(round(mean2, digits=4)) ± $(round(std2, digits=4))")
+    
+    axislegend(ax, position=:rt)
+    
+    display(fig)
+    
+    # Save figure
+    output_filename = "energy_comparison_g=$(g)_row=$(row).pdf"
+    output_path = joinpath(dirname(file1), output_filename)
+    save(output_path, fig)
+    println("Figure saved to: $output_path")
+    
+    # Print summary
+    println("\n--- Energy Comparison ---")
+    println("$(labels[1]): $(round(mean1, digits=4)) ± $(round(std1, digits=4))")
+    println("$(labels[2]): $(round(mean2, digits=4)) ± $(round(std2, digits=4))")
+    println("Difference: $(round(mean1 - mean2, digits=4))")
+    
+    return fig, energies1, energies2
+end
 # Example usage (commented out)
 # Analyze a single result
-J=1.0;g = 0.5; row=3 ; nqubits=5; p=4
+J=1.0;g = 2,9; row=3 ; nqubits=3; p=4; virtual_qubits=1
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 result, args = analyze_result(datafile)
 # Reconstruct gates and analyze
-gates, rho, gap, eigenvalues = reconstruct_gates(datafile; use_iterative=false, matrix_free=false)
-@show gates[1]
+datafile2 = joinpath(data_dir, "circuit_J=1.0_g=2.0_row=2_nqubits=3_ones.json")
+gates1, rho1, gap1, eigenvalues1 = reconstruct_gates(datafile; use_iterative=false, matrix_free=false)
+tensors1=gates_to_tensors(gates1, row, virtual_qubits)
+@show tensors1[1]
+gates2, rho2, gap2, eigenvalues2 = reconstruct_gates(datafile2; use_iterative=false, matrix_free=false)
+tensors2=gates_to_tensors(gates2, row, virtual_qubits)
+@show tensors2[1]
+@show tensors1[1] - tensors2[1]
 rho, Z_samples, X_samples=sample_quantum_channel(gates, row, nqubits; conv_step=100, samples=100000, measure_first=:Z)
 compute_energy(X_samples[100:end], Z_samples[100:end], g, J, row) |> println
-
+ 
 # Save the plot
 save(joinpath(dirname(datafile), replace(basename(datafile), ".json" => "_eigenvalues.pdf")), fig)
 
 # Analyze autocorrelation (using saved samples)
 lags, acf, fit_params = analyze_acf(datafile, row; max_lag=9, resample=false, samples=1000000)
 
+data_dir = joinpath(@__DIR__, "results")
+datafile1 = joinpath(data_dir, "circuit_J=1.0_g=2.0_row=2_nqubits=3_ones.json")
+datafile2 = joinpath(data_dir, "circuit_J=1.0_g=2.0_row=2_nqubits=5.json")
+
+run_energy_evolution(datafile1, datafile2; n_runs=100, conv_step=100, samples=40000)
 
 # Compare two results
 # exact_datafile = joinpath(data_dir, "exact_J=1.0_g=2.0_row=3.json")

@@ -251,6 +251,10 @@ function optimize_circuit(
     @info "  Parameters: $n_params"
     @info "  Max iterations: $maxiter"
     @info "  Stopping: abstol=$abstol"
+    @info "  Initial step size (sigma0): $sigma0"
+    if popsize > 0
+        @info "  Population size: $popsize"
+    end
     if gap_regularization
         @info "  Gap regularization: weight=$gap_weight, threshold=$gap_threshold"
     end
@@ -261,7 +265,9 @@ function optimize_circuit(
                                              lb=zeros(n_params), 
                                              ub=fill(2π, n_params))
    
-    sol = solve(prob, CMAEvolutionStrategyOpt(), 
+    # Build CMA-ES optimizer with proper settings
+    cma_opts = popsize > 0 ? CMAEvolutionStrategyOpt(sigma0=sigma0, popsize=popsize) : CMAEvolutionStrategyOpt(sigma0=sigma0)
+    sol = solve(prob, cma_opts, 
                 maxiters=maxiter, abstol=abstol, callback=callback)
     
     converged = sol.retcode == :Success || sol.retcode == :Default

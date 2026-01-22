@@ -191,7 +191,7 @@ end
 
 simulation(
     J = 1.0,
-    g_values = [4.0],
+    g_values = [2.0],
     row = 2,
     p = 4,
     nqubits = 3,
