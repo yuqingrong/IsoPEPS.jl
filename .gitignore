@@ -16,3 +16,5 @@ Manifest.toml
 test/data
 *.json
 *.pdf
+__pycache__/
+.coverage
