@@ -161,13 +161,19 @@ function load_result(filename::String; result_type::Symbol=:auto)
         energy = get_data(data, :energy)
         converged = get_data(data, :converged)
         
+        # Convert samples to vectors (flatten if matrix)
+        Z_samples = samples_to_matrix(Z_samples_data, input_args)
+        X_samples = samples_to_matrix(X_samples_data, input_args)
+        Z_samples_vec = Z_samples isa Matrix ? vec(Z_samples) : Vector{Float64}(Z_samples)
+        X_samples_vec = X_samples isa Matrix ? vec(X_samples) : Vector{Float64}(X_samples)
+        
         result = CircuitOptimizationResult(
             Vector{Float64}(energy_history === nothing ? Float64[] : energy_history),
             Vector{Matrix{ComplexF64}}[],  # Gates not saved to JSON
             Vector{Float64}(params === nothing ? Float64[] : params),
             Float64(energy === nothing ? 0.0 : energy),
-            samples_to_matrix(Z_samples_data, input_args),
-            samples_to_matrix(X_samples_data, input_args),
+            Z_samples_vec,
+            X_samples_vec,
             Bool(converged === nothing ? false : converged)
         )
     elseif result_type == :exact

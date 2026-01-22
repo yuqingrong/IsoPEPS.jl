@@ -638,9 +638,9 @@ function run_energy_evolution(file1::String, file2::String; n_runs=50, conv_step
 end
 # Example usage (commented out)
 # Analyze a single result
-J=1.0;g = 2,9; row=3 ; nqubits=3; p=4; virtual_qubits=1
+J=1.0;g = 2.0; row=2 ; nqubits=3; p=4; virtual_qubits=1
 data_dir = joinpath(@__DIR__, "results")
-datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
+datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
 result, args = analyze_result(datafile)
 # Reconstruct gates and analyze
 datafile2 = joinpath(data_dir, "circuit_J=1.0_g=2.0_row=2_nqubits=3_ones.json")

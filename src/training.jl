@@ -21,8 +21,8 @@ struct CircuitOptimizationResult
     final_gates::Any
     final_params::Vector{Float64}
     final_cost::Float64
-    final_Z_samples::Matrix{Float64}  # n_chains × n_samples
-    final_X_samples::Matrix{Float64}  # n_chains × n_samples
+    final_Z_samples::Vector{Float64}
+    final_X_samples::Vector{Float64}
     converged::Bool
 end
 
@@ -109,192 +109,130 @@ Optimize a quantum circuit for the transverse-field Ising model (TFIM) using CMA
 - Samples are stored as matrices: rows = chains, columns = samples
 - This preserves chain information for diagnostics and analysis
 """
-function optimize_circuit(
-    params::Vector{Float64}, 
-    J::Float64, 
-    g::Float64, 
-    p::Int, 
-    row::Int, 
-    nqubits::Int;
-    measure_first::Symbol = :Z,
-    share_params::Bool = true,
-    conv_step::Int = 100,
-    samples_per_run::Int = 1000,
-    n_parallel_runs::Int = 44,
-    maxiter::Int = 5000,
-    abstol::Float64 = 0.02,
-    gap_regularization::Bool = false,
-    gap_weight::Float64 = 1.0,
-    gap_threshold::Float64 = 0.1)
-    # Validate inputs
-    measure_first ∈ (:X, :Z) || throw(ArgumentError("measure_first must be :X or :Z"))
-    
+function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int; 
+    measure_first=:Z, share_params=true, conv_step=100, 
+    samples=10000, maxiter=5000, abstol=0.01, n_runs=44)
+    # Store initial parameters
     initial_params = copy(params)
-    n_params = length(params)
-    
-    # History storage (one entry per CMA-ES generation)
+
     energy_history = Float64[]
-    params_history = Vector{Vector{Float64}}()
-    Z_samples_history = Vector{Matrix{Float64}}()
-    X_samples_history = Vector{Matrix{Float64}}()
-    
+    params_history = Vector{Float64}[]
+    Z_samples_history = Vector{Float64}[]
+    X_samples_history = Vector{Float64}[]
+    current_params = copy(params)
+
     # Track energies within each generation
     generation_energies = Float64[]
-    generation_params = Vector{Vector{Float64}}()
-    generation_Z_samples = Vector{Matrix{Float64}}()
-    generation_X_samples = Vector{Matrix{Float64}}()
+    generation_params = Vector{Float64}[]
+    generation_Z_samples = Vector{Float64}[]
+    generation_X_samples = Vector{Float64}[]
     generation_count = Ref(0)
-    
-    has_logged_threads = Ref(false)
-    
+    logged_threads = Ref(false)
+
     function objective(x, _)
+        current_params .= x
+
         gates = build_unitary_gate(x, p, row, nqubits; share_params=share_params)
-        
-        # Store samples per chain (not combined)
-        Z_samples_per_chain = Vector{Vector{Float64}}(undef, n_parallel_runs)
-        X_samples_per_chain = Vector{Vector{Float64}}(undef, n_parallel_runs)
-        
-        if !has_logged_threads[]
+
+        # Run circuit with samples
+        Z_samples_all = Vector{Vector{Float64}}(undef, n_runs)
+        X_samples_all = Vector{Vector{Float64}}(undef, n_runs)
+
+        # Log threading info once
+        if !logged_threads[]
             @info "Using $(Threads.nthreads()) threads for parallel sampling"
-            @info "Parallel runs: $n_parallel_runs, samples per run: $samples_per_run"
-            if gap_regularization
-                @info "Gap regularization: weight=$gap_weight, threshold=$gap_threshold"
-            end
-            has_logged_threads[] = true
+            logged_threads[] = true
         end
-        
-        Threads.@threads for run_idx in 1:n_parallel_runs
-            _, Z_run, X_run = sample_quantum_channel(
-                gates, row, nqubits;
-                conv_step = conv_step,
-                samples = samples_per_run,
-                measure_first = measure_first
-            )
-            Z_samples_per_chain[run_idx] = Z_run[(conv_step + 1):end]
-            X_samples_per_chain[run_idx] = X_run[(conv_step + 1):end]
+
+        Threads.@threads for run_idx in 1:n_runs
+        rho, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits; 
+                                          conv_step=conv_step, 
+                                          samples=samples,
+                                          measure_first=measure_first)
+        # Discard convergence samples from each run
+
+        Z_samples_all[run_idx] = Z_samples[conv_step:end]
+        X_samples_all[run_idx] = X_samples[conv_step:end]
         end
-        
-        # Convert to matrix: rows = chains, cols = samples
-        Z_matrix = reduce(hcat, Z_samples_per_chain)'
-        X_matrix = reduce(hcat, X_samples_per_chain)'
-        
-        # Compute energy using all samples
-        Z_combined = vec(Z_matrix)
-        X_combined = vec(X_matrix)
-        energy = real(compute_energy(X_combined, Z_combined, g, J, row))
-        
-        # Compute gap penalty if enabled
-        gap_penalty = 0.0
-        if gap_regularization
-            _, current_gap, _, _ = compute_transfer_spectrum(gates, row, nqubits; 
-                                                              num_eigenvalues=2, 
-                                                              use_iterative=:auto)
-            if current_gap < gap_threshold
-                gap_penalty = gap_weight * (gap_threshold - current_gap)
-            end
-        end
-        
-        total_cost = energy + gap_penalty
-        
-        # Store in generation arrays (raw energy, not penalized)
-        push!(generation_energies, energy)
+
+        # Combine all samples
+        Z_samples_combined = reduce(vcat, Z_samples_all)
+        X_samples_combined = reduce(vcat, X_samples_all)
+
+        # Energy computation with already filtered samples
+        energy = compute_energy(X_samples_combined, Z_samples_combined, g, J, row) 
+
+        # Store in generation arrays
+        push!(generation_energies, real(energy))
         push!(generation_params, copy(x))
-        push!(generation_Z_samples, Z_matrix)
-        push!(generation_X_samples, X_matrix)
-        
-        return total_cost
+        push!(generation_Z_samples, Z_samples_combined)
+        push!(generation_X_samples, X_samples_combined)
+
+        return real(energy)
     end
-    
+
     # Callback to track minimum energy per generation
     function callback(state, loss)
+        # When a new generation is complete, find the best from that generation
         if !isempty(generation_energies)
             min_idx = argmin(generation_energies)
             min_energy = generation_energies[min_idx]
             best_params = generation_params[min_idx]
             best_Z_samples = generation_Z_samples[min_idx]
             best_X_samples = generation_X_samples[min_idx]
-            
+
             # Store the minimum energy and associated data
             push!(energy_history, min_energy)
             push!(params_history, best_params)
             push!(Z_samples_history, best_Z_samples)
             push!(X_samples_history, best_X_samples)
-            
-            generation_count[] += 1
-            global_best = minimum(energy_history)
-            
-            if generation_count[] % 10 == 0
-                if gap_regularization
-                    # Recompute gap for best candidate for logging
-                    best_gates = build_unitary_gate(best_params, p, row, nqubits; share_params=share_params)
-                    _, best_gap, _, _ = compute_transfer_spectrum(best_gates, row, virtual_qubits; 
-                                                                   num_eigenvalues=2, 
-                                                                   use_iterative=:auto)
-                    best_penalty = best_gap < gap_threshold ? gap_weight * (gap_threshold - best_gap) : 0.0
-                    @info "TFIM J=$J g=$g $(row)×∞ | Gen $(generation_count[]) | E=$(round(min_energy, digits=6)) | gap=$(round(best_gap, digits=4)) | penalty=$(round(best_penalty, digits=4)) | Best=$(round(global_best, digits=6))"
-                else
-                    @info "TFIM J=$J g=$g $(row)×∞ PEPS | Generation $(generation_count[]) | Min Energy: $(round(min_energy, digits=6)) | Global Best: $(round(global_best, digits=6))"
-                end
-            end
-            
-            # Clear generation arrays for next generation
-            empty!(generation_energies)
-            empty!(generation_params)
-            empty!(generation_Z_samples)
-            empty!(generation_X_samples)
         end
+
+        generation_count[] += 1
+        
+        # Log every 10 generations
+        if generation_count[] % 10 == 0
+            @info "TFIM J=$J g=$g $(row)×∞ PEPS | Generation $(generation_count[]) | Min Energy: $(round(min_energy, digits=6))"
+        end
+
+        # Clear generation arrays for next generation
+        empty!(generation_energies)
+        empty!(generation_params)
+        empty!(generation_Z_samples)
+        empty!(generation_X_samples)
+
         return false  # Continue optimization
     end
-    
-    @info "=" ^ 60
-    @info "Starting CMA-ES optimization (Optimization.jl interface)"
-    @info "  Parameters: $n_params"
-    @info "  Max iterations: $maxiter"
-    @info "  Stopping: abstol=$abstol"
-    @info "  Initial step size (sigma0): $sigma0"
-    if popsize > 0
-        @info "  Population size: $popsize"
-    end
-    if gap_regularization
-        @info "  Gap regularization: weight=$gap_weight, threshold=$gap_threshold"
-    end
-    @info "=" ^ 60
-    
+
+    @info "Optimizing $(length(params)) parameters with CMA-ES"
+
     f = OptimizationFunction(objective)
     prob = Optimization.OptimizationProblem(f, params, 
-                                             lb=zeros(n_params), 
-                                             ub=fill(2π, n_params))
-   
-    # Build CMA-ES optimizer with proper settings
-    cma_opts = popsize > 0 ? CMAEvolutionStrategyOpt(sigma0=sigma0, popsize=popsize) : CMAEvolutionStrategyOpt(sigma0=sigma0)
-    sol = solve(prob, cma_opts, 
-                maxiters=maxiter, abstol=abstol, callback=callback)
-    
+                       lb=zeros(length(params)), 
+                       ub=fill(2π, length(params)))
+
+    sol = solve(prob, CMAEvolutionStrategyOpt(), 
+    maxiters=maxiter, abstol=abstol, callback=callback)
+
     converged = sol.retcode == :Success || sol.retcode == :Default
-    
-    # Find the best iteration from history
+
+    # Use best parameters found across all generations
     if !isempty(energy_history)
-        best_idx = argmin(energy_history)
-        final_cost = energy_history[best_idx]
-        final_params = params_history[best_idx]
-        final_Z_samples = Z_samples_history[best_idx]
-        final_X_samples = X_samples_history[best_idx]
-        @info "Best energy at generation $best_idx: $(round(final_cost, digits=6))"
+        min_idx = argmin(energy_history)
+        final_params = params_history[min_idx]
+        final_cost = energy_history[min_idx]
+        final_Z_samples = Z_samples_history[min_idx]
+        final_X_samples = X_samples_history[min_idx]
+        @info "Best energy at generation $min_idx: $final_cost"
     else
         final_params = sol.u
         final_cost = sol.objective
-        final_Z_samples = Matrix{Float64}(undef, 0, 0)
-        final_X_samples = Matrix{Float64}(undef, 0, 0)
+        final_Z_samples = Float64[]
+        final_X_samples = Float64[]
     end
     
     final_gates = build_unitary_gate(final_params, p, row, nqubits; share_params=share_params)
-    
-    @info "=" ^ 60
-    @info "Optimization complete"
-    @info "  Converged: $converged"
-    @info "  Total generations: $(generation_count[])"
-    @info "=" ^ 60
-    
+
     result = CircuitOptimizationResult(
         energy_history,
         final_gates,
@@ -304,7 +242,25 @@ function optimize_circuit(
         final_X_samples,
         converged
     )
-    
+
+    # Save result with all input parameters
+    input_args = Dict{Symbol, Any}(
+        # Model parameters
+        :g => g, :J => J, :row => row, :p => p, :nqubits => nqubits,
+        # Optimization settings
+        :initial_params => initial_params,
+        :measure_first => String(measure_first),
+        :share_params => share_params,
+        :conv_step => conv_step,
+        :samples => samples,
+        :maxiter => maxiter,
+        :abstol => abstol,
+        # Generation tracking
+        :total_generations => generation_count[],
+        :note => "energy_history contains minimum energy per CMA-ES generation"
+    )
+    save_result("data/circuit_g=$(g)_row=$(row)_nqubits=$(nqubits).json", result, input_args)
+
     return result
 end
 
