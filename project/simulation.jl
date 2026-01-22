@@ -72,17 +72,17 @@ function simulation(; J::Float64, g_values::Vector{Float64}, row::Int, p::Int, n
         )
         save_result(filename, result, input_args)
         
-        verbose && println("Thread $(Threads.threadid()): Completed g = $(g), energy = $(result.energy), saved to $(basename(filename))")
+        verbose && println("Thread $(Threads.threadid()): Completed g = $(g), energy = $(result.final_cost), saved to $(basename(filename))")
     end
 end
 
 simulation(;
     J=1.0,
     g_values=[2.0],
-    row=2,
+    row=1,
     p=4,
     nqubits=3,
-    maxiter=500,
+    maxiter=1,
     measure_first=:Z,
     seed=42,
     verbose=true,

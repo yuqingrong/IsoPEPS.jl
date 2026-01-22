@@ -8,21 +8,21 @@ Result structures for optimization/training functions.
 Result from circuit-based optimization using sampling (optimize_circuit).
 
 # Fields
-- `energy_history::Vector{Float64}`: Minimum energy at each generation (CMA-ES generation)
+- `energy_history::Vector{Float64}`: Energy at each iteration
 - `gates::Vector{Matrix{ComplexF64}}`: Final optimized gates
 - `params::Vector{Float64}`: Final optimized parameters
-- `energy::Float64`: Final energy value (best across all generations)
-- `Z_samples::Vector{Float64}`: Z measurement samples from best iteration
-- `X_samples::Vector{Float64}`: X measurement samples from best iteration
+- `energy::Float64`: Final energy value
+- `Z_samples::Vector{Float64}`: Z measurement samples from final iteration
+- `X_samples::Vector{Float64}`: X measurement samples from final iteration
 - `converged::Bool`: Whether optimization converged
 """
 struct CircuitOptimizationResult
     energy_history::Vector{Float64}
-    gates::Vector{Matrix{ComplexF64}}
-    params::Vector{Float64}
-    energy::Float64
-    Z_samples::Vector{Float64}
-    X_samples::Vector{Float64}
+    final_gates::Any
+    final_params::Vector{Float64}
+    final_cost::Float64
+    final_Z_samples::Vector{Float64}
+    final_X_samples::Vector{Float64}
     converged::Bool
 end
 
@@ -79,181 +79,191 @@ end
 """
     optimize_circuit(params, J, g, p, row, nqubits; kwargs...)
 
-Optimize circuit parameters to minimize TFIM energy using CMA-ES.
+Optimize a quantum circuit for the transverse-field Ising model (TFIM) using CMA-ES.
 
 # Arguments
-- `params`: Initial parameter vector
-- `J`: Coupling strength
-- `g`: Transverse field strength
-- `p`: Number of circuit layers
-- `row`: Number of rows in PEPS
-- `nqubits`: Number of qubits per gate
+- `params::Vector{Float64}`: Initial parameter vector
+- `J::Float64`: Ising coupling strength
+- `g::Float64`: Transverse field strength
+- `p::Int`: Circuit depth
+- `row::Int`: Number of rows in PEPS
+- `nqubits::Int`: Number of qubits
 
 # Keyword Arguments
-- `measure_first`: Observable to measure first, `:X` or `:Z` (default: `:Z`)
-- `share_params`: Share parameters across gates (default: true)
-- `conv_step`: Convergence steps (default: 1000)
-- `samples`: Samples per iteration (default: 10000)
-- `maxiter`: Maximum iterations (default: 5000)
-- `abstol`: Absolute tolerance (default: 0.01)
+- `measure_first::Symbol=:Z`: Which observable to measure first (:X or :Z)
+- `share_params::Bool=true`: Whether to share parameters across layers
+- `conv_step::Int=100`: Burn-in steps before sampling
+- `samples_per_run::Int=1000`: Samples per parallel chain
+- `n_parallel_runs::Int=44`: Number of parallel sampling chains
+- `maxiter::Int=5000`: Maximum CMA-ES iterations
+- `abstol::Float64=0.02`: Function tolerance (ftol) for convergence
+- `xtol::Float64=1e-6`: Parameter tolerance for convergence
+- `sigma0::Float64=1.0`: Initial step size for CMA-ES
+- `popsize::Union{Int,Nothing}=nothing`: Population size (nothing = auto)
 
 # Returns
-`CircuitOptimizationResult` with energy history, final gates, parameters, and samples
+- `CircuitOptimizationResult`: Optimization results with energy history and final state
+
+# Notes
+- Only the best result per CMA-ES iteration is saved (not all popsize evaluations)
+- Samples are stored as matrices: rows = chains, columns = samples
+- This preserves chain information for diagnostics and analysis
 """
 function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int; 
-                          measure_first=:Z, share_params=true, conv_step=100, 
-                          samples=10000, maxiter=5000, abstol=0.01)
-    # Store initial parameters
-    initial_params = copy(params)
-    
-    energy_history = Float64[]
-    params_history = Vector{Float64}[]
-    Z_samples_history = Vector{Float64}[]
-    X_samples_history = Vector{Float64}[]
-    current_params = copy(params)
-    
-    # Track energies within each generation
-    generation_energies = Float64[]
-    generation_params = Vector{Float64}[]
-    generation_Z_samples = Vector{Float64}[]
-    generation_X_samples = Vector{Float64}[]
-    generation_count = Ref(0)
-    logged_threads = Ref(false)
-    
-    function objective(x, _)
-        current_params .= x
-        
-        gates = build_unitary_gate(x, p, row, nqubits; share_params=share_params)
-        
-        # Run circuit with samples
-        n_runs = 44
-        Z_samples_all = Vector{Vector{Float64}}(undef, n_runs)
-        X_samples_all = Vector{Vector{Float64}}(undef, n_runs)
-        
-        # Log threading info once
-        if !logged_threads[]
-            @info "Using $(Threads.nthreads()) threads for parallel sampling"
-            logged_threads[] = true
-        end
-        
-        Threads.@threads for run_idx in 1:n_runs
-            rho, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits; 
-                                                                conv_step=conv_step, 
-                                                                samples=1000,
-                                                                measure_first=measure_first)
-            # Discard convergence samples from each run
-            if measure_first == :X
-                Z_samples_all[run_idx] = Z_samples[conv_step:end]
-                X_samples_all[run_idx] = X_samples[conv_step:end]
-            else
-                Z_samples_all[run_idx] = Z_samples[conv_step:end]
-                X_samples_all[run_idx] = X_samples[conv_step:end]
-            end
-        end
-        
-        # Combine all samples
-        Z_samples_combined = reduce(vcat, Z_samples_all)
-        X_samples_combined = reduce(vcat, X_samples_all)
-    
-        # Energy computation with already filtered samples
-        energy = compute_energy(X_samples_combined, Z_samples_combined, g, J, row) 
-        
-        # Store in generation arrays
-        push!(generation_energies, real(energy))
-        push!(generation_params, copy(x))
-        push!(generation_Z_samples, Z_samples_combined)
-        push!(generation_X_samples, X_samples_combined)
+    measure_first=:Z, share_params=true, conv_step=100, 
+    samples=10000, maxiter=5000, abstol=0.01)
+# Store initial parameters
+initial_params = copy(params)
 
-        return real(energy)
-    end
-    
-    # Callback to track minimum energy per generation
-    function callback(state, loss)
-        # When a new generation is complete, find the best from that generation
-        if !isempty(generation_energies)
-            min_idx = argmin(generation_energies)
-            min_energy = generation_energies[min_idx]
-            best_params = generation_params[min_idx]
-            best_Z_samples = generation_Z_samples[min_idx]
-            best_X_samples = generation_X_samples[min_idx]
-            
-            # Store the minimum energy and associated data
-            push!(energy_history, min_energy)
-            push!(params_history, best_params)
-            push!(Z_samples_history, best_Z_samples)
-            push!(X_samples_history, best_X_samples)
-            
-            generation_count[] += 1
-            @info "TFIM J=$J g=$g $(row)×∞ PEPS | Generation $(generation_count[]) | Min Energy: $(round(min_energy, digits=6))"
-            
-            # Clear generation arrays for next generation
-            empty!(generation_energies)
-            empty!(generation_params)
-            empty!(generation_Z_samples)
-            empty!(generation_X_samples)
-        end
-        return false  # Continue optimization
-    end
-    
-    @info "Optimizing $(length(params)) parameters with CMA-ES"
-  
-    f = OptimizationFunction(objective)
-    prob = Optimization.OptimizationProblem(f, params, 
-                                             lb=zeros(length(params)), 
-                                             ub=fill(2π, length(params)))
-   
-    sol = solve(prob, CMAEvolutionStrategyOpt(), 
-                maxiters=maxiter, abstol=abstol, callback=callback)
-    
-    converged = sol.retcode == :Success || sol.retcode == :Default
-     
-    # Use best parameters found across all generations
-    if !isempty(energy_history)
-        min_idx = argmin(energy_history)
-        final_params = params_history[min_idx]
-        final_cost = energy_history[min_idx]
-        final_Z_samples = Z_samples_history[min_idx]
-        final_X_samples = X_samples_history[min_idx]
-        @info "Best energy at generation $min_idx: $final_cost"
-    else
-        final_params = sol.u
-        final_cost = sol.objective
-        final_Z_samples = Float64[]
-        final_X_samples = Float64[]
-    end
-   
-    final_gates = build_unitary_gate(final_params, p, row, nqubits; share_params=share_params)
-   
-    result = CircuitOptimizationResult(
-        energy_history,
-        final_gates,
-        final_params,
-        final_cost,
-        final_Z_samples,
-        final_X_samples,
-        converged
-    )
-    
-    # Save result with all input parameters
-    input_args = Dict{Symbol, Any}(
-        # Model parameters
-        :g => g, :J => J, :row => row, :p => p, :nqubits => nqubits,
-        # Optimization settings
-        :initial_params => initial_params,
-        :measure_first => String(measure_first),
-        :share_params => share_params,
-        :conv_step => conv_step,
-        :samples => samples,
-        :maxiter => maxiter,
-        :abstol => abstol,
-        # Generation tracking
-        :total_generations => generation_count[],
-        :note => "energy_history contains minimum energy per CMA-ES generation"
-    )
-    save_result("data/circuit_g=$(g)_row=$(row)_nqubits=$(nqubits).json", result, input_args)
-    
-    return result
+energy_history = Float64[]
+params_history = Vector{Float64}[]
+Z_samples_history = Vector{Float64}[]
+X_samples_history = Vector{Float64}[]
+current_params = copy(params)
+
+# Track energies within each generation
+generation_energies = Float64[]
+generation_params = Vector{Float64}[]
+generation_Z_samples = Vector{Float64}[]
+generation_X_samples = Vector{Float64}[]
+generation_count = Ref(0)
+logged_threads = Ref(false)
+
+function objective(x, _)
+current_params .= x
+
+gates = build_unitary_gate(x, p, row, nqubits; share_params=share_params)
+
+# Run circuit with samples
+n_runs = 44
+Z_samples_all = Vector{Vector{Float64}}(undef, n_runs)
+X_samples_all = Vector{Vector{Float64}}(undef, n_runs)
+
+# Log threading info once
+if !logged_threads[]
+@info "Using $(Threads.nthreads()) threads for parallel sampling"
+logged_threads[] = true
 end
+
+Threads.@threads for run_idx in 1:n_runs
+rho, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits; 
+                                          conv_step=conv_step, 
+                                          samples=1000,
+                                          measure_first=measure_first)
+# Discard convergence samples from each run
+if measure_first == :X
+Z_samples_all[run_idx] = Z_samples[conv_step:end]
+X_samples_all[run_idx] = X_samples[conv_step:end]
+else
+Z_samples_all[run_idx] = Z_samples[conv_step:end]
+X_samples_all[run_idx] = X_samples[conv_step:end]
+end
+end
+
+# Combine all samples
+Z_samples_combined = reduce(vcat, Z_samples_all)
+X_samples_combined = reduce(vcat, X_samples_all)
+
+# Energy computation with already filtered samples
+energy = compute_energy(X_samples_combined, Z_samples_combined, g, J, row) 
+
+# Store in generation arrays
+push!(generation_energies, real(energy))
+push!(generation_params, copy(x))
+push!(generation_Z_samples, Z_samples_combined)
+push!(generation_X_samples, X_samples_combined)
+
+return real(energy)
+end
+
+# Callback to track minimum energy per generation
+function callback(state, loss)
+# When a new generation is complete, find the best from that generation
+if !isempty(generation_energies)
+min_idx = argmin(generation_energies)
+min_energy = generation_energies[min_idx]
+best_params = generation_params[min_idx]
+best_Z_samples = generation_Z_samples[min_idx]
+best_X_samples = generation_X_samples[min_idx]
+
+# Store the minimum energy and associated data
+push!(energy_history, min_energy)
+push!(params_history, best_params)
+push!(Z_samples_history, best_Z_samples)
+push!(X_samples_history, best_X_samples)
+
+generation_count[] += 1
+@info "TFIM J=$J g=$g $(row)×∞ PEPS | Generation $(generation_count[]) | Min Energy: $(round(min_energy, digits=6))"
+
+# Clear generation arrays for next generation
+empty!(generation_energies)
+empty!(generation_params)
+empty!(generation_Z_samples)
+empty!(generation_X_samples)
+end
+return false  # Continue optimization
+end
+
+@info "Optimizing $(length(params)) parameters with CMA-ES"
+
+f = OptimizationFunction(objective)
+prob = Optimization.OptimizationProblem(f, params, 
+                       lb=zeros(length(params)), 
+                       ub=fill(2π, length(params)))
+
+sol = solve(prob, CMAEvolutionStrategyOpt(), 
+maxiters=maxiter, abstol=abstol, callback=callback)
+
+converged = sol.retcode == :Success || sol.retcode == :Default
+
+# Use best parameters found across all generations
+if !isempty(energy_history)
+min_idx = argmin(energy_history)
+final_params = params_history[min_idx]
+final_cost = energy_history[min_idx]
+final_Z_samples = Z_samples_history[min_idx]
+final_X_samples = X_samples_history[min_idx]
+@info "Best energy at generation $min_idx: $final_cost"
+else
+final_params = sol.u
+final_cost = sol.objective
+final_Z_samples = Float64[]
+final_X_samples = Float64[]
+end
+
+final_gates = build_unitary_gate(final_params, p, row, nqubits; share_params=share_params)
+
+result = CircuitOptimizationResult(
+energy_history,
+final_gates,
+final_params,
+final_cost,
+final_Z_samples,
+final_X_samples,
+converged
+)
+
+# Save result with all input parameters
+input_args = Dict{Symbol, Any}(
+# Model parameters
+:g => g, :J => J, :row => row, :p => p, :nqubits => nqubits,
+# Optimization settings
+:initial_params => initial_params,
+:measure_first => String(measure_first),
+:share_params => share_params,
+:conv_step => conv_step,
+:samples => samples,
+:maxiter => maxiter,
+:abstol => abstol,
+# Generation tracking
+:total_generations => generation_count[],
+:note => "energy_history contains minimum energy per CMA-ES generation"
+)
+save_result("data/circuit_g=$(g)_row=$(row)_nqubits=$(nqubits).json", result, input_args)
+
+return result
+end
+
 
 """
     optimize_exact(params, J, g, p, row, nqubits; kwargs...)
@@ -322,29 +332,30 @@ function optimize_exact(params, J::Float64, g::Float64, p::Int, row::Int, nqubit
                                              lb=zeros(length(params)),
                                              ub=fill(2π, length(params)))
     
-    local final_params, final_cost
+    converged = false
     try
         sol = solve(prob, CMAEvolutionStrategyOpt(), maxiters=maxiter, abstol=abstol)
-        final_params = sol.u
-        final_cost = sol.objective
         converged = true
     catch e
         if occursin("Maximum iterations reached", string(e))
-            @info "Using parameters from iteration $maxiter"
-            final_params = current_params
-            final_cost = isempty(energy_history) ? NaN : energy_history[end]
-            converged = false
+            @info "Optimization stopped at iteration $maxiter"
         else
             rethrow(e)
         end
     end   
     
+    # Find the best iteration (lowest energy) from history
+    best_idx = argmin(energy_history)
+    final_cost = energy_history[best_idx]
+    final_params = params_history[best_idx]
+    final_gap = gap_history[best_idx]
+    final_eigenvalues = eigenvalues_history[best_idx]
+    final_X = X_history[best_idx]
+    final_ZZ_vert = ZZ_vert_history[best_idx]
+    final_ZZ_horiz = ZZ_horiz_history[best_idx]
     final_gates = build_unitary_gate(final_params, p, row, nqubits)
-    final_gap = isempty(gap_history) ? NaN : gap_history[end]
-    final_eigenvalues = isempty(eigenvalues_history) ? Float64[] : eigenvalues_history[end]
-    final_X = isempty(X_history) ? NaN : X_history[end]
-    final_ZZ_vert = isempty(ZZ_vert_history) ? NaN : ZZ_vert_history[end]
-    final_ZZ_horiz = isempty(ZZ_horiz_history) ? NaN : ZZ_horiz_history[end]
+    
+    @info "Best energy at iteration $best_idx: $final_cost"
    
     result = ExactOptimizationResult(
         energy_history,
@@ -366,7 +377,9 @@ function optimize_exact(params, J::Float64, g::Float64, p::Int, row::Int, nqubit
         # Optimization settings
         :initial_params => initial_params,
         :maxiter => maxiter,
-        :abstol => abstol
+        :abstol => abstol,
+        :best_iteration => best_idx,
+        :total_iterations => length(energy_history)
     )
     save_result("data/exact_g=$(g)_row=$(row).json", result, input_args)
     

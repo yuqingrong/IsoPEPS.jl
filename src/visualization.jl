@@ -30,11 +30,11 @@ function save_result(filename::String, result::CircuitOptimizationResult, input_
     data = Dict{Symbol, Any}(
         :type => "CircuitOptimizationResult",
         :energy_history => result.energy_history,
-        :params => result.params,
-        :energy => result.energy,
+        :params => result.final_params,
+        :energy => result.final_cost,
         :converged => result.converged,
-        :Z_samples => result.Z_samples,
-        :X_samples => result.X_samples,
+        :Z_samples => result.final_Z_samples,
+        :X_samples => result.final_X_samples,
         :input_args => input_args
     )
     
