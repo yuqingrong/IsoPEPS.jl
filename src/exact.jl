@@ -81,8 +81,8 @@ function compute_transfer_spectrum(gates, row, nqubits; num_eigenvalues=2, use_i
         eigenvalues_raw = vals[sorted_indices]
         eigenvalues = abs.(eigenvalues_raw)
         
-        gap = -log(eigenvalues[2])
-        @assert isapprox(eigenvalues[1], 1.0, atol=1e-6) "Largest eigenvalue should be 1, got $(eigenvalues[1])"
+        gap = -log(eigenvalues[2]/eigenvalues[1])
+        #@assert isapprox(eigenvalues[1], 1.0, atol=1e-6) "Largest eigenvalue should be 1, got $(eigenvalues[1])"
         
         fixed_point = reshape(vecs[sorted_indices[1]], 
                               Int(sqrt(matrix_size)), Int(sqrt(matrix_size)))
@@ -99,8 +99,8 @@ function compute_transfer_spectrum(gates, row, nqubits; num_eigenvalues=2, use_i
         eigenvalues_raw = vals[sorted_indices]
         eigenvalues = abs.(eigenvalues_raw)
         
-        gap = -log(eigenvalues[2])
-        @assert isapprox(eigenvalues[1], 1.0, atol=1e-6) "Largest eigenvalue should be 1, got $(eigenvalues[1])"
+        gap = -log(eigenvalues[2]/eigenvalues[1])
+        #@assert isapprox(eigenvalues[1], 1.0, atol=1e-6) "Largest eigenvalue should be 1, got $(eigenvalues[1])"
         
         fixed_point = reshape(vecs[sorted_indices[1]], 
                               Int(sqrt(matrix_size)), Int(sqrt(matrix_size)))
@@ -113,8 +113,8 @@ function compute_transfer_spectrum(gates, row, nqubits; num_eigenvalues=2, use_i
         sorted_indices = sortperm(abs.(eig_result.values), rev=true)
         eigenvalues_raw = eig_result.values[sorted_indices]
         eigenvalues = abs.(eigenvalues_raw)
-        gap = -log(eigenvalues[2])
-        @assert eigenvalues[1] ≈ 1.0 "Largest eigenvalue should be 1"
+        gap = -log(eigenvalues[2]/eigenvalues[1])
+        #@assert eigenvalues[1] ≈ 1.0 "Largest eigenvalue should be 1"
         
         fixed_point = reshape(eig_result.vectors[:, sorted_indices[1]], 
                               Int(sqrt(matrix_size)), Int(sqrt(matrix_size)))

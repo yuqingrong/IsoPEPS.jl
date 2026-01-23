@@ -3,6 +3,31 @@ using IsoPEPS
 using Yao, YaoBlocks
 using LinearAlgebra
 
+@testset "concrete case" begin
+    A = zeros(Float64, 2, 2, 2, 2, 2)
+    λ = 0.5
+    
+    # s = 0
+    A[1, 1, 1, 1, 1] = 1.0
+    A[1, 2, 2, 2, 2] = 1.0
+    
+    # s = 1
+    A[2, 1, 1, 1, 1] = λ
+    A[2, 2, 2, 2, 2] = λ
+    
+    A1 = [1 0 0 0; 0 0 0 0; 0 0 0 0; 0 0 0 1]
+    A2 = [λ 0 0 0; 0 0 0 0; 0 0 0 0; 0 0 0 λ]
+    E = kron(A1, conj(A1)) + kron(A2, conj(A2))
+
+    row=1
+    _, T_tensor = contract_transfer_matrix([A for _ in 1:row], [conj(A) for _ in 1:row], row)
+    T = reshape(T_tensor, 16, 16)
+    L1=LinearAlgebra.eigvals(E)
+    L2=LinearAlgebra.eigvals(T)
+    @test T ≈ E atol=1e-10
+end
+
+
 @testset "contract_transfer_matrix" begin
     A = randn(ComplexF64, 2, 2, 2, 2, 2)
     for row in 1:3

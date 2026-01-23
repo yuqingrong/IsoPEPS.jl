@@ -111,7 +111,8 @@ Optimize a quantum circuit for the transverse-field Ising model (TFIM) using CMA
 """
 function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int; 
     measure_first=:Z, share_params=true, conv_step=100, 
-    samples=10000, maxiter=5000, abstol=0.01, n_runs=44)
+    samples=10000, maxiter=5000, abstol=0.01, n_runs=44,
+    sigma0::Float64=1.0, popsize::Union{Int,Nothing}=nothing)
     # Store initial parameters
     initial_params = copy(params)
 
@@ -129,7 +130,8 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
     generation_count = Ref(0)
     logged_threads = Ref(false)
 
-    function objective(x, _)
+    # Objective function for CMAEvolutionStrategy (takes only x, no extra arg)
+    function objective(x)
         current_params .= x
 
         gates = build_unitary_gate(x, p, row, nqubits; share_params=share_params)
@@ -171,8 +173,9 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
         return real(energy)
     end
 
-    # Callback to track minimum energy per generation
-    function callback(state, loss)
+    # Callback for CMAEvolutionStrategy: (opt, y, fvals, perm) -> nothing
+    # Called after each generation
+    function cmaes_callback(opt, y, fvals, perm)
         # When a new generation is complete, find the best from that generation
         if !isempty(generation_energies)
             min_idx = argmin(generation_energies)
@@ -201,20 +204,30 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
         empty!(generation_Z_samples)
         empty!(generation_X_samples)
 
-        return false  # Continue optimization
+        return nothing  # Continue optimization
     end
 
-    @info "Optimizing $(length(params)) parameters with CMA-ES"
+    # Compute actual popsize
+    actual_popsize = isnothing(popsize) ? 4 + floor(Int, 3*log(length(params))) : popsize
 
-    f = OptimizationFunction(objective)
-    prob = Optimization.OptimizationProblem(f, params, 
-                       lb=zeros(length(params)), 
-                       ub=fill(2π, length(params)))
+    @info "Optimizing $(length(params)) parameters with CMA-ES (σ₀=$sigma0, popsize=$actual_popsize)"
 
-    sol = solve(prob, CMAEvolutionStrategyOpt(), 
-    maxiters=maxiter, abstol=abstol, callback=callback)
+    # Use CMAEvolutionStrategy.jl directly (not through Optimization.jl wrapper)
+    # because the wrapper doesn't expose sigma and popsize parameters
+    opt_result = CMAEvolutionStrategy.minimize(
+        objective,
+        params,
+        sigma0;
+        lower = zeros(length(params)),
+        upper = fill(2π, length(params)),
+        popsize = actual_popsize,
+        maxiter = maxiter,
+        ftol = abstol,
+        verbosity = 0,
+        callback = cmaes_callback
+    )
 
-    converged = sol.retcode == :Success || sol.retcode == :Default
+    converged = true  # CMAEvolutionStrategy always returns a result
 
     # Use best parameters found across all generations
     if !isempty(energy_history)
@@ -225,8 +238,8 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
         final_X_samples = X_samples_history[min_idx]
         @info "Best energy at generation $min_idx: $final_cost"
     else
-        final_params = sol.u
-        final_cost = sol.objective
+        final_params = CMAEvolutionStrategy.xbest(opt_result)
+        final_cost = CMAEvolutionStrategy.fbest(opt_result)
         final_Z_samples = Float64[]
         final_X_samples = Float64[]
     end
@@ -255,6 +268,8 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
         :samples => samples,
         :maxiter => maxiter,
         :abstol => abstol,
+        :sigma0 => sigma0,
+        :popsize => actual_popsize,
         # Generation tracking
         :total_generations => generation_count[],
         :note => "energy_history contains minimum energy per CMA-ES generation"

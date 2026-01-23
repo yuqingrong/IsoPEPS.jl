@@ -43,7 +43,7 @@ results = simulation(1.0, g_values, 3, 2, 8; maxiter=5000, output_dir="results")
 function simulation(; J::Float64, g_values::Vector{Float64}, row::Int, p::Int, nqubits::Int, 
                     maxiter::Int, measure_first::Symbol, seed::Int, verbose::Bool,
                     output_dir::String, share_params::Bool, conv_step::Int=100, samples::Int=10000,
-                    n_runs::Int=44, abstol::Float64=0.01)
+                    n_runs::Int=44, abstol::Float64=0.01, sigma0::Float64=1.0, popsize::Union{Int,Nothing}=20)
     
     # Create output directory if it doesn't exist
     !isdir(output_dir) && mkpath(output_dir)
@@ -59,7 +59,7 @@ function simulation(; J::Float64, g_values::Vector{Float64}, row::Int, p::Int, n
         verbose && println("Thread $(Threads.threadid()): Starting simulation for g = $(g)")
         
         Random.seed!(seed)  # Different seed for each thread
-        params = rand(2*nqubits*p) 
+        params = ones(2*nqubits*p) 
         result = optimize_circuit(params, J, g, p, row, nqubits; 
                                   maxiter=maxiter, 
                                   measure_first=measure_first,
@@ -67,7 +67,7 @@ function simulation(; J::Float64, g_values::Vector{Float64}, row::Int, p::Int, n
                                   conv_step=conv_step,
                                   samples=samples,
                                   n_runs=n_runs,
-                                  abstol=abstol)
+                                  abstol=abstol,sigma0=sigma0, popsize=popsize)
         
         results[i] = result
         
@@ -86,18 +86,20 @@ end
 
 simulation(;
     J=1.0,
-    g_values=[2.0],
+    g_values=[0.0],
     row=1,
     p=4,
     nqubits=3,
-    maxiter=10,
+    maxiter=5000,
     measure_first=:Z,
     seed=42,
     verbose=true,
     output_dir=joinpath(@__DIR__, "results"),
     share_params=true,
     conv_step=100,
-    samples=10000,
-    n_runs=44,
-    abstol=0.01
+    samples=1000,
+    n_runs=11,
+    abstol=0.01,
+    sigma0=1.0,
+    popsize=40
 )

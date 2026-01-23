@@ -218,11 +218,12 @@ function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=t
         subsampled = sample_data[:, 100:row:end]
         lags, acf, acf_err = compute_acf(subsampled; max_lag=max_lag, n_bootstrap=50)
     else
-        # For vector: subsample directly
-        lags, acf, acf_err = compute_acf(sample_data[100:row:end]; max_lag=max_lag, n_bootstrap=50)
+        # For vector: subsample directly, reshape to 1×N matrix for compute_acf
+        subsampled = reshape(sample_data[100:row:end], 1, :)
+        lags, acf, acf_err = compute_acf(subsampled; max_lag=max_lag, n_bootstrap=50)
     end
     @show acf, acf_err
-    fit_params = fit_acf(lags, acf)
+    fit_params = fit_acf(lags, acf; include_zero=true)
     
     println("\n--- Correlation Length Comparison ---")
     println("Transfer matrix gap:        gap = $(round(gap, digits=4))")
@@ -231,11 +232,9 @@ function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=t
     println("Ratio (ξ_ACF / ξ_transfer): $(round(fit_params.ξ / ξ_transfer, digits=4))")
     println("Second eigenvalue |λ₂|:     $(round(eigenvalues[2], digits=6))")
     println("Fitted |λ₂|:                $(round(fit_params.λ₂, digits=6))")
-    println("Oscillation frequency k:    $(round(fit_params.k, digits=4))")
-    println("Phase φ:                    $(round(fit_params.φ, digits=4))")
     println("Amplitude A:                $(round(fit_params.A, digits=4))")
     
-    title_text = "ACF $(basename(filename))\nξ=$(round(fit_params.ξ, digits=2)), k=$(round(fit_params.k, digits=3)), 1/gap=$(round(ξ_transfer, digits=2))"
+    title_text = "ACF $(basename(filename))\nξ_ACF=$(round(fit_params.ξ, digits=2)), ξ_transfer=$(round(ξ_transfer, digits=2))"
     if resample
         title_text *= " [resampled]"
     end
@@ -243,7 +242,7 @@ function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=t
     fig = plot_acf(lags, acf; 
                     acf_err=acf_err,
                     fit_params=fit_params,
-                    logscale=false,
+                    logscale=true,
                     title=title_text)
     display(fig)
     
@@ -638,27 +637,22 @@ function run_energy_evolution(file1::String, file2::String; n_runs=50, conv_step
 end
 # Example usage (commented out)
 # Analyze a single result
-J=1.0;g = 2.0; row=2 ; nqubits=3; p=4; virtual_qubits=1
+J=1.0;g = 1.0; row=3 ; nqubits=3; p=4; virtual_qubits=1
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
 result, args = analyze_result(datafile)
 # Reconstruct gates and analyze
-datafile2 = joinpath(data_dir, "circuit_J=1.0_g=2.0_row=2_nqubits=3_ones.json")
-gates1, rho1, gap1, eigenvalues1 = reconstruct_gates(datafile; use_iterative=false, matrix_free=false)
-tensors1=gates_to_tensors(gates1, row, virtual_qubits)
-@show tensors1[1]
-gates2, rho2, gap2, eigenvalues2 = reconstruct_gates(datafile2; use_iterative=false, matrix_free=false)
-tensors2=gates_to_tensors(gates2, row, virtual_qubits)
-@show tensors2[1]
-@show tensors1[1] - tensors2[1]
+
+gates, rho, gap, eigenvalues = reconstruct_gates(datafile; use_iterative=false, matrix_free=false)
+
 rho, Z_samples, X_samples=sample_quantum_channel(gates, row, nqubits; conv_step=100, samples=100000, measure_first=:Z)
-compute_energy(X_samples[100:end], Z_samples[100:end], g, J, row) |> println
+energy = compute_energy(X_samples[100:end], Z_samples[100:end], g, J, row) |> println
  
 # Save the plot
 save(joinpath(dirname(datafile), replace(basename(datafile), ".json" => "_eigenvalues.pdf")), fig)
-
+println("Energy: $energy")
 # Analyze autocorrelation (using saved samples)
-lags, acf, fit_params = analyze_acf(datafile, row; max_lag=9, resample=false, samples=1000000)
+lags, acf, fit_params = analyze_acf(datafile, row; max_lag=5, resample=false, samples=1000000)
 
 data_dir = joinpath(@__DIR__, "results")
 datafile1 = joinpath(data_dir, "circuit_J=1.0_g=2.0_row=2_nqubits=3_ones.json")
