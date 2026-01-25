@@ -93,13 +93,13 @@ end
 if abspath(PROGRAM_FILE) == @__FILE__
     results = run_pepskit_scan(
         d = 2,
-        D = 2,
+        D = 4,
         J = 1.0,
         g_values = 0.0:0.25:4.0,
-        χ = 10,
+        χ = 20,
         ctmrg_tol = 1e-10,
         grad_tol = 1e-6,
         maxiter = 1000,
-        output_file = joinpath(@__DIR__, "results", "pepskit_results.json")
+        output_file = joinpath(@__DIR__, "results", "pepskit_results_D=4_χ=20.json")
     )
 end

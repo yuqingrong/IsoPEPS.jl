@@ -872,3 +872,84 @@ function diagnose_from_params(params, p, row, nqubits; share_params=true, verbos
     virtual_qubits = (nqubits - 1) ÷ 2  # Convert nqubits to virtual_qubits
     return diagnose_transfer_channel(gates, row, virtual_qubits; verbose=verbose)
 end
+
+"""
+    mps_bond_entanglement(A; tol=1e-12)
+
+Compute the bond entanglement of an MPS tensor via SVD.
+This measures entanglement between (physical ⊗ left) and right subsystems.
+
+# Arguments
+- `A`: MPS tensor with indices (physical, left, right)
+- `tol`: Tolerance for filtering small singular values
+
+# Returns
+- `S`: Entanglement entropy S = -Σᵢ λᵢ² log(λᵢ²)
+- `schmidt_values`: Normalized Schmidt values
+"""
+function mps_bond_entanglement(A; tol=1e-12)
+    phys_dim, left_dim, right_dim = size(A)
+    M = reshape(A, phys_dim * left_dim, right_dim)
+    
+    svd_result = svd(M)
+    σ = filter(s -> s > tol, svd_result.S)
+    
+    isempty(σ) && return 0.0, Float64[]
+    
+    schmidt_values = σ ./ norm(σ)
+    S = -sum(λ -> λ^2 * log(λ^2), schmidt_values)
+    
+    return S, schmidt_values
+end
+
+"""
+    mps_physical_entanglement(A, N; tol=1e-12)
+
+Compute the true physical bipartite entanglement entropy of a uniform MPS.
+Constructs the full state vector and computes entanglement across a middle cut.
+
+# Arguments
+- `A`: MPS tensor with indices (physical, left, right)
+- `N`: Number of sites (must be even, kept small due to exponential scaling)
+- `tol`: Tolerance for filtering small singular values
+
+# Returns
+- `S`: Physical entanglement entropy across the middle cut
+- `schmidt_values`: Schmidt coefficients
+
+# Notes
+This function constructs the full 2^N dimensional state vector,
+so it only works for small N (≲ 20).
+"""
+function mps_physical_entanglement(A, N; tol=1e-12)
+    phys_dim, bond_dim, _ = size(A)
+    total_dim = phys_dim^N
+    ψ = zeros(ComplexF64, total_dim)
+    
+    # Build |ψ⟩ = Σ_{s₁...sₙ} Tr(M^{s₁}...M^{sₙ}) |s₁...sₙ⟩
+    for config in 0:(total_dim-1)
+        indices = digits(config, base=phys_dim, pad=N) .+ 1
+        M_product = Matrix{ComplexF64}(I, bond_dim, bond_dim)
+        for s in indices
+            M_product = M_product * A[s, :, :]
+        end
+        ψ[config + 1] = tr(M_product)
+    end
+    
+    ψ = ψ / norm(ψ)
+    
+    # Bipartite cut in the middle
+    left_sites = N ÷ 2
+    left_dim = phys_dim^left_sites
+    right_dim = phys_dim^(N - left_sites)
+    
+    ψ_matrix = reshape(ψ, left_dim, right_dim)
+    σ = svd(ψ_matrix).S
+    σ = filter(s -> s > tol, σ)
+    
+    isempty(σ) && return 0.0, Float64[]
+    
+    S = -sum(λ -> λ > tol ? λ^2 * log(λ^2) : 0.0, σ)
+    
+    return S, σ
+end

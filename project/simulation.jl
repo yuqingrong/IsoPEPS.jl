@@ -59,7 +59,7 @@ function simulation(; J::Float64, g_values::Vector{Float64}, row::Int, p::Int, n
         verbose && println("Thread $(Threads.threadid()): Starting simulation for g = $(g)")
         
         Random.seed!(seed)  # Different seed for each thread
-        params = ones(2*nqubits*p) 
+        params = rand(2*nqubits*p) .* 2π
         result = optimize_circuit(params, J, g, p, row, nqubits; 
                                   maxiter=maxiter, 
                                   measure_first=measure_first,
@@ -76,9 +76,9 @@ function simulation(; J::Float64, g_values::Vector{Float64}, row::Int, p::Int, n
         input_args = Dict(
             :J => J, :g => g, :row => row, :p => p, :nqubits => nqubits,
             :maxiter => maxiter, :measure_first => measure_first,
-            :share_params => share_params, :seed => seed + i
+            :share_params => share_params, :seed => seed
         )
-        save_result(filename, result, input_args)
+        save_result(filename, result, input_args) 
         
         verbose && println("Thread $(Threads.threadid()): Completed g = $(g), energy = $(result.final_cost), saved to $(basename(filename))")
     end
@@ -86,9 +86,9 @@ end
 
 simulation(;
     J=1.0,
-    g_values=[0.0],
-    row=1,
-    p=4,
+    g_values=[4.0],
+    row=2,
+    p=3,
     nqubits=3,
     maxiter=5000,
     measure_first=:Z,

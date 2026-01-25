@@ -637,13 +637,18 @@ function run_energy_evolution(file1::String, file2::String; n_runs=50, conv_step
 end
 # Example usage (commented out)
 # Analyze a single result
-J=1.0;g = 1.0; row=3 ; nqubits=3; p=4; virtual_qubits=1
+J=1.0;g = 4.0; row=2 ; nqubits=3; p=4; virtual_qubits=1
 data_dir = joinpath(@__DIR__, "results")
-datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
+datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 result, args = analyze_result(datafile)
 # Reconstruct gates and analyze
 
 gates, rho, gap, eigenvalues = reconstruct_gates(datafile; use_iterative=false, matrix_free=false)
+tensors = gates_to_tensors(gates, row, virtual_qubits)
+A = ein"iabcd,jefah -> ijefbcdh"(tensors[1], tensors[2])
+A = reshape(A, 4, 2, 4, 2, 4)
+A = reshape(A, 4, 8,8)
+S, σ = mps_physical_entanglement(A, 3; tol=1e-12)
 
 rho, Z_samples, X_samples=sample_quantum_channel(gates, row, nqubits; conv_step=100, samples=100000, measure_first=:Z)
 energy = compute_energy(X_samples[100:end], Z_samples[100:end], g, J, row) |> println

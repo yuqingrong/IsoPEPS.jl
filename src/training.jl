@@ -274,7 +274,6 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
         :total_generations => generation_count[],
         :note => "energy_history contains minimum energy per CMA-ES generation"
     )
-    save_result("data/circuit_g=$(g)_row=$(row)_nqubits=$(nqubits).json", result, input_args)
 
     return result
 end

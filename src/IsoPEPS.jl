@@ -81,7 +81,7 @@ export compute_X_expectation, compute_ZZ_expectation
 export contract_transfer_matrix, compute_exact_energy, gates_to_tensors
 export get_transfer_matrix
 export diagnose_transfer_channel, diagnose_from_params
-
+export mps_bond_entanglement, mps_physical_entanglement
 # =============================================================================
 # Reference Implementations
 # =============================================================================

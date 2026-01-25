@@ -183,7 +183,6 @@ function compute_energy(X_samples, Z_samples, g, J, row)
         
         # Horizontal bonds: Z[i]*Z[i+row] (same row, adjacent columns)
         ZZ_horiz = mean(Z_samples[i] * Z_samples[i+row] for i in 1:N-row)
-        
         # Both contribute to energy
         ZZ_mean = ZZ_vert + ZZ_horiz
     end
