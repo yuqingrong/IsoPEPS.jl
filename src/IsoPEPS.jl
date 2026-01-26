@@ -55,7 +55,11 @@ include("gates.jl")
 include("training.jl")
 include("visualization.jl")
 include("reference.jl")
-include("exact.jl")
+
+# Exact tensor contraction (split into logical modules)
+include("transfer_matrix.jl")  # Core transfer matrix operations
+include("observables.jl")       # Expectation value computations
+include("entanglement.jl")      # Entanglement entropy calculations
 
 # =============================================================================
 # Quantum Channel Simulation
@@ -71,17 +75,31 @@ export build_unitary_gate, compute_energy
 # Optimization / Training
 # =============================================================================
 export CircuitOptimizationResult, ExactOptimizationResult, ManifoldOptimizationResult
-export optimize_circuit, optimize_exact, optimize_manifold
+export optimize_circuit, optimize_exact, optimize_manifold, initialize_tfim_params
 
 # =============================================================================
-# Exact Tensor Contraction
+# Exact Tensor Contraction - Transfer Matrix
 # =============================================================================
 export compute_transfer_spectrum, compute_single_transfer
-export compute_X_expectation, compute_ZZ_expectation
-export contract_transfer_matrix, compute_exact_energy, gates_to_tensors
-export get_transfer_matrix
+export contract_transfer_matrix, gates_to_tensors, get_transfer_matrix
+export build_transfer_code, apply_transfer_matvec
+
+# =============================================================================
+# Exact Tensor Contraction - Observables
+# =============================================================================
+export compute_X_expectation, compute_Z_expectation, compute_ZZ_expectation, compute_single_expectation
+export compute_exact_energy
+
+# =============================================================================
+# Exact Tensor Contraction - Entanglement
+# =============================================================================
+export mps_bond_entanglement, mps_physical_entanglement, mps_physical_entanglement_infinite
+export multiline_mps_entanglement, multiline_mps_entanglement_from_params
+
+# =============================================================================
+# Diagnostics (defined in visualization.jl)
+# =============================================================================
 export diagnose_transfer_channel, diagnose_from_params
-export mps_bond_entanglement, mps_physical_entanglement
 # =============================================================================
 # Reference Implementations
 # =============================================================================
@@ -92,7 +110,7 @@ export mpskit_ground_state, mpskit_ground_state_1d, pepskit_ground_state
 # =============================================================================
 export save_result, load_result, save_results, load_results
 export plot_acf, compute_acf, fit_acf, fit_acf_exponential
-export plot_training_history, plot_variance_vs_samples
+export plot_training_history, plot_variance_vs_samples, plot_expectation_values
 export plot_corr_scale
 export plot_eigenvalue_spectrum, reconstruct_gates, plot_diagnosis
 end

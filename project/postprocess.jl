@@ -4,31 +4,51 @@ using Random
 using LinearAlgebra
 using JSON3
 using Statistics
-
+using OMEinsum
 """
-    analyze_result(filename::String)
+    analyze_result(filename::String; pepskit_results_file=nothing)
 
 Analyze a saved training result from JSON file.
+
+# Arguments
+- `filename`: Path to the result JSON file
+- `pepskit_results_file`: Path to pepskit results JSON file for reference energy (optional)
 """
-function analyze_result(filename::String)
+function analyze_result(filename::String; pepskit_results_file::Union{String,Nothing}=nothing, use_exact::Bool=true)
     result, input_args = load_result(filename)
     
     println("=== Training Result Analysis ===")
     println("Type: ", typeof(result))
     println("Final energy: ", result.final_cost)
     
-    if haskey(input_args, :g)
+    # Extract parameters
+    g = get(input_args, :g, nothing)
+    J = Float64(get(input_args, :J, 1.0))
+    row = get(input_args, :row, nothing)
+    p = get(input_args, :p, nothing)
+    nqubits = get(input_args, :nqubits, nothing)
+    
+    if !isnothing(g)
         println("\nModel parameters:")
-        println("  g = ", input_args[:g])
-        println("  J = ", get(input_args, :J, "N/A"))
-        println("  row = ", get(input_args, :row, "N/A"))
-        println("  p = ", get(input_args, :p, "N/A"))
-        println("  nqubits = ", get(input_args, :nqubits, "N/A"))
+        println("  g = ", g)
+        println("  J = ", J)
+        println("  row = ", row)
+        println("  p = ", p)
+        println("  nqubits = ", nqubits)
     end
     
-    # Plot training history
-    fig = plot_training_history(result; title="Training History")
+    # Plot training history with reference from pepskit results
+    fig = plot_training_history(result;
+        g=g,
+        row=row,
+        nqubits=nqubits,
+        pepskit_results_file=pepskit_results_file
+    )
     display(fig)
+    
+    # Plot expectation values (using exact contraction if parameters available)
+    #fig_exp = plot_expectation_values(result; g=g, J=J, row=row, p=p, nqubits=nqubits, use_exact=use_exact)
+    #display(fig_exp)
     
     return result, input_args
 end
@@ -637,10 +657,11 @@ function run_energy_evolution(file1::String, file2::String; n_runs=50, conv_step
 end
 # Example usage (commented out)
 # Analyze a single result
-J=1.0;g = 4.0; row=2 ; nqubits=3; p=4; virtual_qubits=1
+J=1.0;g = 1.0; row=3 ; nqubits=3; p=3; virtual_qubits=1;D=2
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
-result, args = analyze_result(datafile)
+referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
+result, args = analyze_result(datafile; pepskit_results_file=referfile)
 # Reconstruct gates and analyze
 
 gates, rho, gap, eigenvalues = reconstruct_gates(datafile; use_iterative=false, matrix_free=false)
@@ -648,7 +669,7 @@ tensors = gates_to_tensors(gates, row, virtual_qubits)
 A = ein"iabcd,jefah -> ijefbcdh"(tensors[1], tensors[2])
 A = reshape(A, 4, 2, 4, 2, 4)
 A = reshape(A, 4, 8,8)
-S, σ = mps_physical_entanglement(A, 3; tol=1e-12)
+S, σ = mps_physical_entanglement(A, 10; tol=1e-12)
 
 rho, Z_samples, X_samples=sample_quantum_channel(gates, row, nqubits; conv_step=100, samples=100000, measure_first=:Z)
 energy = compute_energy(X_samples[100:end], Z_samples[100:end], g, J, row) |> println
@@ -657,7 +678,7 @@ energy = compute_energy(X_samples[100:end], Z_samples[100:end], g, J, row) |> pr
 save(joinpath(dirname(datafile), replace(basename(datafile), ".json" => "_eigenvalues.pdf")), fig)
 println("Energy: $energy")
 # Analyze autocorrelation (using saved samples)
-lags, acf, fit_params = analyze_acf(datafile, row; max_lag=5, resample=false, samples=1000000)
+lags, acf, fit_params = analyze_acf(datafile, row; max_lag=200, resample=false, samples=1000000)
 
 data_dir = joinpath(@__DIR__, "results")
 datafile1 = joinpath(data_dir, "circuit_J=1.0_g=2.0_row=2_nqubits=3_ones.json")

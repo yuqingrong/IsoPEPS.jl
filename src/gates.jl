@@ -178,7 +178,7 @@ function compute_energy(X_samples, Z_samples, g, J, row)
         # Vertical bonds: Z[i]*Z[i+1] only when NOT at the last row of a column
         # Skip when i % row == 0 (e.g., Z[4]*Z[5] would be diagonal, not vertical)
         ZZ_vert_pairs = [Z_samples[i] * Z_samples[i+1] 
-                         for i in 1:N-1]
+                         for i in 1:N-1 if i % row != 0]
         ZZ_vert = mean(ZZ_vert_pairs)
         
         # Horizontal bonds: Z[i]*Z[i+row] (same row, adjacent columns)

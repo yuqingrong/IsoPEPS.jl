@@ -592,7 +592,7 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
                label=label_text)
     end
     
-    axislegend(ax, position=:rt)
+    axislegend(ax, position=:rb)
     
     if !isnothing(save_path)
         save(save_path, fig)
@@ -683,11 +683,15 @@ Plot training loss/energy/observable vs training steps.
 # Arguments
 - `steps`: Step indices or iteration numbers
 - `values`: Values at each step (energy, loss, observable, etc.)
-- `reference`: Reference value (e.g., exact energy) shown as horizontal line (optional)
+- `reference`: Reference value (e.g., exact energy) shown as horizontal line (optional, overridden by pepskit_results_file if provided)
 - `ylabel`: Y-axis label (default: "Energy")
-- `title`: Plot title
+- `title`: Plot title (default: "Training History", overridden if g, row, nqubits provided)
 - `logscale`: Use log scale (default: false)
 - `save_path`: Path to save figure (optional)
+- `g`: Transverse field value (optional, for loading reference from pepskit results and title)
+- `row`: Number of rows in the circuit (optional, for title)
+- `nqubits`: Number of qubits (optional, for title)
+- `pepskit_results_file`: Path to pepskit results JSON file (optional, to load reference energy)
 
 # Returns
 - `Figure` object
@@ -697,18 +701,52 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
                                 ylabel::String="Energy",
                                 title::String="Training History",
                                 logscale::Bool=false,
-                                save_path::Union{String,Nothing}=nothing)
+                                save_path::Union{String,Nothing}=nothing,
+                                g::Union{Real,Nothing}=nothing,
+                                row::Union{Int,Nothing}=nothing,
+                                nqubits::Union{Int,Nothing}=nothing,
+                                pepskit_results_file::Union{String,Nothing}=nothing)
+    
+    # Load reference energy from pepskit results if file and g are provided
+    ref_energy = reference
+    if !isnothing(pepskit_results_file) && !isnothing(g) && isfile(pepskit_results_file)
+        pepskit_data = open(pepskit_results_file, "r") do io
+            JSON3.read(io, Dict)
+        end
+        g_values = pepskit_data["g_values"]
+        energies = pepskit_data["energies"]
+        
+        # Find the closest g value
+        idx = argmin(abs.(g_values .- g))
+        if abs(g_values[idx] - g) < 1e-6
+            ref_energy = energies[idx]
+        else
+            @warn "g=$g not found in pepskit results, using closest value g=$(g_values[idx])"
+            ref_energy = energies[idx]
+        end
+    end
+    
+    # Generate title if g, row, nqubits are provided
+    plot_title = title
+    if !isnothing(g) && !isnothing(row) && !isnothing(nqubits)
+        plot_title = "Training History: row=$row, g=$g, nqubits=$nqubits"
+    elseif !isnothing(g) && !isnothing(row)
+        plot_title = "row=$row, g=$g"
+    elseif !isnothing(g)
+        plot_title = "g=$g"
+    end
     
     fig = Figure(size=(500, 350))
     ax = Axis(fig[1, 1],
               xlabel="Step", ylabel=ylabel,
-              title=title,
+              title=plot_title,
               yscale=logscale ? log10 : identity)
     
     lines!(ax, collect(steps), collect(values), linewidth=2, label=ylabel)
     
-    if !isnothing(reference)
-        hlines!(ax, [reference], linestyle=:dash, color=:red, linewidth=1.5, label="Reference")
+    if !isnothing(ref_energy)
+        ref_label = "PEPSKit.jl (E=$(round(ref_energy, digits=4)))"
+        hlines!(ax, [ref_energy], linestyle=:dash, color=:red, linewidth=1.5, label=ref_label)
         axislegend(ax, position=:rt)
     end
     
@@ -728,6 +766,349 @@ Plot training history from optimization result.
 function plot_training_history(result::Union{CircuitOptimizationResult, ExactOptimizationResult, ManifoldOptimizationResult}; kwargs...)
     n = length(result.energy_history)
     plot_training_history(1:n, result.energy_history; ylabel="Energy", kwargs...)
+end
+
+"""
+    plot_expectation_values(; X=nothing, Z=nothing, ZZ_vert=nothing, ZZ_horiz=nothing, kwargs...)
+
+Plot expectation values ⟨X⟩, ⟨Z⟩, ⟨ZZ⟩ and energy as a bar chart with labeled values.
+
+# Arguments
+- `energy`: Energy value (optional)
+- `X`: ⟨X⟩ expectation value (optional)
+- `Z`: ⟨Z⟩ expectation value (optional)
+- `ZZ_vert`: ⟨ZZ⟩ vertical bond expectation value (optional)
+- `ZZ_horiz`: ⟨ZZ⟩ horizontal bond expectation value (optional)
+- `ZZ_connected`: ⟨ZZ⟩_c = ⟨ZZ⟩ - ⟨Z⟩² connected correlation (optional, auto-computed if not provided)
+- `title`: Plot title (default: "Expectation Values")
+- `g`: Transverse field value (optional, for title)
+- `row`: Number of rows (optional, for title)
+- `nqubits`: Number of qubits (optional, for title)
+- `save_path`: Path to save figure (optional)
+
+# Returns
+- `Figure` object
+"""
+function plot_expectation_values(; energy::Union{Real,Nothing}=nothing,
+                                   X::Union{Real,Nothing}=nothing,
+                                   Z::Union{Real,Nothing}=nothing,
+                                   ZZ_vert::Union{Real,Nothing}=nothing,
+                                   ZZ_horiz::Union{Real,Nothing}=nothing,
+                                   ZZ_connected::Union{Real,Nothing}=nothing,
+                                   title::String="Expectation Values",
+                                   g::Union{Real,Nothing}=nothing,
+                                   row::Union{Int,Nothing}=nothing,
+                                   nqubits::Union{Int,Nothing}=nothing,
+                                   save_path::Union{String,Nothing}=nothing)
+    
+    # Auto-compute connected correlation if not provided
+    # ⟨ZZ⟩_c = ⟨ZZ⟩ - ⟨Z⟩² (nearest neighbor term)
+    ZZ_conn = ZZ_connected
+    if isnothing(ZZ_conn) && !isnothing(Z)
+        # Use vertical ZZ if available, otherwise horizontal
+        ZZ_for_conn = !isnothing(ZZ_vert) ? ZZ_vert : ZZ_horiz
+        if !isnothing(ZZ_for_conn)
+            ZZ_conn = ZZ_for_conn - Z^2
+        end
+    end
+    
+    # Collect available values
+    labels = String[]
+    values = Float64[]
+    
+    if !isnothing(energy)
+        push!(labels, "E")
+        push!(values, energy)
+    end
+    if !isnothing(X)
+        push!(labels, "⟨X⟩")
+        push!(values, X)
+    end
+    if !isnothing(Z)
+        push!(labels, "⟨Z⟩")
+        push!(values, Z)
+    end
+    if !isnothing(ZZ_vert)
+        push!(labels, "⟨ZZ⟩ᵥ")
+        push!(values, ZZ_vert)
+    end
+    if !isnothing(ZZ_horiz)
+        push!(labels, "⟨ZZ⟩ₕ")
+        push!(values, ZZ_horiz)
+    end
+    if !isnothing(ZZ_conn)
+        push!(labels, "⟨ZZ⟩_c")
+        push!(values, ZZ_conn)
+    end
+    
+    if isempty(values)
+        @warn "No expectation values provided"
+        return nothing
+    end
+    
+    # Generate title
+    plot_title = title
+    if !isnothing(g) && !isnothing(row) && !isnothing(nqubits)
+        plot_title = "Expectation Values: row=$row, g=$g, nqubits=$nqubits"
+    elseif !isnothing(g) && !isnothing(row)
+        plot_title = "Expectation Values: row=$row, g=$g"
+    elseif !isnothing(g)
+        plot_title = "Expectation Values: g=$g"
+    end
+    
+    # Create figure
+    fig = Figure(size=(500, 350))
+    ax = Axis(fig[1, 1],
+              xlabel="Observable",
+              ylabel="Value",
+              title=plot_title,
+              xticks=(1:length(labels), labels))
+    
+    # Color bars based on sign
+    colors = [v >= 0 ? :steelblue : :coral for v in values]
+    
+    barplot!(ax, 1:length(values), values, color=colors, strokewidth=1, strokecolor=:black)
+    
+    # Add value labels on bars
+    for (i, v) in enumerate(values)
+        offset = v >= 0 ? 0.05 : -0.05
+        align = v >= 0 ? (:center, :bottom) : (:center, :top)
+        text!(ax, i, v + offset; text=string(round(v, digits=4)), align=align, fontsize=12)
+    end
+    
+    # Reference line at 0
+    hlines!(ax, [0], color=:black, linewidth=1)
+    
+    # Set y-axis limits with some padding
+    ymin = min(minimum(values), 0) * 1.2
+    ymax = max(maximum(values), 0) * 1.2
+    if ymin == ymax
+        ymin, ymax = -1, 1
+    end
+    ylims!(ax, ymin - 0.1, ymax + 0.1)
+    
+    if !isnothing(save_path)
+        save(save_path, fig)
+        @info "Figure saved to $save_path"
+    end
+    
+    return fig
+end
+
+"""
+    plot_expectation_values(result::ExactOptimizationResult; kwargs...)
+
+Plot expectation values from ExactOptimizationResult.
+"""
+function plot_expectation_values(result::ExactOptimizationResult; kwargs...)
+    plot_expectation_values(;
+        energy=result.energy,
+        X=result.X_expectation,
+        ZZ_vert=result.ZZ_vertical,
+        ZZ_horiz=result.ZZ_horizontal,
+        kwargs...
+    )
+end
+
+"""
+    plot_expectation_values(result::CircuitOptimizationResult; row=nothing, p=nothing, nqubits=nothing, J=1.0, g=nothing, kwargs...)
+
+Plot expectation values from CircuitOptimizationResult, showing both sample-based and exact contraction values.
+
+# Arguments
+- `row`: Number of rows
+- `p`: Number of layers (needed for exact contraction)
+- `nqubits`: Number of qubits per gate (needed for exact contraction)
+- `J`: Ising coupling strength (default: 1.0)
+- `g`: Transverse field strength (needed for energy calculation)
+- `title`: Plot title (optional)
+- `save_path`: Path to save figure (optional)
+
+Shows grouped bar chart comparing sample-based estimation vs exact tensor contraction.
+"""
+function plot_expectation_values(result::CircuitOptimizationResult; 
+                                  row::Union{Int,Nothing}=nothing,
+                                  p::Union{Int,Nothing}=nothing,
+                                  nqubits::Union{Int,Nothing}=nothing,
+                                  J::Float64=1.0,
+                                  g::Union{Real,Nothing}=nothing,
+                                  title::String="Expectation Values",
+                                  save_path::Union{String,Nothing}=nothing,
+                                  kwargs...)
+    
+    # Compute sample-based values
+    Z_samples = result.final_Z_samples
+    X_samples = result.final_X_samples
+    
+    Z_sample = isempty(Z_samples) ? nothing : mean(Z_samples)
+    X_sample = isempty(X_samples) ? nothing : mean(X_samples)
+    
+    ZZ_vert_sample = nothing
+    ZZ_horiz_sample = nothing
+    ZZ_conn_sample = nothing
+    energy_sample = result.final_cost
+    
+    N = length(Z_samples)
+    if N > 1
+        ZZ_vert_sample = mean(Z_samples[i] * Z_samples[i+1] for i in 1:N-1)
+        # Connected correlation: ⟨ZZ⟩_c = ⟨ZZ⟩ - ⟨Z⟩²
+        if !isnothing(Z_sample)
+            ZZ_conn_sample = ZZ_vert_sample - Z_sample^2
+        end
+    end
+    if !isnothing(row) && N > row
+        ZZ_horiz_sample = mean(Z_samples[i] * Z_samples[i+row] for i in 1:N-row)
+    end
+    
+    # Compute exact values if parameters are available
+    X_exact = nothing
+    Z_exact = nothing
+    ZZ_vert_exact = nothing
+    ZZ_horiz_exact = nothing
+    ZZ_conn_exact = nothing
+    energy_exact = nothing
+    
+    can_compute_exact = !isnothing(row) && !isnothing(p) && !isnothing(nqubits) && !isempty(result.final_params)
+    
+    if can_compute_exact
+        virtual_qubits = (nqubits - 1) ÷ 2
+        
+        gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=true)
+        rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
+        
+        X_exact = real(compute_X_expectation(rho, gates, row, virtual_qubits))
+        Z_exact = real(compute_Z_expectation(rho, gates, row, virtual_qubits))
+        ZZ_vert_exact, ZZ_horiz_exact = compute_ZZ_expectation(rho, gates, row, virtual_qubits)
+        ZZ_vert_exact = real(ZZ_vert_exact)
+        ZZ_horiz_exact = real(ZZ_horiz_exact)
+        
+        # Connected correlation: ⟨ZZ⟩_c = ⟨ZZ⟩ - ⟨Z⟩²
+        ZZ_conn_exact = ZZ_vert_exact - Z_exact^2
+        
+        if !isnothing(g)
+            energy_exact = -g*X_exact - J*(row == 1 ? ZZ_horiz_exact : ZZ_vert_exact + ZZ_horiz_exact)
+        end
+    end
+    
+    # Generate title
+    plot_title = title
+    if !isnothing(g) && !isnothing(row) && !isnothing(nqubits)
+        plot_title = "Expectation Values: row=$row, g=$g, nqubits=$nqubits"
+    elseif !isnothing(g) && !isnothing(row)
+        plot_title = "Expectation Values: row=$row, g=$g"
+    end
+    
+    # Build data for grouped bar chart
+    labels = String[]
+    sample_values = Float64[]
+    exact_values = Float64[]
+    
+    # Energy
+    if !isnothing(energy_sample)
+        push!(labels, "E")
+        push!(sample_values, energy_sample)
+        push!(exact_values, isnothing(energy_exact) ? NaN : energy_exact)
+    end
+    
+    # X expectation
+    if !isnothing(X_sample) || !isnothing(X_exact)
+        push!(labels, "⟨X⟩")
+        push!(sample_values, isnothing(X_sample) ? NaN : X_sample)
+        push!(exact_values, isnothing(X_exact) ? NaN : X_exact)
+    end
+    
+    # Z expectation
+    if !isnothing(Z_sample) || !isnothing(Z_exact)
+        push!(labels, "⟨Z⟩")
+        push!(sample_values, isnothing(Z_sample) ? NaN : Z_sample)
+        push!(exact_values, isnothing(Z_exact) ? NaN : Z_exact)
+    end
+    
+    # ZZ vertical
+    if !isnothing(ZZ_vert_sample) || !isnothing(ZZ_vert_exact)
+        push!(labels, "⟨ZZ⟩ᵥ")
+        push!(sample_values, isnothing(ZZ_vert_sample) ? NaN : ZZ_vert_sample)
+        push!(exact_values, isnothing(ZZ_vert_exact) ? NaN : ZZ_vert_exact)
+    end
+    
+    # ZZ horizontal
+    if !isnothing(ZZ_horiz_sample) || !isnothing(ZZ_horiz_exact)
+        push!(labels, "⟨ZZ⟩ₕ")
+        push!(sample_values, isnothing(ZZ_horiz_sample) ? NaN : ZZ_horiz_sample)
+        push!(exact_values, isnothing(ZZ_horiz_exact) ? NaN : ZZ_horiz_exact)
+    end
+    
+    # Connected correlation ⟨ZZ⟩_c = ⟨ZZ⟩ - ⟨Z⟩²
+    if !isnothing(ZZ_conn_sample) || !isnothing(ZZ_conn_exact)
+        push!(labels, "⟨ZZ⟩_c")
+        push!(sample_values, isnothing(ZZ_conn_sample) ? NaN : ZZ_conn_sample)
+        push!(exact_values, isnothing(ZZ_conn_exact) ? NaN : ZZ_conn_exact)
+    end
+    
+    if isempty(labels)
+        @warn "No expectation values to plot"
+        return nothing
+    end
+    
+    # Create grouped bar chart
+    fig = Figure(size=(600, 400))
+    ax = Axis(fig[1, 1],
+              xlabel="Observable",
+              ylabel="Value",
+              title=plot_title,
+              xticks=(1:length(labels), labels))
+    
+    n = length(labels)
+    bar_width = 0.35
+    
+    # Sample bars (left)
+    positions_sample = collect(1:n) .- bar_width/2
+    valid_sample = .!isnan.(sample_values)
+    if any(valid_sample)
+        barplot!(ax, positions_sample[valid_sample], sample_values[valid_sample], 
+                 width=bar_width, color=:steelblue, strokewidth=1, strokecolor=:black,
+                 label="Sample")
+        # Add value labels
+        for (i, (pos, val)) in enumerate(zip(positions_sample, sample_values))
+            if !isnan(val)
+                offset = val >= 0 ? 0.03 : -0.03
+                align = val >= 0 ? (:center, :bottom) : (:center, :top)
+                text!(ax, pos, val + offset; text=string(round(val, digits=3)), align=align, fontsize=9)
+            end
+        end
+    end
+    
+    # Exact bars (right) - only if we have exact values
+    if can_compute_exact
+        positions_exact = collect(1:n) .+ bar_width/2
+        valid_exact = .!isnan.(exact_values)
+        if any(valid_exact)
+            barplot!(ax, positions_exact[valid_exact], exact_values[valid_exact], 
+                     width=bar_width, color=:coral, strokewidth=1, strokecolor=:black,
+                     label="Exact")
+            # Add value labels
+            for (i, (pos, val)) in enumerate(zip(positions_exact, exact_values))
+                if !isnan(val)
+                    offset = val >= 0 ? 0.03 : -0.03
+                    align = val >= 0 ? (:center, :bottom) : (:center, :top)
+                    text!(ax, pos, val + offset; text=string(round(val, digits=3)), align=align, fontsize=9)
+                end
+            end
+        end
+    end
+    
+    # Reference line at 0
+    hlines!(ax, [0], color=:black, linewidth=1)
+    
+    # Legend at right bottom
+    axislegend(ax, position=:rb)
+    
+    if !isnothing(save_path)
+        save(save_path, fig)
+        @info "Figure saved to $save_path"
+    end
+    
+    return fig
 end
 
 """

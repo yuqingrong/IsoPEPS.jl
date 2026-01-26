@@ -3,82 +3,6 @@ using IsoPEPS
 using Yao, YaoBlocks
 using LinearAlgebra
 
-@testset "concrete case" begin
-    A = zeros(Float64, 2, 2, 2, 2, 2)
-    λ = 0.5
-    row=1 
-    # s = 0
-    A[1, 1, 1, 1, 1] = 1.0
-    A[1, 2, 2, 2, 2] = 1.0
-    
-    # s = 1
-    A[2, 1, 1, 1, 1] = λ
-    A[2, 2, 2, 2, 2] = λ
-    
-    # ============================================================================
-    # True Physical Entanglement Entropy
-    # ============================================================================
-    # The tensor A[s,l,r,u,d] with l=r=u=d constraint represents a diagonal MPS.
-    # M^s = diag(A[s,1,1,1,1], A[s,2,2,2,2]) = diag(1,1) for s=1, diag(λ,λ) for s=2
-    # This gives a product state |ψ⟩ = (|0⟩ + λ|1⟩)^⊗N with S = 0.
-    
-    A_mps = zeros(Float64, 2, 2, 2)  # (physical, left, right)
-    A_mps[1, 1, 1] = 1.0
-    A_mps[1, 2, 2] = 1.0
-    A_mps[2, 1, 1] = λ
-    A_mps[2, 2, 2] = λ
-    
-    S_bond, schmidt = mps_bond_entanglement(A_mps)
-    S_physical, σ_physical = mps_physical_entanglement(A_mps, 10)
-    
-    println("\n=== MPS Entanglement Entropy ===")
-    println("Bond entanglement (SVD): S = ", S_bond)
-    println("  Schmidt values: ", schmidt)
-    println("Physical entanglement (N=6): S = ", S_physical)
-    println("  Schmidt rank: ", length(σ_physical))
-    println("Expected physical entropy: S = 0 (product state)")
-    
-    # The physical entanglement is 0 because |ψ⟩ = (|0⟩ + λ|1⟩)^⊗N is a product state
-    @test abs(S_physical) < 1e-10
-    
-    A1 = [1 0 0 0; 0 0 0 0; 0 0 0 0; 0 0 0 1]
-    A2 = [λ 0 0 0; 0 0 0 0; 0 0 0 0; 0 0 0 λ]
-    E1 = kron(A1, conj(A1)) + kron(A2, conj(A2))
-    E = foldl(kron, ntuple(_ -> E1, row)) 
-    _, T_tensor = contract_transfer_matrix([A for _ in 1:row], [conj(A) for _ in 1:row], row)
-    T = reshape(T_tensor, 16, 16)
-    L1=LinearAlgebra.eigvals(E)
-    L2=LinearAlgebra.eigvals(T)
-    @test T ≈ E atol=1e-10
-
-    for row in 1:4
-        # Boundary has (row + 1) legs; each leg has dimension 2
-        boundary_dim = 2^(row + 1)
-        matrix_size = boundary_dim^2
-        # Expected transfer matrix: only the |0...0⟩ and |1...1⟩ boundary
-        # configurations survive on both bra/ket sides.
-        # Each row contributes a factor (1 + λ^2).
-        weight = (1 + λ^2)^row
-        E = zeros(Float64, matrix_size, matrix_size)
-        boundary_states = (1, boundary_dim)
-        for col in boundary_states, row_idx in boundary_states
-            vec_idx = row_idx + (col - 1) * boundary_dim
-            E[vec_idx, vec_idx] = weight
-        end
-        
-        _, T_tensor = contract_transfer_matrix(
-            [A for _ in 1:row],
-            [conj(A) for _ in 1:row],
-            row
-        )
-        T = reshape(T_tensor, matrix_size, matrix_size)
-        L1 = LinearAlgebra.eigvals(E)
-        L2 = LinearAlgebra.eigvals(T)
-        @test T ≈ E atol=1e-10
-    end
-end
-
-
 @testset "contract_transfer_matrix" begin
     A = randn(ComplexF64, 2, 2, 2, 2, 2)
     for row in 1:3
@@ -288,7 +212,7 @@ end
     virtual_qubits = 1
     nqubits = 1 + 2*virtual_qubits
     
-    for row in [1, 2,3]
+    for row in [1, 2, 3]
         gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
         gates = [Matrix(gate) for _ in 1:row]
         
@@ -386,43 +310,50 @@ end
     end
 end
 
-@testset "compute_X_expectation" begin
-    virtual_qubits = 1
-    nqubits = 1 + 2*virtual_qubits  # Gate qubits needed for tensor structure
-    for row in [1, 2, 3]
-        gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
-        gates = [Matrix(gate) for _ in 1:row]
-        rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
-        X_exp = compute_X_expectation(rho, gates, row, virtual_qubits)
-        @test abs(imag(X_exp)) < 1e-10
-        @test -1.0 ≤ real(X_exp) ≤ 1.0
+@testset "concrete_transfer_matrix_case" begin
+    # Test with a specific diagonal tensor
+    A = zeros(Float64, 2, 2, 2, 2, 2)
+    λ = 0.5
+    row = 1 
+    # s = 0
+    A[1, 1, 1, 1, 1] = 1.0
+    A[1, 2, 2, 2, 2] = 1.0
+    # s = 1
+    A[2, 1, 1, 1, 1] = λ
+    A[2, 2, 2, 2, 2] = λ
+    
+    A1 = [1 0 0 0; 0 0 0 0; 0 0 0 0; 0 0 0 1]
+    A2 = [λ 0 0 0; 0 0 0 0; 0 0 0 0; 0 0 0 λ]
+    E1 = kron(A1, conj(A1)) + kron(A2, conj(A2))
+    E = foldl(kron, ntuple(_ -> E1, row)) 
+    _, T_tensor = contract_transfer_matrix([A for _ in 1:row], [conj(A) for _ in 1:row], row)
+    T = reshape(T_tensor, 16, 16)
+    @test T ≈ E atol=1e-10
+
+    for row in 1:4
+        # Boundary has (row + 1) legs; each leg has dimension 2
+        boundary_dim = 2^(row + 1)
+        matrix_size = boundary_dim^2
+        # Expected transfer matrix: only the |0...0⟩ and |1...1⟩ boundary
+        # configurations survive on both bra/ket sides.
+        # Each row contributes a factor (1 + λ^2).
+        weight = (1 + λ^2)^row
+        E = zeros(Float64, matrix_size, matrix_size)
+        boundary_states = (1, boundary_dim)
+        for col in boundary_states, row_idx in boundary_states
+            vec_idx = row_idx + (col - 1) * boundary_dim
+            E[vec_idx, vec_idx] = weight
+        end
+        
+        _, T_tensor = contract_transfer_matrix(
+            [A for _ in 1:row],
+            [conj(A) for _ in 1:row],
+            row
+        )
+        T = reshape(T_tensor, matrix_size, matrix_size)
+        L1 = LinearAlgebra.eigvals(E)
+        L2 = LinearAlgebra.eigvals(T)
+        @test T ≈ E atol=1e-10
     end
 end
 
-@testset "compute_ZZ_expectation" begin
-    virtual_qubits = 1
-    nqubits = 1 + 2*virtual_qubits  # Gate qubits needed for tensor structure
-    for row in [1, 2, 3]
-        gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
-        gates = [Matrix(gate) for _ in 1:row]
-        rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
-        ZZ_vert, ZZ_horiz = compute_ZZ_expectation(rho, gates, row, virtual_qubits)
-        @test abs(imag(ZZ_vert)) < 1e-10
-        @test -1.0 ≤ real(ZZ_vert) ≤ 1.0
-        @test abs(imag(ZZ_horiz)) < 1e-10
-        @test -1.0 ≤ real(ZZ_horiz) ≤ 1.0
-    end
-end
-
-@testset "compute_exact_energy" begin
-    g = 2.0
-    J = 1.0
-    p = 3
-    row = 3
-    virtual_qubits = 1
-    nqubits = 1 + 2*virtual_qubits  # Gate qubits needed for tensor structure
-    # Uses 3 params per qubit per layer (Rz-Ry-Rz decomposition)
-    params = rand(3 * nqubits * p)
-    _, energy = compute_exact_energy(params, g, J, p, row, virtual_qubits)
-    @test energy isa Float64
-end

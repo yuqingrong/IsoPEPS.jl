@@ -5,8 +5,16 @@ using Test
     include("gates.jl")
 end
 
-@testset "exact" begin
-    include("exact.jl")
+@testset "transfer_matrix" begin
+    include("transfer_matrix.jl")
+end
+
+@testset "observables" begin
+    include("observables.jl")
+end
+
+@testset "entanglement" begin
+    include("entanglement.jl")
 end
 
 @testset "additional_exact" begin

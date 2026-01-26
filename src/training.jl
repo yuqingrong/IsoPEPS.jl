@@ -77,6 +77,60 @@ struct ManifoldOptimizationResult
 end
 
 """
+    initialize_tfim_params(p, nqubits, g; mode=:meanfield)
+
+Generate initial parameters for TFIM optimization that avoid trivial product states.
+
+# Arguments
+- `p`: Circuit depth
+- `nqubits`: Number of qubits per gate
+- `g`: Transverse field strength
+- `mode`: Initialization mode
+  - `:meanfield`: Parameters tuned to approximate mean-field state
+  - `:entangled`: Parameters that create significant entanglement
+  - `:random`: Random initialization (default CMA-ES behavior)
+
+# Returns
+- Parameter vector of length `2*nqubits*p`
+"""
+function initialize_tfim_params(p::Int, nqubits::Int, g::Float64; mode::Symbol=:meanfield)
+    n_params = 2 * nqubits * p
+    
+    if mode == :meanfield
+        # Mean-field angle: θ such that ⟨Z⟩ = -J/(g) approximately
+        # For g >> J: nearly all X, for g << J: nearly all Z
+        θ_mf = atan(1.0 / g)  # Approximate mean-field angle
+        
+        params = zeros(n_params)
+        for layer in 1:p
+            for q in 1:nqubits
+                idx = 2*nqubits*(layer-1) + 2*(q-1) + 1
+                # Rx rotation to tilt from |0⟩ toward mean-field direction
+                params[idx] = θ_mf + 0.1 * randn()  # Rx angle
+                params[idx+1] = 0.1 * randn()        # Rz angle (small)
+            end
+        end
+        return params
+        
+    elseif mode == :entangled
+        # Start with parameters that create Bell-like entanglement
+        params = zeros(n_params)
+        for layer in 1:p
+            for q in 1:nqubits
+                idx = 2*nqubits*(layer-1) + 2*(q-1) + 1
+                # Rx(π/4) creates superposition, CNOT then entangles
+                params[idx] = π/4 + 0.2 * randn()
+                params[idx+1] = π/4 + 0.2 * randn()
+            end
+        end
+        return params
+        
+    else  # :random
+        return 2π * rand(n_params)
+    end
+end
+
+"""
     optimize_circuit(params, J, g, p, row, nqubits; kwargs...)
 
 Optimize a quantum circuit for the transverse-field Ising model (TFIM) using CMA-ES.
@@ -100,6 +154,7 @@ Optimize a quantum circuit for the transverse-field Ising model (TFIM) using CMA
 - `xtol::Float64=1e-6`: Parameter tolerance for convergence
 - `sigma0::Float64=1.0`: Initial step size for CMA-ES
 - `popsize::Union{Int,Nothing}=nothing`: Population size (nothing = auto)
+- `zz_weight::Float64=0.0`: Weight for ZZ correlation regularization (encourages correlations)
 
 # Returns
 - `CircuitOptimizationResult`: Optimization results with energy history and final state
@@ -108,13 +163,19 @@ Optimize a quantum circuit for the transverse-field Ising model (TFIM) using CMA
 - Only the best result per CMA-ES iteration is saved (not all popsize evaluations)
 - Samples are stored as matrices: rows = chains, columns = samples
 - This preserves chain information for diagnostics and analysis
+- Use `zz_weight > 0` to penalize trivial product states
+- Use `target_energy` to stop early when energy reaches target
 """
 function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int; 
     measure_first=:Z, share_params=true, conv_step=100, 
     samples=10000, maxiter=5000, abstol=0.01, n_runs=44,
-    sigma0::Float64=1.0, popsize::Union{Int,Nothing}=nothing)
+    sigma0::Float64=1.0, popsize::Union{Int,Nothing}=nothing,
+    zz_weight::Float64=0.0, target_energy::Float64=-2.8478)
     # Store initial parameters
     initial_params = copy(params)
+    
+    # Flag for early stopping
+    should_stop = Ref(false)
 
     energy_history = Float64[]
     params_history = Vector{Float64}[]
@@ -163,20 +224,41 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
 
         # Energy computation with already filtered samples
         energy = compute_energy(X_samples_combined, Z_samples_combined, g, J, row) 
+        
+        # Cost = energy + penalty (penalty is for optimization only)
+        cost = energy
+        
+        # Optional: ZZ correlation regularization to avoid trivial product states
+        # Penalizes when |⟨ZZ⟩_c| is too small (product state has ⟨ZZ⟩_c ≈ 0)
+        if zz_weight > 0
+            N = length(Z_samples_combined)
+            ZZ_mean = mean(Z_samples_combined[i] * Z_samples_combined[i+1] for i in 1:N-1 if i % row != 0)
+            Z_mean = mean(Z_samples_combined)
+            # Connected correlation: ⟨ZZ⟩_c = ⟨ZZ⟩ - ⟨Z⟩²
+            # For product state: |⟨ZZ⟩_c| ≈ 0
+            # For correlated state: |⟨ZZ⟩_c| > 0
+            ZZ_connected = ZZ_mean - Z_mean^2
+            # Penalty: penalize weak correlations (|⟨ZZ⟩_c| < threshold)
+            # penalty > 0 when |ZZ_connected| < 0.1
+            penalty = zz_weight * max(0.0, 0.1 - abs(ZZ_connected))
+            cost = energy + penalty
+        end
 
-        # Store in generation arrays
+        # Store in generation arrays (store true energy, not cost with penalty)
         push!(generation_energies, real(energy))
         push!(generation_params, copy(x))
         push!(generation_Z_samples, Z_samples_combined)
         push!(generation_X_samples, X_samples_combined)
 
-        return real(energy)
+        # Return cost (with penalty) for optimization
+        return real(cost)
     end
 
-    # Callback for CMAEvolutionStrategy: (opt, y, fvals, perm) -> nothing
+    # Callback for CMAEvolutionStrategy: (opt, y, fvals, perm) -> nothing or true (to stop)
     # Called after each generation
     function cmaes_callback(opt, y, fvals, perm)
         # When a new generation is complete, find the best from that generation
+        min_energy = Inf
         if !isempty(generation_energies)
             min_idx = argmin(generation_energies)
             min_energy = generation_energies[min_idx]
@@ -270,8 +352,11 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
         :abstol => abstol,
         :sigma0 => sigma0,
         :popsize => actual_popsize,
+        :zz_weight => zz_weight,
+        :target_energy => target_energy,
         # Generation tracking
         :total_generations => generation_count[],
+        :early_stopped => should_stop[],
         :note => "energy_history contains minimum energy per CMA-ES generation"
     )
 
@@ -293,6 +378,9 @@ function optimize_exact(params, J::Float64, g::Float64, p::Int, row::Int, nqubit
                         maxiter=5000, abstol=1e-6)
     # Store initial parameters
     initial_params = copy(params)
+    
+    # Compute virtual_qubits for expectation value functions
+    virtual_qubits = (nqubits - 1) ÷ 2
     
     energy_history = Float64[]
     params_history = Vector{Float64}[]
@@ -319,8 +407,9 @@ function optimize_exact(params, J::Float64, g::Float64, p::Int, row::Int, nqubit
         gates = build_unitary_gate(x, p, row, nqubits)
         rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
         
-        X_cost = real(compute_X_expectation(rho, gates, row, nqubits))
-        ZZ_vert, ZZ_horiz = compute_ZZ_expectation(rho, gates, row, nqubits)
+        # Note: compute_X/ZZ_expectation expect virtual_qubits, not nqubits
+        X_cost = real(compute_X_expectation(rho, gates, row, virtual_qubits))
+        ZZ_vert, ZZ_horiz = compute_ZZ_expectation(rho, gates, row, virtual_qubits)
         ZZ_vert = real(ZZ_vert)
         ZZ_horiz = real(ZZ_horiz)
         
@@ -421,6 +510,9 @@ function optimize_manifold(gate, row::Int, nqubits::Int, manifold::AbstractManif
     # Store initial gate
     initial_gate = copy(gate)
     
+    # Compute virtual_qubits for expectation value functions
+    virtual_qubits = (nqubits - 1) ÷ 2
+    
     energy_history = Float64[]
     gap_history = Float64[]
     eigenvalues_history = Vector{Float64}[]
@@ -432,8 +524,9 @@ function optimize_manifold(gate, row::Int, nqubits::Int, manifold::AbstractManif
         gates = [Matrix(gate) for _ in 1:row]
         rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
         
-        X_cost = real(compute_X_expectation(rho, gates, row, nqubits))
-        ZZ_vert, ZZ_horiz = compute_ZZ_expectation(rho, gates, row, nqubits)
+        # Note: compute_X/ZZ_expectation expect virtual_qubits, not nqubits
+        X_cost = real(compute_X_expectation(rho, gates, row, virtual_qubits))
+        ZZ_vert, ZZ_horiz = compute_ZZ_expectation(rho, gates, row, virtual_qubits)
         ZZ_vert = real(ZZ_vert)
         ZZ_horiz = real(ZZ_horiz)
         
