@@ -47,8 +47,25 @@ function analyze_result(filename::String; pepskit_results_file::Union{String,Not
     display(fig)
     
     # Plot expectation values (using exact contraction if parameters available)
-    #fig_exp = plot_expectation_values(result; g=g, J=J, row=row, p=p, nqubits=nqubits, use_exact=use_exact)
-    #display(fig_exp)
+    fig_exp = plot_expectation_values(result; g=g, J=J, row=row, p=p, nqubits=nqubits, use_exact=use_exact)
+    display(fig_exp)
+    
+    # Save figures to project/results/figures
+    figures_dir = joinpath(@__DIR__, "results", "figures")
+    mkpath(figures_dir)
+    
+    # Generate base filename from input
+    base_name = splitext(basename(filename))[1]
+    
+    # Save training history figure
+    training_fig_path = joinpath(figures_dir, "$(base_name)_training_history.pdf")
+    save(training_fig_path, fig)
+    println("\nSaved training history figure to: $training_fig_path")
+    
+    # Save expectation values figure
+    exp_fig_path = joinpath(figures_dir, "$(base_name)_expectation_values.pdf")
+    save(exp_fig_path, fig_exp)
+    println("Saved expectation values figure to: $exp_fig_path")
     
     return result, input_args
 end
@@ -657,7 +674,7 @@ function run_energy_evolution(file1::String, file2::String; n_runs=50, conv_step
 end
 # Example usage (commented out)
 # Analyze a single result
-J=1.0;g = 1.0; row=3 ; nqubits=3; p=3; virtual_qubits=1;D=2
+J=1.0;g = 2.0; row=2 ; nqubits=3; p=3; virtual_qubits=1;D=2
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
@@ -665,6 +682,8 @@ result, args = analyze_result(datafile; pepskit_results_file=referfile)
 # Reconstruct gates and analyze
 
 gates, rho, gap, eigenvalues = reconstruct_gates(datafile; use_iterative=false, matrix_free=false)
+S, spectrum,_ = multiline_mps_entanglement(gates, row; nqubits=nqubits)
+
 tensors = gates_to_tensors(gates, row, virtual_qubits)
 A = ein"iabcd,jefah -> ijefbcdh"(tensors[1], tensors[2])
 A = reshape(A, 4, 2, 4, 2, 4)
@@ -678,7 +697,7 @@ energy = compute_energy(X_samples[100:end], Z_samples[100:end], g, J, row) |> pr
 save(joinpath(dirname(datafile), replace(basename(datafile), ".json" => "_eigenvalues.pdf")), fig)
 println("Energy: $energy")
 # Analyze autocorrelation (using saved samples)
-lags, acf, fit_params = analyze_acf(datafile, row; max_lag=200, resample=false, samples=1000000)
+lags, acf, fit_params = analyze_acf(datafile, row; max_lag=100, resample=false, samples=1000000)
 
 data_dir = joinpath(@__DIR__, "results")
 datafile1 = joinpath(data_dir, "circuit_J=1.0_g=2.0_row=2_nqubits=3_ones.json")

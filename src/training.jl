@@ -113,14 +113,30 @@ function initialize_tfim_params(p::Int, nqubits::Int, g::Float64; mode::Symbol=:
         return params
         
     elseif mode == :entangled
-        # Start with parameters that create Bell-like entanglement
+        # GHZ/Bell state initialization:
+        # CNOT structure: cnot(control=i+1, target=i), so last qubit is always control
+        # 
+        # Layer 1 creates GHZ:
+        #   - Last qubit (control): Rx(π/2) creates superposition
+        #   - Other qubits (targets): stay in |0⟩
+        #   - CNOT cascade creates: (|000⟩ - i|111⟩)/√2
+        # 
+        # Layer 2+ preserves GHZ:
+        #   - All qubits: identity (Rx(0), Rz(0))
+        #   - CNOTs on GHZ state: |000⟩↔|000⟩, |111⟩↔|111⟩ (self-inverse)
         params = zeros(n_params)
         for layer in 1:p
             for q in 1:nqubits
                 idx = 2*nqubits*(layer-1) + 2*(q-1) + 1
-                # Rx(π/4) creates superposition, CNOT then entangles
-                params[idx] = π/4 + 0.2 * randn()
-                params[idx+1] = π/4 + 0.2 * randn()
+                if layer == 1 && q == nqubits
+                    # Layer 1, last qubit (control): create superposition
+                    params[idx] = π/2      # Rx(π/2)
+                    params[idx+1] = 0.0    # Rz(0)
+                else
+                    # All other cases: identity to preserve GHZ
+                    params[idx] = 0.0      # Rx(0)
+                    params[idx+1] = 0.0    # Rz(0)
+                end
             end
         end
         return params
@@ -234,10 +250,11 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
             N = length(Z_samples_combined)
             ZZ_mean = mean(Z_samples_combined[i] * Z_samples_combined[i+1] for i in 1:N-1 if i % row != 0)
             Z_mean = mean(Z_samples_combined)
+            var_global = mean((Z_samples_combined.-Z_mean).^2)
             # Connected correlation: ⟨ZZ⟩_c = ⟨ZZ⟩ - ⟨Z⟩²
             # For product state: |⟨ZZ⟩_c| ≈ 0
             # For correlated state: |⟨ZZ⟩_c| > 0
-            ZZ_connected = ZZ_mean - Z_mean^2
+            ZZ_connected = (ZZ_mean - Z_mean^2)/var_global
             # Penalty: penalize weak correlations (|⟨ZZ⟩_c| < threshold)
             # penalty > 0 when |ZZ_connected| < 0.1
             penalty = zz_weight * max(0.0, 0.1 - abs(ZZ_connected))

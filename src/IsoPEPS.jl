@@ -95,6 +95,7 @@ export compute_exact_energy
 # =============================================================================
 export mps_bond_entanglement, mps_physical_entanglement, mps_physical_entanglement_infinite
 export multiline_mps_entanglement, multiline_mps_entanglement_from_params
+export multiline_mps_physical_entanglement, multiline_mps_physical_entanglement_from_params
 
 # =============================================================================
 # Diagnostics (defined in visualization.jl)

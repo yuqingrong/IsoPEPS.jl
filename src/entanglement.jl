@@ -2,6 +2,11 @@
 # Entanglement Entropy Calculations
 # =============================================================================
 # Functions for computing entanglement entropy of MPS states
+# Uses KrylovKit for efficient eigensolvers
+
+# =============================================================================
+# Single-Line MPS Entanglement
+# =============================================================================
 
 """
     mps_bond_entanglement(A; tol=1e-12)
@@ -90,6 +95,8 @@ end
 Compute the physical bipartite entanglement entropy of a single-line uniform MPS 
 in the thermodynamic limit using transfer matrix fixed points.
 
+Uses KrylovKit for efficient eigensolver.
+
 # Arguments
 - `A`: MPS tensor with indices (physical, left, right)
 - `tol`: Tolerance for filtering small singular values
@@ -97,42 +104,64 @@ in the thermodynamic limit using transfer matrix fixed points.
 # Returns
 - `S`: Entanglement entropy in the thermodynamic limit
 - `schmidt_values`: Schmidt coefficients
+
+# Limitations
+⚠️ This algorithm assumes the transfer matrix has a **unique dominant eigenvalue**.
+It FAILS for states with degenerate transfer matrices (e.g., GHZ, cat states).
 """
 function mps_physical_entanglement_infinite(A; tol=1e-12)
     phys_dim, bond_dim, _ = size(A)
     
-    # Build transfer matrix E_{αα',ββ'} = Σ_s A^s_{αβ} (A^s_{α'β'})^*
+    # Build transfer matrix using einsum: E = Σ_s A^s ⊗ (A^s)*
+    # E_{(α,α'), (β,β')} = Σ_s A[s,α,β] * conj(A[s,α',β'])
     E = zeros(ComplexF64, bond_dim^2, bond_dim^2)
     for s in 1:phys_dim
         As = A[s, :, :]
         E .+= kron(As, conj(As))
     end
     
-    # Get fixed points (left and right eigenvectors for dominant eigenvalue)
-    eig = eigen(E)
-    idx = argmax(abs.(eig.values))
-    r = reshape(eig.vectors[:, idx], bond_dim, bond_dim)
+    # Get right fixed point using KrylovKit
+    vals, vecs, _ = KrylovKit.eigsolve(E, randn(ComplexF64, bond_dim^2), 1, :LM;
+                                       ishermitian=false, krylovdim=min(30, bond_dim^2))
+    r = reshape(vecs[1], bond_dim, bond_dim)
     
-    eig_left = eigen(E')
-    idx_left = argmax(abs.(eig_left.values))
-    l = reshape(eig_left.vectors[:, idx_left], bond_dim, bond_dim)
+    # Get left fixed point  
+    vals_l, vecs_l, _ = KrylovKit.eigsolve(E', randn(ComplexF64, bond_dim^2), 1, :LM;
+                                           ishermitian=false, krylovdim=min(30, bond_dim^2))
+    l = reshape(vecs_l[1], bond_dim, bond_dim)
     
     # Make Hermitian and normalize
     r = (r + r') / 2
     l = (l + l') / 2
-    r /= tr(l * r)
+    norm_factor = tr(l * r)
+    if abs(norm_factor) > tol
+        r = r / norm_factor
+    end
     
-    # Gauge transform: X l X† = I, Y r Y† = I
-    # Then entanglement spectrum = singular values of X Y†
+    # Truncate to physical subspace and get Schmidt values
     Λl, Ul = eigen(Hermitian(l))
     Λr, Ur = eigen(Hermitian(r))
     
-    X = Diagonal(sqrt.(max.(Λl, 0))) * Ul'
-    Y = Diagonal(sqrt.(max.(Λr, 0))) * Ur'
+    # Keep only significant eigenvalues
+    keep_l = findall(λ -> λ > tol, real.(Λl))
+    keep_r = findall(λ -> λ > tol, real.(Λr))
+    
+    isempty(keep_l) || isempty(keep_r) && return 0.0, Float64[]
+    
+    Λl = real.(Λl[keep_l])
+    Λr = real.(Λr[keep_r])
+    Ul = Ul[:, keep_l]
+    Ur = Ur[:, keep_r]
+    
+    X = Diagonal(sqrt.(Λl)) * Ul'
+    Y = Diagonal(sqrt.(Λr)) * Ur'
     
     C = X * Y'
     σ = svd(C).S
     σ = filter(s -> s > tol, σ)
+    
+    isempty(σ) && return 0.0, Float64[]
+    
     σ = σ ./ norm(σ)
     
     S = -sum(λ -> λ > tol ? λ^2 * log(λ^2) : 0.0, σ)
@@ -144,163 +173,169 @@ end
 # =============================================================================
 
 """
-    multiline_mps_entanglement(gates, row, nqubits; tol=1e-12, use_iterative=:auto, matrix_free=:auto)
+    _is_tensor_input(input)
 
-Compute the TRUE physical bipartite entanglement entropy across the vertical cut 
-(between columns) for a multiline uniform MPS in the thermodynamic limit.
+Check if input is already a tensor (5D array) or a gate matrix (2D array).
+"""
+function _is_tensor_input(input::Vector)
+    isempty(input) && return false
+    return ndims(input[1]) == 5
+end
 
-This requires BOTH left and right transfer matrix fixed points to construct the 
-Schmidt decomposition. The Schmidt values σᵢ come from the gauge transformation 
-that brings the MPS to mixed canonical form.
+"""
+    _infer_parameters_from_tensors(A_tensors)
+
+Infer virtual_qubits and bond_dim from tensor dimensions.
+"""
+function _infer_parameters_from_tensors(A_tensors)
+    A = A_tensors[1]
+    bond_dim = size(A, 2)
+    virtual_qubits = Int(log2(bond_dim))
+    return virtual_qubits, bond_dim
+end
+
+"""
+    multiline_mps_entanglement(input, row; nqubits=nothing, tol=1e-12, use_iterative=:auto, matrix_free=:auto)
+
+Compute the physical bipartite entanglement entropy across the vertical cut 
+for a multiline uniform MPS in the thermodynamic limit.
+
+Uses KrylovKit for efficient transfer matrix eigensolvers.
 
 # Arguments
-- `gates`: Vector of gate matrices (one per row)
-- `row`: Number of rows in the multiline MPS
-- `nqubits`: Number of qubits per gate (determines bond dimension)
-- `tol`: Tolerance for filtering small eigenvalues
-- `use_iterative`: `:auto`, `:always`, or `:never` for iterative eigensolver
-- `matrix_free`: `:auto`, `:always`, or `:never` for matrix-free approach
+- `input`: Vector of gate matrices or tensors
+- `row`: Number of rows
+- `nqubits`: Number of qubits per gate (required for gates)
+- `tol`: Tolerance for filtering
+- `use_iterative`: `:auto`, `:always`, or `:never`
+- `matrix_free`: `:auto`, `:always`, or `:never`
 
 # Returns
-- `S`: Physical bipartite entanglement entropy across the vertical cut
-- `spectrum`: Entanglement spectrum (Schmidt values squared, λᵢ = σᵢ²)
-- `gap`: Transfer matrix spectral gap (correlation length ξ = 1/gap)
-
-# Notes
-For a uniform MPS with transfer matrix T:
-- Right fixed point r: T r = λ r  (environment from contracting right half-chain)
-- Left fixed point l:  l T = λ l  (environment from contracting left half-chain)
-- Schmidt values = singular values of l^{1/2} r^{1/2} (after proper normalization)
-
-This is NOT the same as eigenvalues of ρ, which only gives bond entanglement!
+- `S`: Entanglement entropy
+- `spectrum`: Schmidt values squared
+- `gap`: Transfer matrix spectral gap
 """
-function multiline_mps_entanglement(gates, row, nqubits; tol=1e-12, use_iterative=:auto, matrix_free=:auto)
-    virtual_qubits = (nqubits - 1) ÷ 2
-    bond_dim = 2^virtual_qubits
-    total_legs = row + 1  # periodic boundary + row bonds
+function multiline_mps_entanglement(input, row; nqubits=nothing, tol=1e-12, use_iterative=:auto, matrix_free=:auto)
+    # Get tensors
+    if _is_tensor_input(input)
+        A_tensors = input
+        virtual_qubits, bond_dim = _infer_parameters_from_tensors(A_tensors)
+    else
+        nqubits === nothing && error("nqubits must be provided for gate matrices")
+        virtual_qubits = (nqubits - 1) ÷ 2
+        bond_dim = 2^virtual_qubits
+        A_tensors = gates_to_tensors(input, row, virtual_qubits)
+    end
+    
+    total_legs = row + 1
     env_dim = bond_dim^total_legs
     matrix_size = env_dim^2
     
-    A_tensors = gates_to_tensors(gates, row, virtual_qubits)
+    # Build transfer matrix
+    _, T = contract_transfer_matrix(A_tensors, [conj(A) for A in A_tensors], row)
+    T_matrix = reshape(T, matrix_size, matrix_size)
     
-    # Get right fixed point and gap from compute_transfer_spectrum
-    rho_R, gap, _, _ = compute_transfer_spectrum(gates, row, nqubits; 
-                                                  num_eigenvalues=2, 
-                                                  use_iterative=use_iterative, 
-                                                  matrix_free=matrix_free)
-    
-    # Now compute the LEFT fixed point (eigenvector of T†)
-    should_use_matrix_free = matrix_free == :always || (matrix_free == :auto && matrix_size > 1024)
+    # Decide on solver
     should_use_iterative = use_iterative == :always || (use_iterative == :auto && matrix_size > 256)
     
-    if should_use_matrix_free
-        # Matrix-free approach for left fixed point
-        code, total_legs_code = _build_transfer_contraction_code(A_tensors, row, virtual_qubits)
-        tensor_ket = [A_tensors[i] for i in 1:row]
-        tensor_bra = [conj(A_tensors[i]) for i in 1:row]
+    if should_use_iterative
+        # KrylovKit for large matrices
+        vals, vecs, _ = KrylovKit.eigsolve(T_matrix, randn(ComplexF64, matrix_size), 2, :LM;
+                                           ishermitian=false, krylovdim=min(30, matrix_size))
+        sorted_idx = sortperm(abs.(vals), rev=true)
+        eigenvalues = abs.(vals[sorted_idx])
+        gap = length(eigenvalues) > 1 ? -log(eigenvalues[2]/eigenvalues[1]) : Inf
         
-        # Left fixed point: solve l† T = λ l†, i.e., T† l = λ* l
-        # Swapping ket↔bra in the contraction gives T†
-        function apply_transfer_adjoint(v)
-            v_tensor = reshape(v, ntuple(_ -> bond_dim, 2*total_legs_code)...)
-            result = _apply_transfer_to_vector(code, tensor_bra, tensor_ket, v_tensor, total_legs_code)
-            return vec(result)
-        end
+        rho_R = reshape(vecs[sorted_idx[1]], env_dim, env_dim)
+        rho_R = rho_R ./ tr(rho_R)
         
-        v0 = randn(ComplexF64, matrix_size)
-        v0 = v0 / norm(v0)
-        vals_l, vecs_l, _ = KrylovKit.eigsolve(apply_transfer_adjoint, v0, 1, :LM; 
-                                                ishermitian=false, krylovdim=30)
-        l_vec = vecs_l[argmax(abs.(vals_l))]
-        
-    elseif should_use_iterative
-        # Build T and use iterative solver for T†
-        _, T = contract_transfer_matrix([A_tensors[i] for i in 1:row], 
-                                        [conj(A_tensors[i]) for i in 1:row], row)
-        T = reshape(T, matrix_size, matrix_size)
-        
-        v0 = randn(ComplexF64, matrix_size)
-        v0 = v0 / norm(v0)
-        vals_l, vecs_l, _ = KrylovKit.eigsolve(T', v0, 1, :LM; ishermitian=false, krylovdim=30)
-        l_vec = vecs_l[argmax(abs.(vals_l))]
-        
+        vals_l, vecs_l, _ = KrylovKit.eigsolve(T_matrix', randn(ComplexF64, matrix_size), 1, :LM;
+                                               ishermitian=false, krylovdim=min(30, matrix_size))
+        rho_L = reshape(vecs_l[argmax(abs.(vals_l))], env_dim, env_dim)
     else
         # Full eigendecomposition
-        _, T = contract_transfer_matrix([A_tensors[i] for i in 1:row], 
-                                        [conj(A_tensors[i]) for i in 1:row], row)
-        T = reshape(T, matrix_size, matrix_size)
+        eig_result = eigen(T_matrix)
+        sorted_idx = sortperm(abs.(eig_result.values), rev=true)
+        eigenvalues = abs.(eig_result.values[sorted_idx])
+        gap = length(eigenvalues) > 1 ? -log(eigenvalues[2]/eigenvalues[1]) : Inf
         
-        eig_l = eigen(T')
-        l_vec = eig_l.vectors[:, argmax(abs.(eig_l.values))]
+        rho_R = reshape(eig_result.vectors[:, sorted_idx[1]], env_dim, env_dim)
+        rho_R = rho_R ./ tr(rho_R)
+        
+        eig_l = eigen(T_matrix')
+        rho_L = reshape(eig_l.vectors[:, argmax(abs.(eig_l.values))], env_dim, env_dim)
     end
     
-    # Reshape to matrix form
-    rho_L = reshape(l_vec, env_dim, env_dim)
-    
-    # Compute true bipartite entanglement from both fixed points
-    S, spectrum = _compute_bipartite_entanglement(rho_L, rho_R, tol)
+    # Compute entanglement
+    S, spectrum = _compute_bipartite_entanglement(A_tensors, rho_L, rho_R, row, bond_dim, tol)
     
     return S, spectrum, gap
 end
 
+# Backward compatible
+function multiline_mps_entanglement(gates, row, nqubits::Int; tol=1e-12, use_iterative=:auto, matrix_free=:auto)
+    return multiline_mps_entanglement(gates, row; nqubits=nqubits, tol=tol, 
+                                       use_iterative=use_iterative, matrix_free=matrix_free)
+end
+
 """
-    _compute_bipartite_entanglement(rho_L, rho_R, tol)
+    _compute_bipartite_entanglement(A_tensors, rho_L, rho_R, row, bond_dim, tol)
 
-Compute TRUE physical bipartite entanglement from left and right fixed points.
-
-For uniform MPS, the Schmidt decomposition at a bond requires both environments:
-- l (left fixed point): encodes the left half-chain  
-- r (right fixed point): encodes the right half-chain
-
-The Schmidt values σᵢ are obtained by:
-1. Decompose l = X† X and r = Y Y† (via eigendecomposition)
-2. σᵢ = singular values of (X Y†), properly normalized
-
-# Arguments
-- `rho_L`: Left fixed point (matrix form)
-- `rho_R`: Right fixed point (matrix form)  
-- `tol`: Tolerance for filtering
-
-# Returns
-- `S`: Bipartite entanglement entropy
-- `spectrum`: Schmidt values squared (λᵢ = σᵢ²)
+Compute physical bipartite entanglement including the column tensor.
+Truncates to physical subspace to handle gauge redundancy.
 """
-function _compute_bipartite_entanglement(rho_L, rho_R, tol)
-    # Make Hermitian (fixed points of quantum channels should be Hermitian)
+function _compute_bipartite_entanglement(A_tensors, rho_L, rho_R, row, bond_dim, tol)
+    boundary_dim = size(rho_L, 1)
+    phys_dim = 2^row
+    
+    # Make Hermitian
     rho_L = Hermitian((rho_L + rho_L') / 2)
     rho_R = Hermitian((rho_R + rho_R') / 2)
     
-    # Normalize: tr(l · r) = 1
+    # Normalize
     norm_factor = tr(rho_L * rho_R)
     if abs(norm_factor) > tol
         rho_R = rho_R / norm_factor
     end
     
-    # Eigendecompose: l = U_L Λ_L U_L†, r = U_R Λ_R U_R†
-    Λ_L, U_L = eigen(rho_L)
-    Λ_R, U_R = eigen(rho_R)
+    # Eigendecompose and truncate
+    Λ_L_full, U_L_full = eigen(rho_L)
+    Λ_R_full, U_R_full = eigen(rho_R)
     
-    # Filter small/negative eigenvalues
-    Λ_L = real.(Λ_L)
-    Λ_R = real.(Λ_R)
-    Λ_L = max.(Λ_L, tol)
-    Λ_R = max.(Λ_R, tol)
+    keep_L = findall(λ -> real(λ) > tol, Λ_L_full)
+    keep_R = findall(λ -> real(λ) > tol, Λ_R_full)
     
-    # Gauge transformation to canonical form:
-    # X = Λ_L^{1/2} U_L†  such that X l X† = I
-    # Y = Λ_R^{1/2} U_R†  such that Y r Y† = I
-    # Schmidt values = singular values of C = X Y† = Λ_L^{1/2} U_L† U_R Λ_R^{1/2}
-    X = Diagonal(sqrt.(Λ_L)) * U_L'
-    Y = Diagonal(sqrt.(Λ_R)) * U_R'
+    (isempty(keep_L) || isempty(keep_R)) && return 0.0, Float64[]
     
-    C = X * Y'
-    σ = svd(C).S
+    Λ_L = real.(Λ_L_full[keep_L])
+    Λ_R = real.(Λ_R_full[keep_R])
+    U_L = U_L_full[:, keep_L]
+    U_R = U_R_full[:, keep_R]
     
-    # Normalize Schmidt values
+    rank_L = length(Λ_L)
+    rank_R = length(Λ_R)
+    
+    # Gauge transformations
+    X = Diagonal(1.0 ./ sqrt.(Λ_L)) * U_L'
+    Y = Diagonal(1.0 ./ sqrt.(Λ_R)) * U_R'
+    
+    # Build transformed column tensor
+    C_transformed = zeros(ComplexF64, phys_dim, rank_L, rank_R)
+    
+    for s in 0:(phys_dim-1)
+        site_values = digits(s, base=2, pad=row) .+ 1
+        M_col = _contract_column_to_matrix(A_tensors, site_values, bond_dim, row)
+        C_transformed[s+1, :, :] = X * M_col * Y'
+    end
+    
+    # SVD
+    C_matrix = reshape(C_transformed, phys_dim * rank_L, rank_R)
+    σ = svd(C_matrix).S
     σ = σ ./ norm(σ)
     σ = filter(s -> s > tol, σ)
     
-    # Entanglement spectrum (λᵢ = σᵢ²) and entropy
+    isempty(σ) && return 0.0, Float64[]
+    
     spectrum = σ.^2
     S = -sum(p -> p > tol ? p * log(p) : 0.0, spectrum)
     
@@ -308,22 +343,55 @@ function _compute_bipartite_entanglement(rho_L, rho_R, tol)
 end
 
 """
+    _contract_column_to_matrix(A_tensors, phys_indices, bond_dim, row)
+
+Contract a single column with fixed physical indices.
+Returns boundary-to-boundary matrix.
+"""
+function _contract_column_to_matrix(A_tensors, phys_indices, bond_dim, row)
+    # A_tensors[r] has shape (physical=2, down, right, up, left)
+    tensors_fixed = [A_tensors[r][phys_indices[r], :, :, :, :] for r in 1:row]
+    
+    boundary_dim = bond_dim^(row+1)
+    M = zeros(ComplexF64, boundary_dim, boundary_dim)
+    
+    # Sum over internal vertical bonds
+    n_internal = row - 1
+    n_configs = bond_dim^n_internal
+    
+    for internal_config in 0:(n_configs-1)
+        internal_bonds = n_internal > 0 ? digits(internal_config, base=bond_dim, pad=n_internal) .+ 1 : Int[]
+        
+        for left_config in 0:(boundary_dim-1)
+            left_bonds = digits(left_config, base=bond_dim, pad=row+1) .+ 1
+            
+            for right_config in 0:(boundary_dim-1)
+                right_bonds = digits(right_config, base=bond_dim, pad=row+1) .+ 1
+                
+                col_amplitude = ComplexF64(1.0)
+                for r in 1:row
+                    A = tensors_fixed[r]  # [down, right, up, left]
+                    
+                    up_idx = (r == 1) ? left_bonds[1] : internal_bonds[r-1]
+                    down_idx = (r == row) ? left_bonds[1] : internal_bonds[r]
+                    left_idx = left_bonds[r+1]
+                    right_idx = right_bonds[r+1]
+                    
+                    col_amplitude *= A[down_idx, right_idx, up_idx, left_idx]
+                end
+                
+                M[left_config+1, right_config+1] += col_amplitude
+            end
+        end
+    end
+    
+    return M
+end
+
+"""
     multiline_mps_entanglement_from_params(params, p, row, nqubits; share_params=true, tol=1e-12)
 
-Compute multiline MPS entanglement directly from circuit parameters.
-
-# Arguments
-- `params`: Parameter vector for the quantum circuit
-- `p`: Number of circuit layers
-- `row`: Number of rows
-- `nqubits`: Number of qubits per gate
-- `share_params`: Whether parameters are shared across layers
-- `tol`: Tolerance for filtering
-
-# Returns
-- `S`: Entanglement entropy
-- `spectrum`: Entanglement spectrum
-- `gap`: Transfer matrix spectral gap
+Compute entanglement directly from circuit parameters.
 """
 function multiline_mps_entanglement_from_params(params::Vector{Float64}, p::Int, row::Int, nqubits::Int; 
                                                  share_params::Bool=true, tol::Float64=1e-12)
@@ -331,3 +399,95 @@ function multiline_mps_entanglement_from_params(params::Vector{Float64}, p::Int,
     return multiline_mps_entanglement(gates, row, nqubits; tol=tol)
 end
 
+# =============================================================================
+# Finite-Width Physical Entanglement
+# =============================================================================
+
+"""
+    multiline_mps_physical_entanglement(input, row, width; nqubits=nothing, tol=1e-12)
+
+Compute physical bipartite entanglement for a FINITE-width system.
+
+# Arguments
+- `input`: Vector of gate matrices or tensors
+- `row`: Number of rows
+- `width`: Number of columns (≤ 6 for row=3)
+- `nqubits`: Number of qubits per gate
+- `tol`: Tolerance
+
+# Returns
+- `S`: Entanglement entropy
+- `spectrum`: Schmidt values squared
+- `gap`: Transfer matrix gap
+"""
+function multiline_mps_physical_entanglement(input, row, width; nqubits=nothing, tol=1e-12)
+    if _is_tensor_input(input)
+        A_tensors = input
+        virtual_qubits, bond_dim = _infer_parameters_from_tensors(A_tensors)
+    else
+        nqubits === nothing && error("nqubits must be provided")
+        virtual_qubits = (nqubits - 1) ÷ 2
+        bond_dim = 2^virtual_qubits
+        A_tensors = gates_to_tensors(input, row, virtual_qubits)
+    end
+    
+    total_sites = row * width
+    phys_dim = 2
+    total_dim = phys_dim^total_sites
+    
+    total_sites > 20 && error("Too many sites ($total_sites). Use width ≤ $(20 ÷ row)")
+    
+    boundary_dim = bond_dim^(row+1)
+    ψ = zeros(ComplexF64, total_dim)
+    
+    # Build state vector
+    for config in 0:(total_dim-1)
+        site_values = digits(config, base=phys_dim, pad=total_sites) .+ 1
+        
+        M_product = Matrix{ComplexF64}(I, boundary_dim, boundary_dim)
+        for col in 1:width
+            col_phys = [site_values[(col-1)*row + r] for r in 1:row]
+            M_col = _contract_column_to_matrix(A_tensors, col_phys, bond_dim, row)
+            M_product = M_product * M_col
+        end
+        
+        ψ[config + 1] = tr(M_product)
+    end
+    
+    ψ = ψ / norm(ψ)
+    
+    # Bipartite SVD
+    left_sites = row * (width ÷ 2)
+    left_dim = phys_dim^left_sites
+    right_dim = phys_dim^(total_sites - left_sites)
+    
+    ψ_matrix = reshape(ψ, left_dim, right_dim)
+    σ = svd(ψ_matrix).S
+    σ = filter(s -> s > tol, σ)
+    
+    # Compute gap
+    _, T = contract_transfer_matrix(A_tensors, [conj(A) for A in A_tensors], row)
+    T_matrix = reshape(T, boundary_dim^2, boundary_dim^2)
+    eigs = abs.(eigvals(T_matrix))
+    eigs_sorted = sort(eigs, rev=true)
+    gap = length(eigs_sorted) > 1 ? -log(eigs_sorted[2] / eigs_sorted[1]) : Inf
+    
+    isempty(σ) && return 0.0, Float64[], gap
+    
+    S = -sum(λ -> λ > tol ? λ^2 * log(λ^2) : 0.0, σ)
+    spectrum = σ.^2
+    
+    return S, spectrum, gap
+end
+
+"""
+    multiline_mps_physical_entanglement_from_params(params, p, row, width, nqubits; share_params=true, tol=1e-12)
+
+Compute finite-width entanglement from circuit parameters.
+"""
+function multiline_mps_physical_entanglement_from_params(params::Vector{Float64}, p::Int, row::Int, 
+                                                          width::Int, nqubits::Int; 
+                                                          share_params::Bool=true, tol::Float64=1e-12)
+    gates = build_unitary_gate(params, p, row, nqubits; share_params=share_params)
+    return multiline_mps_physical_entanglement(gates, row, width; nqubits=nqubits, tol=tol)
+end

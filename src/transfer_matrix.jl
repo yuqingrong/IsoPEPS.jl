@@ -4,33 +4,50 @@
 # Functions for building and computing transfer matrix properties
 
 """
-    compute_transfer_spectrum(gates, row, virtual_qubits; num_eigenvalues=2, use_iterative=:auto, matrix_free=:auto)
+    compute_transfer_spectrum(gates, row, nqubits; channel_type=:virtual, num_eigenvalues=2, use_iterative=:auto, matrix_free=:auto)
 
 Compute the transfer matrix spectrum and fixed point.
 
 # Arguments
 - `gates`: Vector of gate matrices
 - `row`: Number of rows
-- `virtual_qubits`: Number of virtual qubits
+- `nqubits`: Number of qubits per gate (e.g., 3 for 8×8 gates with 1 virtual qubit)
+- `channel_type`: `:virtual` (default) or `:physical`
+  - `:virtual`: Virtual transfer matrix (contracts physical indices, virtual boundaries open)
+    - Matrix dimension: `bond_dim^(2*(row+1))`
+  - `:physical`: Physical channel (contracts virtual indices with environment)
+    - Matrix dimension: `2^row × 2^row`
+    - Requires computing virtual fixed point first
 - `num_eigenvalues`: Number of eigenvalues to compute (default: 2 for gap calculation)
 - `use_iterative`: `:auto` (default), `:always`, or `:never` for iterative solver
 - `matrix_free`: `:auto` (default), `:always`, or `:never` for matrix-free approach
   - When enabled, never forms the full transfer matrix (essential for large row)
+  - Only applies to `:virtual` channel_type
 
 # Returns
-- `rho`: Fixed point density matrix (normalized)
-- `gap`: Spectral gap = -log|λ₂| where λ₂ is second largest eigenvalue
+- `rho_or_E`: For `:virtual`: fixed point density matrix ρ; For `:physical`: physical channel matrix E
+- `gap`: Spectral gap = -log|λ₂/λ₁|
 - `eigenvalues`: Sorted eigenvalue magnitudes (top `num_eigenvalues` if iterative)
 - `eigenvalues_raw`: Raw complex eigenvalues (sorted by magnitude, descending)
 
 # Description
 Constructs the transfer matrix from gates and computes its spectral properties.
-For large systems (row >= 5), uses a matrix-free approach that never forms the full
-transfer matrix, instead computing T*v on-the-fly via tensor contraction.
-The spectral gap quantifies how quickly the channel converges to its fixed point.
+- For `:virtual`: The virtual transfer matrix propagates in the virtual boundary space.
+  The spectral gap quantifies correlation length in the horizontal direction.
+- For `:physical`: The physical channel maps physical ket states to physical bra states,
+  with virtual indices contracted using the fixed point ρ (left) and identity R (right).
 """
-function compute_transfer_spectrum(gates, row, nqubits; num_eigenvalues=2, use_iterative=:auto, matrix_free=:auto)
+function compute_transfer_spectrum(gates, row, nqubits; channel_type=:virtual, num_eigenvalues=2, use_iterative=:auto, matrix_free=:auto)
     virtual_qubits = (nqubits - 1) ÷ 2
+    
+    # Handle physical channel type
+    if channel_type == :physical
+        return _compute_physical_channel_spectrum(gates, row, nqubits, virtual_qubits; num_eigenvalues=num_eigenvalues)
+    elseif channel_type != :virtual
+        error("Unknown channel_type: $channel_type. Use :virtual or :physical")
+    end
+    
+    # Virtual channel computation (existing code)
     A_tensors = gates_to_tensors(gates, row, virtual_qubits)
 
     # Matrix size: bond_dim^(2*total_legs) where total_legs = row + 1 (periodic + row bonds)
@@ -126,6 +143,46 @@ function compute_transfer_spectrum(gates, row, nqubits; num_eigenvalues=2, use_i
     rho = fixed_point ./ tr(fixed_point)
     
     return rho, gap, eigenvalues, eigenvalues_raw
+end
+
+"""
+    _compute_physical_channel_spectrum(gates, row, nqubits, virtual_qubits; num_eigenvalues=2)
+
+Internal helper to compute the physical channel spectrum.
+
+First computes the virtual transfer matrix fixed point ρ, then builds the physical channel
+E using ρ as the left environment, and computes the spectrum of E.
+"""
+function _compute_physical_channel_spectrum(gates, row, nqubits, virtual_qubits; num_eigenvalues=2)
+    # Step 1: Compute virtual transfer matrix fixed point
+    rho_virtual, _, _, _ = compute_transfer_spectrum(gates, row, nqubits; 
+        channel_type=:virtual, num_eigenvalues=2, use_iterative=:auto, matrix_free=:auto)
+    
+    # Step 2: Build physical channel using the fixed point
+    E = get_physical_channel(gates, row, virtual_qubits, rho_virtual)
+    
+    # Step 3: Compute spectrum of physical channel
+    phys_dim = 2^row
+    
+    if phys_dim <= 64
+        # Full eigendecomposition for small matrices
+        eig_result = LinearAlgebra.eigen(E)
+        sorted_indices = sortperm(abs.(eig_result.values), rev=true)
+        eigenvalues_raw = eig_result.values[sorted_indices]
+        eigenvalues = abs.(eigenvalues_raw)
+    else
+        # Iterative solver for larger matrices
+        vals, vecs, info = KrylovKit.eigsolve(E, num_eigenvalues, :LM; 
+                                              ishermitian=false, krylovdim=max(30, 2*num_eigenvalues))
+        sorted_indices = sortperm(abs.(vals), rev=true)
+        eigenvalues_raw = vals[sorted_indices]
+        eigenvalues = abs.(eigenvalues_raw)
+    end
+    
+    # Compute spectral gap
+    gap = length(eigenvalues) > 1 && eigenvalues[1] > 0 ? -log(eigenvalues[2]/eigenvalues[1]) : Inf
+    
+    return E, gap, eigenvalues, eigenvalues_raw
 end
 
 """
@@ -269,6 +326,7 @@ function build_transfer_code(tensor_ket, tensor_bra, row; for_matvec=false, opti
     end
 end
 
+
 """
     gates_to_tensors(gates, row, virtual_qubits)
 
@@ -313,3 +371,172 @@ end
 _apply_transfer_to_vector(code, tensor_ket, tensor_bra, v_tensor, total_qubits) = 
     apply_transfer_matvec(code, tensor_ket, tensor_bra, v_tensor, total_qubits)
 
+
+
+
+"""
+    build_physical_channel_code(tensor_ket, tensor_bra, row, rho, R; optimizer=GreedyMethod())
+
+Build contraction code for physical channel (physical space → physical space).
+
+Unlike `build_transfer_code` which contracts physical indices and leaves virtual boundaries open,
+this function keeps physical indices open and contracts all virtual indices with environment tensors.
+
+Each tensor should have 5 legs: [physical, down, right, up, left].
+
+# Arguments
+- `tensor_ket`: Vector of ket tensors (length = row)
+- `tensor_bra`: Vector of bra tensors, typically conj.(tensor_ket)
+- `row`: Number of rows in the tensor network
+- `rho`: Left boundary environment tensor (fixed point density matrix)
+- `R`: Right boundary environment tensor (typically identity)
+- `optimizer`: Contraction order optimizer (default: GreedyMethod())
+
+# Returns
+- `code`: Optimized contraction code
+- `result`: Physical channel matrix of shape (2^row, 2^row)
+
+# Description
+The physical channel E maps physical ket states to physical bra states:
+    E[p_ket, p_bra] = Tr_virtual[ρ_left ⊗ A_ket ⊗ A_bra^† ⊗ R_right]
+
+This is useful for studying the quantum channel properties of the PEPS in physical space.
+"""
+function build_physical_channel_code(tensor_ket, tensor_bra, row, rho, R; optimizer=GreedyMethod())
+    store = IndexStore()
+    index_ket = Vector{Int}[]
+    index_bra = Vector{Int}[]
+    output_indices = Int[]
+    
+    bond_dim = size(tensor_ket[1], 2)  # down leg dimension
+    total_legs = row + 1  # periodic boundary index + row bonds
+       
+    index_rho = [newindex!(store) for _ in 1:2*total_legs]
+    index_R = [newindex!(store) for _ in 1:2*total_legs]
+    
+    first_down_ket = newindex!(store)
+    first_up_ket = newindex!(store)
+    first_down_bra = newindex!(store)
+    first_up_bra = newindex!(store)
+    prev_down_ket = first_down_ket
+    prev_down_bra = first_down_bra
+    
+    for i in 1:row
+       
+        phyidx_ket = newindex!(store)
+        phyidx_bra = newindex!(store)
+          
+        right_ket = index_R[1 + i]  # indices 2 to row+1 for ket right bonds
+        right_bra = index_R[total_legs + 1 + i]  # indices total_legs+2 to 2*total_legs for bra right bonds
+        
+        
+        left_ket = index_rho[1 + i]  # indices 2 to row+1 for ket left bonds
+        left_bra = index_rho[total_legs + 1 + i]  # indices total_legs+2 to 2*total_legs for bra left bonds
+      
+        if i == 1
+            up_ket = first_up_ket
+            up_bra = first_up_bra
+            down_ket = first_down_ket
+            down_bra = first_down_bra
+        else
+            up_ket = prev_down_ket
+            up_bra = prev_down_bra
+            down_ket = newindex!(store)
+            down_bra = newindex!(store)
+        end
+        
+        push!(index_ket, [phyidx_ket, down_ket, right_ket, up_ket, left_ket])
+        push!(index_bra, [phyidx_bra, down_bra, right_bra, up_bra, left_bra])
+        push!(output_indices, phyidx_ket)
+        
+        prev_down_ket = down_ket
+        prev_down_bra = down_bra
+    end
+    for i in 1:row
+        push!(output_indices, index_bra[i][1])
+    end
+    for k in 1:row, l in 1:5
+        if index_ket[k][l] == first_up_ket
+            index_ket[k][l] = index_rho[1]
+        end
+        if index_bra[k][l] == first_up_bra
+            index_bra[k][l] = index_rho[total_legs + 1]
+        end
+    end
+    last_down_ket = index_ket[row][2]
+    last_down_bra = index_bra[row][2]
+    
+    for k in 1:row, l in 1:5
+        if index_ket[k][l] == last_down_ket
+            index_ket[k][l] = index_R[1]
+        end
+        if index_bra[k][l] == last_down_bra
+            index_bra[k][l] = index_R[total_legs + 1]
+        end
+    end
+
+    all_indices = [index_ket..., index_bra..., collect(index_rho), collect(index_R)]
+    all_tensors = [tensor_ket..., tensor_bra..., rho, R]
+    
+    size_dict = OMEinsum.get_size_dict(all_indices, all_tensors)
+    code = optimize_code(DynamicEinCode(all_indices, output_indices), size_dict, optimizer)
+    
+    result = code(all_tensors...)
+    phys_dim = 2^row
+    result_matrix = reshape(result, phys_dim, phys_dim)
+    
+    return code, result_matrix
+end
+
+"""
+    get_physical_channel(gates, row, virtual_qubits, rho; R=nothing, optimizer=GreedyMethod())
+
+Build and return the physical channel matrix from gates.
+
+This is a convenience wrapper around `build_physical_channel_code` that handles
+tensor conversion and default environment construction.
+
+# Arguments
+- `gates`: Vector of gate matrices
+- `row`: Number of rows
+- `virtual_qubits`: Number of virtual qubits per bond
+- `rho`: Fixed point density matrix (from compute_transfer_spectrum)
+- `R`: Right boundary environment (default: identity matrix)
+- `optimizer`: Contraction optimizer
+
+# Returns
+- `E`: Physical channel matrix of shape (2^row, 2^row)
+
+# Example
+```julia
+gates = build_unitary_gate(params, p, row, nqubits)
+rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
+E = get_physical_channel(gates, row, virtual_qubits, rho)
+```
+"""
+function get_physical_channel(gates, row, virtual_qubits, rho; R=nothing, optimizer=GreedyMethod())
+    bond_dim = 2^virtual_qubits
+    total_legs = row + 1
+    total_qubits = virtual_qubits * total_legs
+    
+    # Prepare environment tensors
+    env_size = ntuple(_ -> bond_dim, 2*total_legs)
+    rho_tensor = reshape(rho, env_size...)
+    
+    # Default R is identity
+    if R === nothing
+        R_matrix = Matrix{ComplexF64}(I, bond_dim^total_legs, bond_dim^total_legs)
+        R_tensor = reshape(R_matrix, env_size...)
+    else
+        R_tensor = reshape(R, env_size...)
+    end
+    
+    # Convert gates to tensors
+    A_tensors = gates_to_tensors(gates, row, virtual_qubits)
+    tensor_ket = A_tensors
+    tensor_bra = [conj(A) for A in A_tensors]
+    
+    # Build and return physical channel
+    _, E = build_physical_channel_code(tensor_ket, tensor_bra, row, rho_tensor, R_tensor; optimizer=optimizer)
+    return E
+end

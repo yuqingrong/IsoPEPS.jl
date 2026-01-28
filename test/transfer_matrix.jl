@@ -357,3 +357,130 @@ end
     end
 end
 
+@testset "physical_channel_product_state" begin
+    # For product physical state + maximally mixed virtual environment:
+    # The physical channel should be rank-1 (only one non-zero eigenvalue)
+    # 
+    # Physical interpretation:
+    # - Product state tensor: physical output is always |0⟩ regardless of virtual indices
+    # - Maximally mixed ρ: no correlations in the virtual boundary
+    # - Result: all physical outputs collapse to the same state → rank-1 channel
+    
+    virtual_qubits = 1
+    bond_dim = 2^virtual_qubits
+    
+    for row in [1, 2]
+        @testset "row=$row" begin
+            # Create product state tensor: A[p,d,r,u,l] = δ_{p,1} * uniform(d,r,u,l)
+            # Physical always outputs |0⟩, virtual indices are uniformly weighted
+            A = zeros(ComplexF64, 2, bond_dim, bond_dim, bond_dim, bond_dim)
+            normalization = 1.0 / bond_dim^2  # Normalize so that Σ |A|² = 1
+            for d in 1:bond_dim, r in 1:bond_dim, u in 1:bond_dim, l in 1:bond_dim
+                A[1, d, r, u, l] = normalization  # Only p=1 (|0⟩ state)
+            end
+            
+            A_tensors = [A for _ in 1:row]
+            tensor_ket = A_tensors
+            tensor_bra = [conj(A) for A in A_tensors]
+            
+            # Maximally mixed rho = I / d (normalized identity)
+            total_legs = row + 1
+            env_dim = bond_dim^total_legs
+            rho_matrix = Matrix{ComplexF64}(I, env_dim, env_dim) / env_dim
+            env_size = ntuple(_ -> bond_dim, 2*total_legs)
+            rho_tensor = reshape(rho_matrix, env_size...)
+            
+            # R = Identity (default right boundary)
+            R_matrix = Matrix{ComplexF64}(I, env_dim, env_dim)
+            R_tensor = reshape(R_matrix, env_size...)
+            
+            # Build physical channel
+            _, E = IsoPEPS.build_physical_channel_code(tensor_ket, tensor_bra, row, rho_tensor, R_tensor)
+            
+            # Compute singular values to check rank
+            σ = svdvals(E)
+            
+            # Filter out numerical zeros
+            tol = 1e-10
+            nonzero_singular_values = filter(s -> s > tol, σ)
+            
+            # Should have exactly 1 non-zero singular value (rank-1)
+            @test length(nonzero_singular_values) == 1
+            
+            # Alternative check: eigenvalue spectrum
+            eigenvalues = eigvals(E)
+            nonzero_eigenvalues = filter(λ -> abs(λ) > tol, eigenvalues)
+            @test length(nonzero_eigenvalues) == 1
+        end
+    end
+end
+
+@testset "physical_vs_virtual_channel_rank" begin
+    # Compare physical channel vs virtual transfer matrix using a known analytical tensor
+    # 
+    # MPS tensor structure (diagonal in virtual indices):
+    #   A[physical=0, virtual] = δ_{left,right} * 1.0
+    #   A[physical=1, virtual] = δ_{left,right} * λ
+    # 
+    # This tensor has non-trivial virtual correlations but simple physical structure.
+    # - Virtual transfer matrix: should have rank > 1 (multiple virtual configurations)
+    # - Physical channel: depends on the environment
+    
+    λ = 0.5
+    bond_dim = 2
+    
+    for row in [1, 2]
+        @testset "row=$row" begin
+            # Create diagonal PEPS tensor (5 legs: physical, down, right, up, left)
+            # All virtual indices must match for non-zero amplitude
+            A = zeros(Float64, 2, bond_dim, bond_dim, bond_dim, bond_dim)
+            # physical = 0 (index 1): amplitude 1.0 when all virtual indices match
+            A[1, 1, 1, 1, 1] = 1.0
+            A[1, 2, 2, 2, 2] = 1.0
+            # physical = 1 (index 2): amplitude λ when all virtual indices match
+            A[2, 1, 1, 1, 1] = λ
+            A[2, 2, 2, 2, 2] = λ
+            
+            A_tensors = [A for _ in 1:row]
+            tensor_ket = A_tensors
+            tensor_bra = [conj(A) for A in A_tensors]
+            
+            total_legs = row + 1
+            env_dim = bond_dim^total_legs
+            tol = 1e-10
+            
+            # Virtual transfer matrix (contracts physical, leaves virtual open)
+            _, T_tensor = contract_transfer_matrix(tensor_ket, tensor_bra, row)
+            matrix_size = env_dim^2
+            T_virtual = reshape(T_tensor, matrix_size, matrix_size)
+            
+            σ_virtual = svdvals(T_virtual)
+            nonzero_singular_values_virtual = filter(s -> s > tol, σ_virtual)
+            
+            # Virtual transfer matrix should have rank > 1
+            # (there are 2 distinct virtual configurations: all-0 and all-1)
+            @test length(nonzero_singular_values_virtual) > 1
+            
+            # Physical channel with maximally mixed rho
+            rho_matrix = Matrix{ComplexF64}(I, env_dim, env_dim) / env_dim
+            env_size = ntuple(_ -> bond_dim, 2*total_legs)
+            rho_tensor = reshape(rho_matrix, env_size...)
+            
+            R_matrix = Matrix{ComplexF64}(I, env_dim, env_dim)
+            R_tensor = reshape(R_matrix, env_size...)
+            
+            _, E = IsoPEPS.build_physical_channel_code(tensor_ket, tensor_bra, row, rho_tensor, R_tensor)
+            
+            σ_physical = svdvals(E)
+            nonzero_singular_values_physical = filter(s -> s > tol, σ_physical)
+            
+            # Physical channel should have rank >= 1
+            @test length(nonzero_singular_values_physical) >= 1
+            
+            @info "row=$row (λ=$λ): Physical channel rank=$(length(nonzero_singular_values_physical)), Virtual TM rank=$(length(nonzero_singular_values_virtual))"
+            @info "  Physical channel singular values: $(round.(σ_physical, digits=4))"
+            @info "  Virtual TM top singular values: $(round.(σ_virtual[1:min(4,end)], digits=4))"
+        end
+    end
+end
+

@@ -86,10 +86,10 @@ end
 
 simulation(;
     J=1.0,
-    g_values=[1.0],
-    row=3,
+    g_values=[2.0],
+    row=2,
     p=3,
-    nqubits=3,
+    nqubits=5,
     maxiter=3000,
     measure_first=:Z,
     seed=42,
@@ -98,8 +98,8 @@ simulation(;
     share_params=true,
     conv_step=100,
     samples=1000,
-    n_runs=11,
+    n_runs=44,
     abstol=1e-10,
     sigma0=1.0,
     popsize=30,
-    zz_weight=5.0)
+    zz_weight=9.0)
