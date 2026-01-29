@@ -491,3 +491,111 @@ function multiline_mps_physical_entanglement_from_params(params::Vector{Float64}
     gates = build_unitary_gate(params, p, row, nqubits; share_params=share_params)
     return multiline_mps_physical_entanglement(gates, row, width; nqubits=nqubits, tol=tol)
 end
+
+# =============================================================================
+# Infinite-Width Physical Entanglement via Physical Channel
+# =============================================================================
+
+"""
+    multiline_mps_physical_entanglement_infinite(input, row; nqubits=nothing, tol=1e-12)
+
+Compute physical bipartite entanglement for an INFINITE-width system using the physical channel.
+
+This function computes the correct physical entanglement when the virtual transfer matrix
+has degenerate eigenvalues (all ~1). It uses the physical channel fixed point instead of
+the virtual transfer matrix fixed point.
+
+# Arguments
+- `input`: Vector of gate matrices or tensors
+- `row`: Number of rows
+- `nqubits`: Number of qubits per gate (required for gate matrices)
+- `tol`: Tolerance for filtering small eigenvalues
+
+# Returns
+- `S`: Physical entanglement entropy (von Neumann entropy of physical channel fixed point)
+- `spectrum`: Eigenvalues of the physical fixed point (probabilities)
+- `gap`: Physical channel spectral gap
+
+# Notes
+For isometric PEPS:
+- When the physical channel has a large gap, the physical state is close to a product state
+- The entropy S should be small in this case
+- This differs from `multiline_mps_entanglement` which computes virtual bond entanglement
+"""
+function multiline_mps_physical_entanglement_infinite(input, row; nqubits=nothing, tol=1e-12)
+    # Get tensors and parameters
+    if _is_tensor_input(input)
+        A_tensors = input
+        virtual_qubits, bond_dim = _infer_parameters_from_tensors(A_tensors)
+        nqubits_computed = 2 * virtual_qubits + 1
+    else
+        nqubits === nothing && error("nqubits must be provided for gate matrices")
+        virtual_qubits = (nqubits - 1) ÷ 2
+        bond_dim = 2^virtual_qubits
+        nqubits_computed = nqubits
+        A_tensors = gates_to_tensors(input, row, virtual_qubits)
+    end
+    
+    total_legs = row + 1
+    env_dim = bond_dim^total_legs
+    phys_dim = 2^row
+    
+    # Step 1: Compute virtual transfer matrix fixed point (needed for physical channel)
+    _, T = contract_transfer_matrix(A_tensors, [conj(A) for A in A_tensors], row)
+    T_matrix = reshape(T, env_dim^2, env_dim^2)
+    
+    # Get virtual fixed points
+    eig_result = eigen(T_matrix)
+    sorted_idx = sortperm(abs.(eig_result.values), rev=true)
+    rho_virtual = reshape(eig_result.vectors[:, sorted_idx[1]], env_dim, env_dim)
+    rho_virtual = rho_virtual ./ tr(rho_virtual)
+    
+    # Step 2: Build physical channel using virtual fixed point
+    E = get_physical_channel(input, row, virtual_qubits, rho_virtual)
+    
+    # Step 3: Compute physical channel spectrum and fixed point
+    E_eig = eigen(E)
+    E_sorted_idx = sortperm(abs.(E_eig.values), rev=true)
+    E_eigenvalues = abs.(E_eig.values[E_sorted_idx])
+    
+    # Physical channel gap
+    gap = length(E_eigenvalues) > 1 && E_eigenvalues[1] > tol ? 
+          -log(E_eigenvalues[2] / E_eigenvalues[1]) : Inf
+    
+    # Fixed point of physical channel (dominant eigenvector)
+    # This is a vector of length phys_dim representing the stationary distribution
+    # The physical channel E is phys_dim × phys_dim, so its eigenvector has length phys_dim
+    sigma_vec = E_eig.vectors[:, E_sorted_idx[1]]
+    
+    # The fixed point represents probabilities over physical configurations
+    # Take absolute value squared to get probabilities (eigenvector can have complex phases)
+    probs = abs.(sigma_vec).^2
+    
+    # Normalize to get probability distribution
+    probs = probs ./ sum(probs)
+    
+    # Filter small probabilities
+    probs_filtered = filter(p -> p > tol, probs)
+    
+    if isempty(probs_filtered)
+        return 0.0, Float64[], gap
+    end
+    
+    # Renormalize after filtering
+    probs_filtered = probs_filtered ./ sum(probs_filtered)
+    
+    # Shannon entropy of the probability distribution
+    # This is the physical entanglement entropy in the infinite system limit
+    S = -sum(p -> p > tol ? p * log(p) : 0.0, probs_filtered)
+    
+    return S, probs_filtered, gap
+end
+
+"""
+    multiline_mps_physical_entanglement_infinite(gates, row, nqubits::Int; tol=1e-12)
+
+Backward compatible version with positional nqubits argument.
+"""
+function multiline_mps_physical_entanglement_infinite(gates, row, nqubits::Int; tol=1e-12)
+    return multiline_mps_physical_entanglement_infinite(gates, row; nqubits=nqubits, tol=tol)
+end

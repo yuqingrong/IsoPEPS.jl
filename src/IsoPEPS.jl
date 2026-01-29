@@ -81,8 +81,8 @@ export optimize_circuit, optimize_exact, optimize_manifold, initialize_tfim_para
 # Exact Tensor Contraction - Transfer Matrix
 # =============================================================================
 export compute_transfer_spectrum, compute_single_transfer
-export contract_transfer_matrix, gates_to_tensors, get_transfer_matrix
-export build_transfer_code, apply_transfer_matvec
+export contract_transfer_matrix, gates_to_tensors, get_transfer_matrix, get_physical_channel
+export build_transfer_code, build_physical_channel_code, apply_transfer_matvec
 
 # =============================================================================
 # Exact Tensor Contraction - Observables
@@ -96,6 +96,7 @@ export compute_exact_energy
 export mps_bond_entanglement, mps_physical_entanglement, mps_physical_entanglement_infinite
 export multiline_mps_entanglement, multiline_mps_entanglement_from_params
 export multiline_mps_physical_entanglement, multiline_mps_physical_entanglement_from_params
+export multiline_mps_physical_entanglement_infinite
 
 # =============================================================================
 # Diagnostics (defined in visualization.jl)
@@ -112,6 +113,6 @@ export mpskit_ground_state, mpskit_ground_state_1d, pepskit_ground_state
 export save_result, load_result, save_results, load_results
 export plot_acf, compute_acf, fit_acf, fit_acf_exponential
 export plot_training_history, plot_variance_vs_samples, plot_expectation_values
-export plot_corr_scale
+export plot_corr_scale, plot_channel_analysis
 export plot_eigenvalue_spectrum, reconstruct_gates, plot_diagnosis
 end

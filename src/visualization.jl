@@ -1378,3 +1378,152 @@ function plot_diagnosis(diag::NamedTuple;
     
     return fig
 end
+
+# =============================================================================
+# Channel Analysis Visualization
+# =============================================================================
+
+"""
+    plot_channel_analysis(result::CircuitOptimizationResult; row=nothing, p=nothing, nqubits=nothing, 
+                          g=nothing, share_params=true, save_path=nothing)
+
+Plot channel analysis showing entropy and spectral gaps for both virtual and physical channels.
+
+# Arguments
+- `result`: CircuitOptimizationResult from optimization
+- `row`: Number of rows
+- `p`: Number of layers
+- `nqubits`: Number of qubits per gate
+- `g`: Transverse field strength (for title)
+- `share_params`: Whether parameters are shared across rows
+- `save_path`: Path to save figure (optional)
+
+# Returns
+- `fig`: Figure object
+- `analysis`: NamedTuple with (S_virtual, gap_virtual, S_physical, gap_physical)
+
+# Description
+Computes and visualizes:
+- Virtual bond entropy (from virtual transfer matrix)
+- Virtual channel spectral gap
+- Physical entropy (from physical channel fixed point)
+- Physical channel spectral gap
+
+When physical gap is large but physical entropy is small, this confirms the 
+physical state is close to a product state despite potentially large virtual entanglement.
+"""
+function plot_channel_analysis(result::CircuitOptimizationResult;
+                                row::Union{Int,Nothing}=nothing,
+                                p::Union{Int,Nothing}=nothing,
+                                nqubits::Union{Int,Nothing}=nothing,
+                                g::Union{Real,Nothing}=nothing,
+                                share_params::Bool=true,
+                                save_path::Union{String,Nothing}=nothing)
+    
+    # Check required parameters
+    if isnothing(row) || isnothing(p) || isnothing(nqubits)
+        error("row, p, and nqubits must be provided for channel analysis")
+    end
+    
+    if isempty(result.final_params)
+        error("No parameters available in result")
+    end
+    
+    # Reconstruct gates
+    gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
+    
+    # Compute virtual channel entropy and gap
+    S_virtual, spectrum_virtual, gap_virtual = multiline_mps_entanglement(gates, row; nqubits=nqubits)
+    
+    # Compute physical channel entropy and gap
+    S_physical, probs_physical, gap_physical = multiline_mps_physical_entanglement_infinite(gates, row; nqubits=nqubits)
+    
+    # Create figure
+    fig = Figure(size=(800, 450))
+    
+    # Generate title
+    title_str = "Channel Analysis"
+    if !isnothing(g) && !isnothing(row) && !isnothing(nqubits)
+        title_str = "Channel Analysis: row=$row, g=$g, nqubits=$nqubits"
+    elseif !isnothing(row) && !isnothing(nqubits)
+        title_str = "Channel Analysis: row=$row, nqubits=$nqubits"
+    end
+    
+    Label(fig[0, 1:2], title_str, fontsize=16, font=:bold)
+    
+    # Left panel: Entropy comparison
+    ax1 = Axis(fig[1, 1],
+               xlabel="Entropy Type",
+               ylabel="Entropy (nats)",
+               title="Entanglement Entropy",
+               xticks=(1:2, ["Virtual Bond", "Physical"]))
+    
+    colors = [:steelblue, :coral]
+    barplot!(ax1, [1, 2], [S_virtual, S_physical], 
+             color=colors,
+             strokewidth=1, strokecolor=:black)
+    
+    # Add maximum entropy reference line: S_max = log(2^(row+1)) = (row+1) * log(2)
+    S_max = (row + 1) * log(2)
+    hlines!(ax1, [S_max], color=:gray40, linestyle=:dash, linewidth=2)
+    
+    # Add label for S_max line with description and value (positioned above the line, inside plot)
+    text!(ax1, 1.5, S_max + 0.08; 
+          text="Smax = log(2^$(row+1)) = $(round(S_max, digits=2))", 
+          align=(:center, :bottom), fontsize=10, color=:gray40)
+    
+    # Add value labels
+    y_offset = max(S_virtual, S_physical, S_max) * 0.05 + 0.01
+    text!(ax1, 1, S_virtual + y_offset; text=string(round(S_virtual, digits=3)), 
+          align=(:center, :bottom), fontsize=11)
+    text!(ax1, 2, S_physical + y_offset; text=string(round(S_physical, digits=3)), 
+          align=(:center, :bottom), fontsize=11)
+    
+    # Set y-axis limit to include S_max
+    ylims!(ax1, 0, max(S_virtual, S_physical, S_max) * 1.15 + 0.1)
+    
+    # Right panel: Gap comparison
+    ax2 = Axis(fig[1, 2],
+               xlabel="Channel Type",
+               ylabel="Spectral Gap",
+               title="Channel Spectral Gaps",
+               xticks=(1:2, ["Virtual", "Physical"]))
+    
+    barplot!(ax2, [1, 2], [gap_virtual, gap_physical], 
+             color=colors,
+             strokewidth=1, strokecolor=:black)
+    
+    # Add value labels
+    y_offset_gap = max(gap_virtual, gap_physical) * 0.05 + 0.02
+    text!(ax2, 1, gap_virtual + y_offset_gap; text=string(round(gap_virtual, digits=3)), 
+          align=(:center, :bottom), fontsize=11)
+    text!(ax2, 2, gap_physical + y_offset_gap; text=string(round(gap_physical, digits=3)), 
+          align=(:center, :bottom), fontsize=11)
+    
+    # Set y-axis limit
+    ylims!(ax2, 0, max(gap_virtual, gap_physical) * 1.3 + 0.1)
+    
+    # Add interpretation note
+    if gap_physical > 1.0 && S_physical < 0.1
+        note = "Physical state is close to a product state"
+        Label(fig[2, 1:2], note, fontsize=11, color=:gray50, halign=:center)
+    end
+    
+    # Save if requested
+    if !isnothing(save_path)
+        save(save_path, fig)
+        @info "Figure saved to $save_path"
+    end
+    
+    # Return figure and analysis data
+    analysis = (
+        S_virtual = S_virtual,
+        gap_virtual = gap_virtual,
+        spectrum_virtual = spectrum_virtual,
+        S_physical = S_physical,
+        gap_physical = gap_physical,
+        probs_physical = probs_physical
+    )
+    
+    return fig, analysis
+end

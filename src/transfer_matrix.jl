@@ -142,6 +142,15 @@ function compute_transfer_spectrum(gates, row, nqubits; channel_type=:virtual, n
     end
     rho = fixed_point ./ tr(fixed_point)
     
+    # Assert that the dominant eigenvalue magnitude is approximately 1
+    # For isometric PEPS, the transfer matrix should satisfy |λ₁| = 1
+    @assert isapprox(eigenvalues[1], 1.0, atol=1e-6) """
+        Transfer matrix dominant eigenvalue |λ₁| = $(eigenvalues[1]) ≠ 1.
+        This indicates the gates are not properly normalized/isometric.
+        For isometric PEPS, we require |λ₁| = 1.
+        Check that gates satisfy U†U = I (isometry condition).
+        """
+    
     return rho, gap, eigenvalues, eigenvalues_raw
 end
 
@@ -150,18 +159,45 @@ end
 
 Internal helper to compute the physical channel spectrum.
 
-First computes the virtual transfer matrix fixed point ρ, then builds the physical channel
-E using ρ as the left environment, and computes the spectrum of E.
+First computes the virtual transfer matrix fixed points (left ρ and right R), then builds 
+the physical channel E using both fixed points, and computes the spectrum of E.
+
+For a proper trace-preserving quantum channel, we need both left and right fixed points
+and proper normalization so that the dominant eigenvalue is exactly 1.
 """
 function _compute_physical_channel_spectrum(gates, row, nqubits, virtual_qubits; num_eigenvalues=2)
-    # Step 1: Compute virtual transfer matrix fixed point
-    rho_virtual, _, _, _ = compute_transfer_spectrum(gates, row, nqubits; 
-        channel_type=:virtual, num_eigenvalues=2, use_iterative=:auto, matrix_free=:auto)
+    # Step 1: Build full transfer matrix and compute both fixed points
+    T = get_transfer_matrix(gates, row, virtual_qubits)
+    matrix_size = size(T, 1)
+    bond_dim = 2^virtual_qubits
+    total_legs = row + 1
     
-    # Step 2: Build physical channel using the fixed point
-    E = get_physical_channel(gates, row, virtual_qubits, rho_virtual)
+    # Compute left fixed point (dominant right eigenvector): T * ρ = λ₁ * ρ
+    vals_left, vecs_left, _ = KrylovKit.eigsolve(T, randn(ComplexF64, matrix_size), 2, :LM;
+                                                  ishermitian=false, krylovdim=max(30, 4))
+    sorted_idx_left = sortperm(abs.(vals_left), rev=true)
+    λ₁ = vals_left[sorted_idx_left[1]]  # Dominant eigenvalue of transfer matrix
+    rho_vec = vecs_left[sorted_idx_left[1]]
+    rho_virtual = reshape(rho_vec, Int(sqrt(matrix_size)), Int(sqrt(matrix_size)))
+    rho_virtual = rho_virtual ./ tr(rho_virtual)  # Normalize trace to 1
+    
+    # Compute right fixed point (dominant left eigenvector): R * T = λ₁ * R, or T' * R = λ₁ * R
+    vals_right, vecs_right, _ = KrylovKit.eigsolve(T', randn(ComplexF64, matrix_size), 2, :LM;
+                                                    ishermitian=false, krylovdim=max(30, 4))
+    sorted_idx_right = sortperm(abs.(vals_right), rev=true)
+    R_vec = vecs_right[sorted_idx_right[1]]
+    R_virtual = reshape(R_vec, Int(sqrt(matrix_size)), Int(sqrt(matrix_size)))
+    
+    # Normalize so that tr(ρ · R) = 1
+    norm_factor = tr(rho_virtual * R_virtual)
+    R_virtual = R_virtual ./ norm_factor
+    
+    # Step 2: Build physical channel using both fixed points
+    E = get_physical_channel(gates, row, virtual_qubits, rho_virtual; R=R_virtual)
     
     # Step 3: Compute spectrum of physical channel
+    # Note: The physical channel eigenvalue is bounded by |λ₁| of the transfer matrix.
+    # If |λ₁| < 1, the physical channel dominant eigenvalue will also be < 1.
     phys_dim = 2^row
     
     if phys_dim <= 64

@@ -1,6 +1,7 @@
 using IsoPEPS
 using PEPSKit
 using JSON3
+using CairoMakie
 
 """
     run_pepskit_scan(; d=2, D=2, J=1.0, g_values=0.0:0.25:4.0, χ=10, 
@@ -89,6 +90,47 @@ function run_pepskit_scan(; d::Int=2, D::Int=2, J::Float64=1.0,
     return results
 end
 
+"""
+    plot_pepskit_energy(json_file::String; save_path=nothing)
+
+Plot ground state energy vs transverse field g from pepskit results.
+
+# Arguments
+- `json_file`: Path to the pepskit results JSON file
+- `save_path`: Optional path to save the figure
+
+# Returns
+- `fig`: Makie Figure object
+"""
+function plot_pepskit_energy(json_file::String; save_path=nothing)
+    # Load JSON data
+    data = JSON3.read(read(json_file, String))
+    
+    g_values = collect(data.g_values)
+    energies = collect(data.energies)
+    D = data.parameters.D
+    
+    # Create figure
+    fig = Figure(size=(600, 400))
+    ax = Axis(fig[1, 1],
+              xlabel="g (transverse field)",
+              ylabel="Energy",
+              title="TFIM Ground State Energy (PEPSKit D=$D)")
+    
+    # Plot energy vs g
+    scatterlines!(ax, g_values, energies, 
+                  color=:steelblue, marker=:circle, markersize=8,
+                  linewidth=2, label="E(g)")
+    
+    # Save if requested
+    if !isnothing(save_path)
+        save(save_path, fig)
+        println("Figure saved to $save_path")
+    end
+    
+    return fig
+end
+
 # Run the scan
 if abspath(PROGRAM_FILE) == @__FILE__
     results = run_pepskit_scan(
@@ -103,3 +145,5 @@ if abspath(PROGRAM_FILE) == @__FILE__
         output_file = joinpath(@__DIR__, "results", "pepskit_results_D=4_χ=20.json")
     )
 end
+
+plot_pepskit_energy("project/results/pepskit_results_D=2.json")

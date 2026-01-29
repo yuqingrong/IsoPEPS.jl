@@ -27,6 +27,7 @@ function analyze_result(filename::String; pepskit_results_file::Union{String,Not
     row = get(input_args, :row, nothing)
     p = get(input_args, :p, nothing)
     nqubits = get(input_args, :nqubits, nothing)
+    share_params = get(input_args, :share_params, true)
     
     if !isnothing(g)
         println("\nModel parameters:")
@@ -50,6 +51,24 @@ function analyze_result(filename::String; pepskit_results_file::Union{String,Not
     fig_exp = plot_expectation_values(result; g=g, J=J, row=row, p=p, nqubits=nqubits, use_exact=use_exact)
     display(fig_exp)
     
+    # Compute entropy and channel gaps if parameters are available
+    fig_channels = nothing
+    analysis = nothing
+    if !isnothing(row) && !isnothing(p) && !isnothing(nqubits) && !isempty(result.final_params)
+        println("\n=== Channel Analysis ===")
+        
+        # Use plot_channel_analysis from visualization.jl
+        fig_channels, analysis = plot_channel_analysis(result;
+            row=row, p=p, nqubits=nqubits, g=g, share_params=share_params)
+        
+        println("Virtual bond entropy: ", round(analysis.S_virtual, digits=4))
+        println("Virtual channel gap: ", round(analysis.gap_virtual, digits=4))
+        println("Physical entropy: ", round(analysis.S_physical, digits=4))
+        println("Physical channel gap: ", round(analysis.gap_physical, digits=4))
+        
+        display(fig_channels)
+    end
+    
     # Save figures to project/results/figures
     figures_dir = joinpath(@__DIR__, "results", "figures")
     mkpath(figures_dir)
@@ -66,6 +85,13 @@ function analyze_result(filename::String; pepskit_results_file::Union{String,Not
     exp_fig_path = joinpath(figures_dir, "$(base_name)_expectation_values.pdf")
     save(exp_fig_path, fig_exp)
     println("Saved expectation values figure to: $exp_fig_path")
+    
+    # Save channel analysis figure if computed
+    if !isnothing(fig_channels)
+        channels_fig_path = joinpath(figures_dir, "$(base_name)_channel_analysis.pdf")
+        save(channels_fig_path, fig_channels)
+        println("Saved channel analysis figure to: $channels_fig_path")
+    end
     
     return result, input_args
 end
@@ -674,7 +700,7 @@ function run_energy_evolution(file1::String, file2::String; n_runs=50, conv_step
 end
 # Example usage (commented out)
 # Analyze a single result
-J=1.0;g = 2.0; row=2 ; nqubits=3; p=3; virtual_qubits=1;D=2
+J=1.0;g = 0.5; row=3 ; nqubits=3; p=3; virtual_qubits=1;D=2
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
@@ -682,13 +708,17 @@ result, args = analyze_result(datafile; pepskit_results_file=referfile)
 # Reconstruct gates and analyze
 
 gates, rho, gap, eigenvalues = reconstruct_gates(datafile; use_iterative=false, matrix_free=false)
-S, spectrum,_ = multiline_mps_entanglement(gates, row; nqubits=nqubits)
-
+eigenvalues
 tensors = gates_to_tensors(gates, row, virtual_qubits)
-A = ein"iabcd,jefah -> ijefbcdh"(tensors[1], tensors[2])
-A = reshape(A, 4, 2, 4, 2, 4)
-A = reshape(A, 4, 8,8)
-S, σ = mps_physical_entanglement(A, 10; tol=1e-12)
+A = reshape(tensors[1], 2,4,4)
+E = get_physical_channel(gates, row, virtual_qubits, rho)
+eigenvalues = eigvals(E)
+gap = -log(abs(eigenvalues[end-1]/eigenvalues[end]))
+
+
+S, σ = mps_physical_entanglement_infinite(A; tol=1e-12)
+S, spectrum,_ = multiline_mps_physical_entanglement_infinite(gates, row; nqubits=nqubits)
+
 
 rho, Z_samples, X_samples=sample_quantum_channel(gates, row, nqubits; conv_step=100, samples=100000, measure_first=:Z)
 energy = compute_energy(X_samples[100:end], Z_samples[100:end], g, J, row) |> println
@@ -697,7 +727,7 @@ energy = compute_energy(X_samples[100:end], Z_samples[100:end], g, J, row) |> pr
 save(joinpath(dirname(datafile), replace(basename(datafile), ".json" => "_eigenvalues.pdf")), fig)
 println("Energy: $energy")
 # Analyze autocorrelation (using saved samples)
-lags, acf, fit_params = analyze_acf(datafile, row; max_lag=100, resample=false, samples=1000000)
+lags, acf, fit_params = analyze_acf(datafile, row; max_lag=10, resample=false, samples=1000000)
 
 data_dir = joinpath(@__DIR__, "results")
 datafile1 = joinpath(data_dir, "circuit_J=1.0_g=2.0_row=2_nqubits=3_ones.json")
