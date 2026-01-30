@@ -86,9 +86,9 @@ end
 
 simulation(;
     J=1.0,
-    g_values=[2.0],
+    g_values=[1.0],
     row=2,
-    p=2,
+    p=3,
     nqubits=3,
     maxiter=3000,
     measure_first=:Z,
@@ -102,4 +102,4 @@ simulation(;
     abstol=1e-10,
     sigma0=1.0,
     popsize=30,
-    zz_weight=5.0)
+    zz_weight=0.0)

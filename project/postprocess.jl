@@ -700,7 +700,7 @@ function run_energy_evolution(file1::String, file2::String; n_runs=50, conv_step
 end
 # Example usage (commented out)
 # Analyze a single result
-J=1.0;g = 0.5; row=3 ; nqubits=3; p=3; virtual_qubits=1;D=2
+J=1.0;g = 1.0; row=2 ; nqubits=3; p=3; virtual_qubits=1;D=2
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
@@ -727,7 +727,7 @@ energy = compute_energy(X_samples[100:end], Z_samples[100:end], g, J, row) |> pr
 save(joinpath(dirname(datafile), replace(basename(datafile), ".json" => "_eigenvalues.pdf")), fig)
 println("Energy: $energy")
 # Analyze autocorrelation (using saved samples)
-lags, acf, fit_params = analyze_acf(datafile, row; max_lag=10, resample=false, samples=1000000)
+lags, acf, fit_params = analyze_acf(datafile, row; max_lag=100, resample=false, samples=1000000)
 
 data_dir = joinpath(@__DIR__, "results")
 datafile1 = joinpath(data_dir, "circuit_J=1.0_g=2.0_row=2_nqubits=3_ones.json")

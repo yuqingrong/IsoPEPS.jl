@@ -513,9 +513,131 @@ function fit_acf(lags::AbstractVector, acf::AbstractVector;
 end
 
 """
+    fit_acf_oscillatory(lags::AbstractVector, acf::AbstractVector; fit_range=nothing, include_zero=false)
+
+Fit ACF data using damped oscillatory model for complex eigenvalues:
+    C(r) = A · exp(-r/ξ) · cos(k·r + φ)
+
+This corresponds to a complex second eigenvalue λ₂ = |λ₂|·e^{iθ} where:
+- |λ₂| = exp(-1/ξ)
+- θ = k (wavevector)
+
+# Arguments
+- `lags`: Lag values
+- `acf`: ACF values (real part will be used for fitting)
+- `fit_range`: (start_lag, end_lag) range for fitting (default: use all data)
+- `include_zero`: Whether to include lag=0 in fitting (default: false)
+
+# Returns
+- `NamedTuple` with fields:
+  - `A`: Amplitude
+  - `ξ`: Correlation length (decay constant)
+  - `k`: Wavevector (oscillation frequency)
+  - `phase`: Phase offset φ
+  - `λ₂_magnitude`: |λ₂| = exp(-1/ξ)
+  - `λ₂_phase`: θ = k (eigenvalue phase)
+  - `fit_lags`: Lags used for fitting
+  - `model`: Fitted model function
+
+# Example
+```julia
+lags, acf, acf_err = compute_acf(samples; max_lag=50)
+fit_params = fit_acf_oscillatory(lags, acf)
+# Check if correlation has oscillatory component: fit_params.k ≠ 0
+```
+"""
+function fit_acf_oscillatory(lags::AbstractVector, acf::AbstractVector; 
+                              fit_range::Union{Tuple{Int,Int},Nothing}=nothing,
+                              include_zero::Bool=false)
+    lags_vec = collect(Float64, lags)
+    acf_vec = collect(Float64, real.(acf))  # Use real part
+    
+    # Optionally exclude first value (lag=0) from fitting
+    if include_zero
+        mask = trues(length(lags_vec))
+    else
+        mask = lags_vec .> 0
+    end
+    
+    # Apply fit range if specified
+    if !isnothing(fit_range)
+        start_lag, end_lag = fit_range
+        range_mask = (lags_vec .>= start_lag) .& (lags_vec .<= end_lag)
+        mask = mask .& range_mask
+    end
+    
+    fit_lags = lags_vec[mask]
+    fit_acf_vals = acf_vec[mask]
+    
+    if length(fit_lags) < 4
+        error("Not enough valid data points for oscillatory fitting (need at least 4)")
+    end
+    
+    # Define the damped oscillatory model: C(r) = A·exp(-r/ξ)·cos(k·r + φ)
+    model(r, p) = p[1] .* exp.(-r ./ p[2]) .* cos.(p[3] .* r .+ p[4])
+    
+    # Initial parameter guesses: [A, ξ, k, φ]
+    A_init = abs(fit_acf_vals[1])
+    
+    # Estimate decay constant from envelope of |acf|
+    abs_acf = abs.(fit_acf_vals)
+    valid_idx = abs_acf .> 1e-15
+    if sum(valid_idx) >= 2
+        log_acf = log.(abs_acf[valid_idx])
+        valid_lags_temp = fit_lags[valid_idx]
+        slope = (log_acf[end] - log_acf[1]) / (valid_lags_temp[end] - valid_lags_temp[1])
+        ξ_init = -1.0 / slope
+        ξ_init = clamp(ξ_init, 0.1, length(fit_lags) * 10.0)
+    else
+        ξ_init = length(fit_lags) / 2.0
+    end
+    
+    # Estimate frequency from zero crossings or sign changes
+    sign_changes = findall(diff(sign.(fit_acf_vals)) .!= 0)
+    if length(sign_changes) >= 2
+        avg_period = 2 * mean(diff(fit_lags[sign_changes]))
+        k_init = 2π / avg_period
+    else
+        k_init = 0.0  # No oscillation detected
+    end
+    
+    # Phase: start with 0 or π depending on sign of first value
+    φ_init = fit_acf_vals[1] < 0 ? π : 0.0
+    
+    p0 = [A_init, ξ_init, k_init, φ_init]
+    
+    # Set parameter bounds
+    lower = [0.0, 0.01, -π, -2π]
+    upper = [Inf, Inf, π, 2π]
+    
+    try
+        # Nonlinear least squares fit
+        fit_result = curve_fit(model, fit_lags, fit_acf_vals, p0, lower=lower, upper=upper)
+        A, ξ, k, φ = coef(fit_result)
+        
+        # Compute effective eigenvalue magnitude and phase
+        λ₂_magnitude = exp(-1.0/ξ)
+        λ₂_phase = k
+        
+        return (A=A, ξ=ξ, k=k, phase=φ, 
+                λ₂_magnitude=λ₂_magnitude, λ₂_phase=λ₂_phase,
+                fit_lags=fit_lags, 
+                model=(r) -> model(r, [A, ξ, k, φ]))
+    catch e
+        @warn "Oscillatory fit failed: $e. Falling back to simple exponential fit."
+        # Fall back to simple exponential
+        simple_fit = fit_acf(lags, abs.(acf); fit_range=fit_range, include_zero=include_zero)
+        return (A=simple_fit.A, ξ=simple_fit.ξ, k=0.0, phase=0.0,
+                λ₂_magnitude=simple_fit.λ₂, λ₂_phase=0.0,
+                fit_lags=simple_fit.fit_lags,
+                model=simple_fit.model)
+    end
+end
+
+"""
     plot_acf(lags::AbstractVector, acf::AbstractVector; kwargs...)
 
-Plot autocorrelation function with optional exponential fit.
+Plot autocorrelation function with optional exponential fit and theoretical decay comparison.
 
 # Arguments
 - `lags`: Lag values
@@ -523,22 +645,37 @@ Plot autocorrelation function with optional exponential fit.
 - `acf_err`: Error bars (optional)
 - `fit_range`: (start_lag, end_lag) for automatic fitting (optional)
 - `fit_params`: Pre-computed fit params from `fit_acf` (optional, overrides fit_range)
+- `fit_oscillatory`: If true, use oscillatory model `A·exp(-r/ξ)·cos(kr+φ)` (default: false)
+- `theoretical_decay`: Theoretical correlation decay from eigenmode analysis (optional)
 - `title`: Plot title
 - `logscale`: Use log scale for y-axis (default: true)
 - `save_path`: Path to save figure (optional)
 
 # Returns
 - `Figure` object
+
+# Example with theoretical comparison
+```julia
+# Compute theoretical decay from eigenmodes
+eigenvalues, coefficients, ξ = compute_correlation_coefficients(gates, row, virtual_qubits, Matrix(Z))
+theory_lags, theory_corr = compute_theoretical_correlation_decay(eigenvalues, coefficients, 50)
+
+# Plot with comparison
+lags, acf, acf_err = compute_acf(samples; max_lag=50)
+fig = plot_acf(lags, acf; theoretical_decay=(theory_lags, theory_corr), fit_oscillatory=true)
+```
 """
 function plot_acf(lags::AbstractVector, acf::AbstractVector;
                   acf_err::Union{AbstractVector,Nothing}=nothing,
                   fit_range::Union{Tuple{Int,Int},Nothing}=nothing,
                   fit_params::Union{NamedTuple,Nothing}=nothing,
+                  fit_oscillatory::Bool=false,
+                  theoretical_decay::Union{Tuple{AbstractVector,AbstractVector},Nothing}=nothing,
                   title::String="Autocorrelation Function",
                   logscale::Bool=true,
                   save_path::Union{String,Nothing}=nothing)
     
-    fig = Figure(size=(500, 350))
+    fig = Figure(size=(600, 400))
     
     # Prepare data - use absolute values for log scale
     abs_acf = abs.(collect(acf))
@@ -564,32 +701,67 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
     if !isnothing(acf_err) && !logscale
         errorbars!(ax, lags_vec, plot_y, collect(acf_err), color=:gray)
     end
-    scatter!(ax, lags_vec, plot_y, markersize=8, label="Data")
+    scatter!(ax, lags_vec, plot_y, markersize=8, label="Data", color=:steelblue)
     
     # Compute fit if fit_range provided but no fit_params
     if isnothing(fit_params) && !isnothing(fit_range)
-        fit_params = fit_acf(lags, acf; fit_range=fit_range)
+        if fit_oscillatory
+            fit_params = fit_acf_oscillatory(lags, acf; fit_range=fit_range)
+        else
+            fit_params = fit_acf(lags, acf; fit_range=fit_range)
+        end
     end
     
-    # Plot fit: |C(r)| = A·exp(-r/ξ)
+    # Plot fit curve
     if !isnothing(fit_params)
         A = fit_params.A
         ξ = fit_params.ξ
-        λ₂ = fit_params.λ₂
         
-        # Evaluate fit curve
-        fit_curve = A .* exp.(-lags_vec ./ ξ)
+        # Check if this is an oscillatory fit
+        has_oscillation = haskey(fit_params, :k) && abs(fit_params.k) > 1e-6
         
-        if logscale
-            # Clamp to min threshold to avoid log10(0)
-            fit_curve = max.(fit_curve, min_threshold)
+        if has_oscillation
+            # Oscillatory model: A·exp(-r/ξ)·cos(k·r + φ)
+            k = fit_params.k
+            φ = fit_params.phase
+            λ₂_mag = fit_params.λ₂_magnitude
+            
+            fit_curve = A .* exp.(-lags_vec ./ ξ) .* cos.(k .* lags_vec .+ φ)
+            label_text = "Fit: ξ=$(round(ξ, digits=2)), |λ₂|=$(round(λ₂_mag, digits=4)), k=$(round(k, digits=3))"
+            
+            if logscale
+                fit_curve = abs.(fit_curve)
+                fit_curve = max.(fit_curve, min_threshold)
+            end
+        else
+            # Simple exponential: A·exp(-r/ξ)
+            λ₂ = haskey(fit_params, :λ₂) ? fit_params.λ₂ : fit_params.λ₂_magnitude
+            fit_curve = A .* exp.(-lags_vec ./ ξ)
+            label_text = "Fit: ξ=$(round(ξ, digits=2)), λ₂=$(round(λ₂, digits=4))"
+            
+            if logscale
+                fit_curve = max.(fit_curve, min_threshold)
+            end
         end
-        
-        # Format label with key parameters
-        label_text = "Fit: ξ=$(round(ξ, digits=2)), λ₂=$(round(λ₂, digits=4))"
         
         lines!(ax, lags_vec, fit_curve, linewidth=2, linestyle=:dash, color=:red,
                label=label_text)
+    end
+    
+    # Plot theoretical decay from eigenmode analysis
+    if !isnothing(theoretical_decay)
+        theory_lags, theory_corr = theoretical_decay
+        theory_lags_vec = collect(theory_lags)
+        
+        if logscale
+            theory_y = abs.(collect(theory_corr))
+            theory_y = max.(theory_y, min_threshold)
+        else
+            theory_y = real.(collect(theory_corr))
+        end
+        
+        lines!(ax, theory_lags_vec, theory_y, linewidth=2, linestyle=:solid, color=:green,
+               label="Theory (eigenmodes)")
     end
     
     axislegend(ax, position=:rb)

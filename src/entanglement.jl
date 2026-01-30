@@ -95,24 +95,30 @@ end
 Compute the physical bipartite entanglement entropy of a single-line uniform MPS 
 in the thermodynamic limit using transfer matrix fixed points.
 
-Uses KrylovKit for efficient eigensolver.
+Uses the canonical form procedure:
+1. Build transfer matrix E = Σ_s A^s ⊗ (A^s)*
+2. Get left fixed point l: E†(l) = l (or l·E = l as a row vector)
+3. Get right fixed point r: E(r) = r
+4. Normalize so Tr(l·r) = 1
+5. Build reduced density matrix: ρ = √l · r · √l
+6. Compute entropy: S = -Tr(ρ log ρ)
 
 # Arguments
 - `A`: MPS tensor with indices (physical, left, right)
-- `tol`: Tolerance for filtering small singular values
+- `tol`: Tolerance for filtering small eigenvalues
 
 # Returns
 - `S`: Entanglement entropy in the thermodynamic limit
-- `schmidt_values`: Schmidt coefficients
+- `spectrum`: Eigenvalues of ρ (the entanglement spectrum)
 
 # Limitations
 ⚠️ This algorithm assumes the transfer matrix has a **unique dominant eigenvalue**.
-It FAILS for states with degenerate transfer matrices (e.g., GHZ, cat states).
+It may give incorrect results for states with degenerate transfer matrices (e.g., GHZ, cat states).
 """
 function mps_physical_entanglement_infinite(A; tol=1e-12)
     phys_dim, bond_dim, _ = size(A)
     
-    # Build transfer matrix using einsum: E = Σ_s A^s ⊗ (A^s)*
+    # Step 1: Build transfer matrix E = Σ_s A^s ⊗ (A^s)*
     # E_{(α,α'), (β,β')} = Σ_s A[s,α,β] * conj(A[s,α',β'])
     E = zeros(ComplexF64, bond_dim^2, bond_dim^2)
     for s in 1:phys_dim
@@ -120,52 +126,98 @@ function mps_physical_entanglement_infinite(A; tol=1e-12)
         E .+= kron(As, conj(As))
     end
     
-    # Get right fixed point using KrylovKit
+    # Step 2: Get right fixed point r: E·r = λ·r (dominant eigenvector)
     vals, vecs, _ = KrylovKit.eigsolve(E, randn(ComplexF64, bond_dim^2), 1, :LM;
                                        ishermitian=false, krylovdim=min(30, bond_dim^2))
     r = reshape(vecs[1], bond_dim, bond_dim)
     
-    # Get left fixed point  
+    # Step 3: Get left fixed point l: E†·l = λ·l (or l·E = λ·l)
     vals_l, vecs_l, _ = KrylovKit.eigsolve(E', randn(ComplexF64, bond_dim^2), 1, :LM;
                                            ishermitian=false, krylovdim=min(30, bond_dim^2))
     l = reshape(vecs_l[1], bond_dim, bond_dim)
     
-    # Make Hermitian and normalize
-    r = (r + r') / 2
+    # Step 4: Use helper to compute entanglement from fixed points
+    return _compute_entanglement_from_fixed_points(l, r; tol=tol)
+end
+
+"""
+    _compute_entanglement_from_fixed_points(l, r; tol=1e-12)
+
+Compute entanglement entropy from left and right fixed points using the canonical form:
+    ρ = √l · r · √l
+    S = -Tr(ρ log ρ)
+
+# Arguments
+- `l`: Left fixed point matrix (bond_dim × bond_dim)
+- `r`: Right fixed point matrix (bond_dim × bond_dim)  
+- `tol`: Tolerance for filtering small eigenvalues
+
+# Returns
+- `S`: Entanglement entropy
+- `spectrum`: Eigenvalues of ρ (entanglement spectrum)
+
+# Notes
+The matrices l and r should satisfy:
+- l, r are positive semi-definite (made Hermitian if not)
+- After normalization: Tr(l·r) = 1
+
+For non-isometric MPS, the fixed points may have arbitrary phases. We ensure
+positive semi-definiteness by taking absolute values of eigenvalues.
+"""
+function _compute_entanglement_from_fixed_points(l, r; tol=1e-12)
+    # Make Hermitian (fixed points should be positive semi-definite)
     l = (l + l') / 2
-    norm_factor = tr(l * r)
-    if abs(norm_factor) > tol
-        r = r / norm_factor
-    end
+    r = (r + r') / 2
     
-    # Truncate to physical subspace and get Schmidt values
+    # For general MPS, fixed points may have wrong overall sign/phase
+    # Project to positive semi-definite by taking absolute eigenvalues
     Λl, Ul = eigen(Hermitian(l))
     Λr, Ur = eigen(Hermitian(r))
     
-    # Keep only significant eigenvalues
-    keep_l = findall(λ -> λ > tol, real.(Λl))
-    keep_r = findall(λ -> λ > tol, real.(Λr))
+    # Make eigenvalues positive (for non-isometric MPS, phases can be arbitrary)
+    Λl_abs = abs.(real.(Λl))
+    Λr_abs = abs.(real.(Λr))
     
-    isempty(keep_l) || isempty(keep_r) && return 0.0, Float64[]
+    # Reconstruct with positive eigenvalues
+    l_psd = Ul * Diagonal(Λl_abs) * Ul'
+    r_psd = Ur * Diagonal(Λr_abs) * Ur'
     
-    Λl = real.(Λl[keep_l])
-    Λr = real.(Λr[keep_r])
-    Ul = Ul[:, keep_l]
-    Ur = Ur[:, keep_r]
+    # Normalize so that Tr(l·r) = 1
+    norm_factor = tr(l_psd * r_psd)
+    if abs(norm_factor) > tol
+        r_psd = r_psd / norm_factor
+    end
     
-    X = Diagonal(sqrt.(Λl)) * Ul'
-    Y = Diagonal(sqrt.(Λr)) * Ur'
+    # Keep only significant eigenvalues for sqrt(l)
+    keep_l = findall(λ -> λ > tol, Λl_abs)
+    isempty(keep_l) && return 0.0, Float64[]
     
-    C = X * Y'
-    σ = svd(C).S
-    σ = filter(s -> s > tol, σ)
+    Λl_pos = Λl_abs[keep_l]
+    Ul_pos = Ul[:, keep_l]
     
-    isempty(σ) && return 0.0, Float64[]
+    # Build √l in the truncated subspace
+    sqrt_l = Ul_pos * Diagonal(sqrt.(Λl_pos)) * Ul_pos'
     
-    σ = σ ./ norm(σ)
+    # Build ρ = √l · r · √l
+    ρ = sqrt_l * r_psd * sqrt_l
     
-    S = -sum(λ -> λ > tol ? λ^2 * log(λ^2) : 0.0, σ)
-    return S, σ
+    # Make ρ Hermitian (should already be, but ensure numerical stability)
+    ρ = (ρ + ρ') / 2
+    
+    # Compute eigenvalues of ρ (the entanglement spectrum)
+    spectrum_raw = eigvals(Hermitian(ρ))
+    
+    # Filter to positive eigenvalues and normalize
+    spectrum = filter(p -> real(p) > tol, real.(spectrum_raw))
+    isempty(spectrum) && return 0.0, Float64[]
+    
+    # Normalize spectrum (should sum to 1, but ensure it)
+    spectrum = spectrum ./ sum(spectrum)
+    
+    # Compute entropy: S = -Tr(ρ log ρ) = -Σ p_i log(p_i)
+    S = -sum(p -> p > tol ? p * log(p) : 0.0, spectrum)
+    
+    return S, spectrum
 end
 
 # =============================================================================
@@ -195,12 +247,141 @@ function _infer_parameters_from_tensors(A_tensors)
 end
 
 """
+    _contract_multiline_to_effective_mps(A_tensors, row, bond_dim)
+
+Contract the vertical legs of multiline MPS tensors to create an effective single-row MPS tensor.
+
+For a multiline MPS with tensors A_1, ..., A_row (each with legs [phys, down, right, up, left]),
+this function contracts all vertical bonds (up/down) and stacks the physical indices to create
+an effective MPS tensor with:
+- Effective physical dimension: 2^row (all physical indices combined)
+- Left bond dimension: bond_dim^(row+1) (all left + periodic indices)
+- Right bond dimension: bond_dim^(row+1) (all right + periodic indices)
+
+# Arguments
+- `A_tensors`: Vector of tensors, each with shape (2, bond_dim, bond_dim, bond_dim, bond_dim)
+               Leg ordering: [physical, down, right, up, left]
+- `row`: Number of rows
+- `bond_dim`: Bond dimension
+
+# Returns
+- `A_eff`: Effective MPS tensor with shape (2^row, bond_dim^(row+1), bond_dim^(row+1))
+           Leg ordering: [effective_physical, left_boundary, right_boundary]
+
+# Notes
+The boundary indices combine: [periodic_bond, row_1_horizontal, row_2_horizontal, ..., row_n_horizontal]
+Vertical bonds are contracted in a periodic manner (row 1's up connects to row n's down).
+"""
+function _contract_multiline_to_effective_mps(A_tensors, row, bond_dim)
+    phys_dim = 2^row
+    boundary_dim = bond_dim^(row + 1)  # periodic bond + row horizontal bonds
+    
+    # Initialize effective tensor
+    A_eff = zeros(ComplexF64, phys_dim, boundary_dim, boundary_dim)
+    
+    # Iterate over all physical configurations
+    for phys_config in 0:(phys_dim - 1)
+        # Get physical index for each row (0-indexed, then +1 for Julia)
+        phys_indices = digits(phys_config, base=2, pad=row) .+ 1
+        
+        # Iterate over all left boundary configurations
+        for left_config in 0:(boundary_dim - 1)
+            left_indices = digits(left_config, base=bond_dim, pad=row + 1) .+ 1
+            # left_indices[1] = periodic bond (connecting row 1's up to row N's down)
+            # left_indices[2:end] = horizontal left bonds for each row
+            
+            # Iterate over all right boundary configurations
+            for right_config in 0:(boundary_dim - 1)
+                right_indices = digits(right_config, base=bond_dim, pad=row + 1) .+ 1
+                
+                # Compute amplitude by contracting the column with internal bond summation
+                amplitude = _contract_column_amplitude(A_tensors, phys_indices, 
+                                                       left_indices, right_indices, 
+                                                       row, bond_dim)
+                
+                A_eff[phys_config + 1, left_config + 1, right_config + 1] = amplitude
+            end
+        end
+    end
+    
+    return A_eff
+end
+
+"""
+    _contract_column_amplitude(A_tensors, phys_indices, left_indices, right_indices, row, bond_dim)
+
+Compute the amplitude for a single column with fixed physical and boundary indices.
+Sums over all internal vertical bonds.
+"""
+function _contract_column_amplitude(A_tensors, phys_indices, left_indices, right_indices, row, bond_dim)
+    # Number of internal vertical bonds = row - 1
+    n_internal = row - 1
+    
+    if n_internal == 0
+        # Single row case: no internal bonds to sum
+        A = A_tensors[1]
+        # A[phys, down, right, up, left]
+        # Periodic: down = up (both use the periodic index)
+        # left_indices[1] = right_indices[1] = periodic bond
+        p = phys_indices[1]
+        periodic_left = left_indices[1]
+        periodic_right = right_indices[1]
+        left_h = left_indices[2]
+        right_h = right_indices[2]
+        
+        # For single row: up and down both connect to the periodic bond
+        # But left and right boundaries can have different periodic indices
+        # Actually, for proper contraction: up = left_periodic, down = right_periodic
+        return A[p, periodic_right, right_h, periodic_left, left_h]
+    end
+    
+    # Multiple rows: sum over internal vertical bonds
+    amplitude = ComplexF64(0.0)
+    
+    for internal_config in 0:(bond_dim^n_internal - 1)
+        internal_bonds = digits(internal_config, base=bond_dim, pad=n_internal) .+ 1
+        
+        term = ComplexF64(1.0)
+        for r in 1:row
+            A = A_tensors[r]
+            p = phys_indices[r]
+            left_h = left_indices[r + 1]
+            right_h = right_indices[r + 1]
+            
+            # Determine vertical indices
+            if r == 1
+                up_idx = left_indices[1]  # periodic from left
+                down_idx = internal_bonds[1]  # first internal bond
+            elseif r == row
+                up_idx = internal_bonds[n_internal]  # last internal bond
+                down_idx = right_indices[1]  # periodic to right
+            else
+                up_idx = internal_bonds[r - 1]
+                down_idx = internal_bonds[r]
+            end
+            
+            # A[phys, down, right, up, left]
+            term *= A[p, down_idx, right_h, up_idx, left_h]
+        end
+        
+        amplitude += term
+    end
+    
+    return amplitude
+end
+
+"""
     multiline_mps_entanglement(input, row; nqubits=nothing, tol=1e-12, use_iterative=:auto, matrix_free=:auto)
 
 Compute the physical bipartite entanglement entropy across the vertical cut 
 for a multiline uniform MPS in the thermodynamic limit.
 
-Uses KrylovKit for efficient transfer matrix eigensolvers.
+Uses the canonical form approach:
+1. Contract vertical legs to get effective MPS tensor A_eff with shape (2^row, D, D)
+2. Build transfer matrix E = Σ_s A_eff^s ⊗ (A_eff^s)* 
+3. Get left/right fixed points l, r with Tr(l·r) = 1
+4. Compute ρ = √l · r · √l
+5. S = -Tr(ρ log ρ)
 
 # Arguments
 - `input`: Vector of gate matrices or tensors
@@ -212,7 +393,7 @@ Uses KrylovKit for efficient transfer matrix eigensolvers.
 
 # Returns
 - `S`: Entanglement entropy
-- `spectrum`: Schmidt values squared
+- `spectrum`: Eigenvalues of ρ (entanglement spectrum)
 - `gap`: Transfer matrix spectral gap
 """
 function multiline_mps_entanglement(input, row; nqubits=nothing, tol=1e-12, use_iterative=:auto, matrix_free=:auto)
@@ -228,46 +409,53 @@ function multiline_mps_entanglement(input, row; nqubits=nothing, tol=1e-12, use_
     end
     
     total_legs = row + 1
-    env_dim = bond_dim^total_legs
+    env_dim = bond_dim^total_legs  # Effective bond dimension for multiline MPS
     matrix_size = env_dim^2
     
-    # Build transfer matrix
-    _, T = contract_transfer_matrix(A_tensors, [conj(A) for A in A_tensors], row)
-    T_matrix = reshape(T, matrix_size, matrix_size)
+    # Step 1: Contract vertical legs to get effective MPS tensor
+    # A_eff has shape (2^row, env_dim, env_dim) = (effective_phys, left, right)
+    A_eff = _contract_multiline_to_effective_mps(A_tensors, row, bond_dim)
+    
+    # Step 2: Build transfer matrix for effective MPS: E = Σ_s A_eff^s ⊗ (A_eff^s)*
+    phys_dim_eff = 2^row
+    E = zeros(ComplexF64, matrix_size, matrix_size)
+    for s in 1:phys_dim_eff
+        As = A_eff[s, :, :]  # env_dim × env_dim matrix
+        E .+= kron(As, conj(As))
+    end
     
     # Decide on solver
     should_use_iterative = use_iterative == :always || (use_iterative == :auto && matrix_size > 256)
     
+    # Step 3: Get right fixed point r: E·r = λ·r
     if should_use_iterative
-        # KrylovKit for large matrices
-        vals, vecs, _ = KrylovKit.eigsolve(T_matrix, randn(ComplexF64, matrix_size), 2, :LM;
+        vals, vecs, _ = KrylovKit.eigsolve(E, randn(ComplexF64, matrix_size), 2, :LM;
                                            ishermitian=false, krylovdim=min(30, matrix_size))
         sorted_idx = sortperm(abs.(vals), rev=true)
         eigenvalues = abs.(vals[sorted_idx])
         gap = length(eigenvalues) > 1 ? -log(eigenvalues[2]/eigenvalues[1]) : Inf
         
-        rho_R = reshape(vecs[sorted_idx[1]], env_dim, env_dim)
-        rho_R = rho_R ./ tr(rho_R)
+        r = reshape(vecs[sorted_idx[1]], env_dim, env_dim)
         
-        vals_l, vecs_l, _ = KrylovKit.eigsolve(T_matrix', randn(ComplexF64, matrix_size), 1, :LM;
+        # Get left fixed point l: E†·l = λ·l
+        vals_l, vecs_l, _ = KrylovKit.eigsolve(E', randn(ComplexF64, matrix_size), 1, :LM;
                                                ishermitian=false, krylovdim=min(30, matrix_size))
-        rho_L = reshape(vecs_l[argmax(abs.(vals_l))], env_dim, env_dim)
+        l = reshape(vecs_l[argmax(abs.(vals_l))], env_dim, env_dim)
     else
         # Full eigendecomposition
-        eig_result = eigen(T_matrix)
+        eig_result = eigen(E)
         sorted_idx = sortperm(abs.(eig_result.values), rev=true)
         eigenvalues = abs.(eig_result.values[sorted_idx])
         gap = length(eigenvalues) > 1 ? -log(eigenvalues[2]/eigenvalues[1]) : Inf
         
-        rho_R = reshape(eig_result.vectors[:, sorted_idx[1]], env_dim, env_dim)
-        rho_R = rho_R ./ tr(rho_R)
+        r = reshape(eig_result.vectors[:, sorted_idx[1]], env_dim, env_dim)
         
-        eig_l = eigen(T_matrix')
-        rho_L = reshape(eig_l.vectors[:, argmax(abs.(eig_l.values))], env_dim, env_dim)
+        eig_l = eigen(E')
+        l = reshape(eig_l.vectors[:, argmax(abs.(eig_l.values))], env_dim, env_dim)
     end
     
-    # Compute entanglement
-    S, spectrum = _compute_bipartite_entanglement(A_tensors, rho_L, rho_R, row, bond_dim, tol)
+    # Step 4 & 5: Use canonical form to compute entanglement: ρ = √l · r · √l
+    S, spectrum = _compute_entanglement_from_fixed_points(l, r; tol=tol)
     
     return S, spectrum, gap
 end

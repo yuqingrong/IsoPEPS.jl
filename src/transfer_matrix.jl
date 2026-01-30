@@ -408,171 +408,195 @@ _apply_transfer_to_vector(code, tensor_ket, tensor_bra, v_tensor, total_qubits) 
     apply_transfer_matvec(code, tensor_ket, tensor_bra, v_tensor, total_qubits)
 
 
-
-
-"""
-    build_physical_channel_code(tensor_ket, tensor_bra, row, rho, R; optimizer=GreedyMethod())
-
-Build contraction code for physical channel (physical space → physical space).
-
-Unlike `build_transfer_code` which contracts physical indices and leaves virtual boundaries open,
-this function keeps physical indices open and contracts all virtual indices with environment tensors.
-
-Each tensor should have 5 legs: [physical, down, right, up, left].
-
-# Arguments
-- `tensor_ket`: Vector of ket tensors (length = row)
-- `tensor_bra`: Vector of bra tensors, typically conj.(tensor_ket)
-- `row`: Number of rows in the tensor network
-- `rho`: Left boundary environment tensor (fixed point density matrix)
-- `R`: Right boundary environment tensor (typically identity)
-- `optimizer`: Contraction order optimizer (default: GreedyMethod())
-
-# Returns
-- `code`: Optimized contraction code
-- `result`: Physical channel matrix of shape (2^row, 2^row)
-
-# Description
-The physical channel E maps physical ket states to physical bra states:
-    E[p_ket, p_bra] = Tr_virtual[ρ_left ⊗ A_ket ⊗ A_bra^† ⊗ R_right]
-
-This is useful for studying the quantum channel properties of the PEPS in physical space.
-"""
-function build_physical_channel_code(tensor_ket, tensor_bra, row, rho, R; optimizer=GreedyMethod())
-    store = IndexStore()
-    index_ket = Vector{Int}[]
-    index_bra = Vector{Int}[]
-    output_indices = Int[]
-    
-    bond_dim = size(tensor_ket[1], 2)  # down leg dimension
-    total_legs = row + 1  # periodic boundary index + row bonds
-       
-    index_rho = [newindex!(store) for _ in 1:2*total_legs]
-    index_R = [newindex!(store) for _ in 1:2*total_legs]
-    
-    first_down_ket = newindex!(store)
-    first_up_ket = newindex!(store)
-    first_down_bra = newindex!(store)
-    first_up_bra = newindex!(store)
-    prev_down_ket = first_down_ket
-    prev_down_bra = first_down_bra
-    
-    for i in 1:row
-       
-        phyidx_ket = newindex!(store)
-        phyidx_bra = newindex!(store)
-          
-        right_ket = index_R[1 + i]  # indices 2 to row+1 for ket right bonds
-        right_bra = index_R[total_legs + 1 + i]  # indices total_legs+2 to 2*total_legs for bra right bonds
-        
-        
-        left_ket = index_rho[1 + i]  # indices 2 to row+1 for ket left bonds
-        left_bra = index_rho[total_legs + 1 + i]  # indices total_legs+2 to 2*total_legs for bra left bonds
-      
-        if i == 1
-            up_ket = first_up_ket
-            up_bra = first_up_bra
-            down_ket = first_down_ket
-            down_bra = first_down_bra
-        else
-            up_ket = prev_down_ket
-            up_bra = prev_down_bra
-            down_ket = newindex!(store)
-            down_bra = newindex!(store)
-        end
-        
-        push!(index_ket, [phyidx_ket, down_ket, right_ket, up_ket, left_ket])
-        push!(index_bra, [phyidx_bra, down_bra, right_bra, up_bra, left_bra])
-        push!(output_indices, phyidx_ket)
-        
-        prev_down_ket = down_ket
-        prev_down_bra = down_bra
-    end
-    for i in 1:row
-        push!(output_indices, index_bra[i][1])
-    end
-    for k in 1:row, l in 1:5
-        if index_ket[k][l] == first_up_ket
-            index_ket[k][l] = index_rho[1]
-        end
-        if index_bra[k][l] == first_up_bra
-            index_bra[k][l] = index_rho[total_legs + 1]
-        end
-    end
-    last_down_ket = index_ket[row][2]
-    last_down_bra = index_bra[row][2]
-    
-    for k in 1:row, l in 1:5
-        if index_ket[k][l] == last_down_ket
-            index_ket[k][l] = index_R[1]
-        end
-        if index_bra[k][l] == last_down_bra
-            index_bra[k][l] = index_R[total_legs + 1]
-        end
-    end
-
-    all_indices = [index_ket..., index_bra..., collect(index_rho), collect(index_R)]
-    all_tensors = [tensor_ket..., tensor_bra..., rho, R]
-    
-    size_dict = OMEinsum.get_size_dict(all_indices, all_tensors)
-    code = optimize_code(DynamicEinCode(all_indices, output_indices), size_dict, optimizer)
-    
-    result = code(all_tensors...)
-    phys_dim = 2^row
-    result_matrix = reshape(result, phys_dim, phys_dim)
-    
-    return code, result_matrix
-end
+# =============================================================================
+# Transfer Matrix with Operator Insertion (for Correlation Analysis)
+# =============================================================================
 
 """
-    get_physical_channel(gates, row, virtual_qubits, rho; R=nothing, optimizer=GreedyMethod())
+    get_transfer_matrix_with_operator(gates, row, virtual_qubits, O::AbstractMatrix; 
+                                       position::Int=1, optimizer=GreedyMethod())
 
-Build and return the physical channel matrix from gates.
+Build transfer matrix E_O with operator O inserted at a specific row position.
 
-This is a convenience wrapper around `build_physical_channel_code` that handles
-tensor conversion and default environment construction.
+This is used for computing connected correlation functions via eigenmode decomposition.
+The transfer matrix E_O contracts physical indices after applying operator O at the 
+specified position: E_O[i,j] = ⟨i|E_O|j⟩ where the physical leg at `position` has O inserted.
 
 # Arguments
 - `gates`: Vector of gate matrices
 - `row`: Number of rows
 - `virtual_qubits`: Number of virtual qubits per bond
-- `rho`: Fixed point density matrix (from compute_transfer_spectrum)
-- `R`: Right boundary environment (default: identity matrix)
+- `O`: 2×2 operator matrix (e.g., Pauli X, Z)
+- `position`: Row position (1 to row) where to insert the operator (default: 1)
 - `optimizer`: Contraction optimizer
 
 # Returns
-- `E`: Physical channel matrix of shape (2^row, 2^row)
+- `E_O`: Transfer matrix with operator inserted, shape (matrix_size, matrix_size)
+
+# Description
+For connected correlation ⟨O_i O_{i+r}⟩_c, we need E_O defined as:
+    E_O = Σ_s ⟨s|A† ⊗ O ⊗ A|s⟩
+where the sum is over the physical index at the operator position.
 
 # Example
 ```julia
 gates = build_unitary_gate(params, p, row, nqubits)
-rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
-E = get_physical_channel(gates, row, virtual_qubits, rho)
+E_Z = get_transfer_matrix_with_operator(gates, row, virtual_qubits, Matrix(Z); position=1)
 ```
 """
-function get_physical_channel(gates, row, virtual_qubits, rho; R=nothing, optimizer=GreedyMethod())
-    bond_dim = 2^virtual_qubits
-    total_legs = row + 1
-    total_qubits = virtual_qubits * total_legs
-    
-    # Prepare environment tensors
-    env_size = ntuple(_ -> bond_dim, 2*total_legs)
-    rho_tensor = reshape(rho, env_size...)
-    
-    # Default R is identity
-    if R === nothing
-        R_matrix = Matrix{ComplexF64}(I, bond_dim^total_legs, bond_dim^total_legs)
-        R_tensor = reshape(R_matrix, env_size...)
-    else
-        R_tensor = reshape(R, env_size...)
+function get_transfer_matrix_with_operator(gates, row, virtual_qubits, O::AbstractMatrix; 
+                                            position::Int=1, optimizer=GreedyMethod())
+    if position < 1 || position > row
+        error("position must be between 1 and row=$row, got $position")
     end
     
-    # Convert gates to tensors
     A_tensors = gates_to_tensors(gates, row, virtual_qubits)
-    tensor_ket = A_tensors
-    tensor_bra = [conj(A) for A in A_tensors]
     
-    # Build and return physical channel
-    _, E = build_physical_channel_code(tensor_ket, tensor_bra, row, rho_tensor, R_tensor; optimizer=optimizer)
-    return E
+    # Insert operator at specified position: AO = O * A (acting on physical index)
+    # Tensor leg ordering: [physical, down, right, up, left]
+    # ein"iabcd,ji -> jabcd" applies O to the physical index
+    AO_tensor = ein"iabcd,ji -> jabcd"(A_tensors[position], O)
+    
+    # Create tensor lists with operator inserted
+    tensor_ket = [i == position ? AO_tensor : A_tensors[i] for i in 1:row]
+    tensor_bra = [conj(A_tensors[i]) for i in 1:row]
+    
+    # Contract to get E_O
+    bond_dim = 2^virtual_qubits
+    total_legs = row + 1
+    matrix_size = bond_dim^(2*total_legs)
+    
+    _, T_O = contract_transfer_matrix(tensor_ket, tensor_bra, row; optimizer=optimizer)
+    E_O = reshape(T_O, matrix_size, matrix_size)
+    
+    return E_O
+end
+
+"""
+    compute_correlation_coefficients(gates, row, virtual_qubits, O::AbstractMatrix;
+                                      num_modes::Int=10, optimizer=GreedyMethod())
+
+Compute the correlation coefficients c_α for eigenmode decomposition of connected correlations.
+
+For the transfer matrix eigendecomposition E = Σ_α λ_α |r_α⟩⟨l_α|, the connected correlation 
+function is:
+    ⟨O_i O_{i+r}⟩_c = Σ_{α≥2} c_α λ_α^{r-1}
+
+where c_α = ⟨l₁|E_O|r_α⟩ ⟨l_α|E_O|r₁⟩
+
+# Arguments
+- `gates`: Vector of gate matrices
+- `row`: Number of rows
+- `virtual_qubits`: Number of virtual qubits per bond
+- `O`: 2×2 operator matrix (e.g., Pauli Z for ⟨ZZ⟩ correlations)
+- `num_modes`: Number of eigenmode coefficients to compute (default: 10)
+- `optimizer`: Contraction optimizer
+
+# Returns
+- `eigenvalues`: Complex eigenvalues λ_α (sorted by magnitude, descending)
+- `coefficients`: Complex coefficients c_α for each mode
+- `correlation_length`: ξ = -1/log|λ₂| (from second largest eigenvalue)
+
+# Description
+The dominant term in the correlation decay is c_α λ_α^{r-1} for the largest |λ_α| < 1.
+If λ is complex (λ = |λ|e^{iθ}), the correlation oscillates: |λ|^{r-1} cos(θr + φ).
+
+# Example
+```julia
+gates = build_unitary_gate(params, p, row, nqubits)
+eigenvalues, coefficients, ξ = compute_correlation_coefficients(gates, row, virtual_qubits, Matrix(Z))
+# Dominant decay: coefficients[2] * eigenvalues[2]^(r-1)
+```
+"""
+function compute_correlation_coefficients(gates, row, virtual_qubits, O::AbstractMatrix;
+                                           num_modes::Int=10, optimizer=GreedyMethod())
+    # Get the transfer matrix
+    E = get_transfer_matrix(gates, row, virtual_qubits)
+    
+    # Get E_O (transfer matrix with operator inserted)
+    E_O = get_transfer_matrix_with_operator(gates, row, virtual_qubits, O; position=1, optimizer=optimizer)
+    
+    # Compute full eigendecomposition
+    # For right eigenvectors: E * r_α = λ_α * r_α
+    eig_right = eigen(E)
+    
+    # Sort by magnitude (descending)
+    sorted_idx = sortperm(abs.(eig_right.values), rev=true)
+    eigenvalues = eig_right.values[sorted_idx]
+    R = eig_right.vectors[:, sorted_idx]  # Right eigenvectors as columns
+    
+    # For left eigenvectors: l_α' * E = λ_α * l_α', equivalently E' * l_α = conj(λ_α) * l_α
+    # Since E is generally not Hermitian, we need left eigenvectors separately
+    eig_left = eigen(E')
+    
+    # Sort left eigenvectors to match right eigenvectors by eigenvalue
+    sorted_idx_left = sortperm(abs.(eig_left.values), rev=true)
+    L = eig_left.vectors[:, sorted_idx_left]  # Left eigenvectors as columns
+    
+    # Normalize so that ⟨l_α|r_β⟩ = δ_{αβ}
+    # The biorthogonal normalization: L' * R should be diagonal
+    # Rescale L columns so that diag(L' * R) = 1
+    overlap = L' * R
+    for α in 1:min(num_modes, size(L, 2))
+        if abs(overlap[α, α]) > 1e-12
+            L[:, α] ./= overlap[α, α]
+        end
+    end
+    
+    # Compute coefficients c_α = ⟨l₁|E_O|r_α⟩ * ⟨l_α|E_O|r₁⟩
+    num_modes = min(num_modes, length(eigenvalues))
+    coefficients = zeros(ComplexF64, num_modes)
+    
+    r_1 = R[:, 1]  # Fixed point right eigenvector
+    l_1 = L[:, 1]  # Fixed point left eigenvector
+    
+    # E_O * r_α and l_α' * E_O * r_1
+    E_O_r1 = E_O * r_1
+    
+    for α in 1:num_modes
+        r_α = R[:, α]
+        l_α = L[:, α]
+        
+        # c_α = ⟨l₁|E_O|r_α⟩ * ⟨l_α|E_O|r₁⟩
+        term1 = dot(l_1, E_O * r_α)
+        term2 = dot(l_α, E_O_r1)
+        coefficients[α] = term1 * term2
+    end
+    
+    # Correlation length from second eigenvalue
+    correlation_length = length(eigenvalues) > 1 ? -1.0 / log(abs(eigenvalues[2])) : Inf
+    
+    return eigenvalues[1:num_modes], coefficients, correlation_length
+end
+
+"""
+    compute_theoretical_correlation_decay(eigenvalues, coefficients, max_lag::Int)
+
+Compute theoretical connected correlation decay from eigenmode decomposition.
+
+# Arguments
+- `eigenvalues`: Complex eigenvalues λ_α from `compute_correlation_coefficients`
+- `coefficients`: Complex coefficients c_α from `compute_correlation_coefficients`
+- `max_lag`: Maximum lag/distance r to compute
+
+# Returns
+- `lags`: Vector 1:max_lag
+- `correlation`: Theoretical ⟨O_i O_{i+r}⟩_c = Σ_{α≥2} c_α λ_α^{r-1}
+
+# Description
+The connected correlation sums over all sub-leading eigenmodes (α ≥ 2, excluding 
+the fixed point mode). For complex eigenvalues, this produces oscillatory behavior.
+"""
+function compute_theoretical_correlation_decay(eigenvalues, coefficients, max_lag::Int)
+    lags = 1:max_lag
+    correlation = zeros(ComplexF64, max_lag)
+    
+    # Sum over sub-leading modes (α ≥ 2)
+    for r in lags
+        for α in 2:length(eigenvalues)
+            correlation[r] += coefficients[α] * eigenvalues[α]^(r-1)
+        end
+    end
+    
+    return collect(lags), correlation
 end

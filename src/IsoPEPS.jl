@@ -83,6 +83,9 @@ export optimize_circuit, optimize_exact, optimize_manifold, initialize_tfim_para
 export compute_transfer_spectrum, compute_single_transfer
 export contract_transfer_matrix, gates_to_tensors, get_transfer_matrix, get_physical_channel
 export build_transfer_code, build_physical_channel_code, apply_transfer_matvec
+# Eigenmode analysis for correlations
+export get_transfer_matrix_with_operator, compute_correlation_coefficients
+export compute_theoretical_correlation_decay
 
 # =============================================================================
 # Exact Tensor Contraction - Observables
@@ -111,7 +114,7 @@ export mpskit_ground_state, mpskit_ground_state_1d, pepskit_ground_state
 # Data I/O & Visualization
 # =============================================================================
 export save_result, load_result, save_results, load_results
-export plot_acf, compute_acf, fit_acf, fit_acf_exponential
+export plot_acf, compute_acf, fit_acf, fit_acf_oscillatory
 export plot_training_history, plot_variance_vs_samples, plot_expectation_values
 export plot_corr_scale, plot_channel_analysis
 export plot_eigenvalue_spectrum, reconstruct_gates, plot_diagnosis
