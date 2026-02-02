@@ -27,6 +27,8 @@ using Yao, Yao.EasyBuild
 using OMEinsum
 using OMEinsumContractionOrders
 using TensorKit, MPSKit, MPSKitModels, PEPSKit
+using ITensors
+using ITensorInfiniteMPS
 using MPSKitModels: transverse_field_ising, InfiniteStrip, InfiniteCylinder, 
                     @mpoham, InfiniteChain, nearest_neighbours, vertices
 using PEPSKit: InfiniteSquare
@@ -85,7 +87,9 @@ export contract_transfer_matrix, gates_to_tensors, get_transfer_matrix, get_phys
 export build_transfer_code, build_physical_channel_code, apply_transfer_matvec
 # Eigenmode analysis for correlations
 export get_transfer_matrix_with_operator, compute_correlation_coefficients
-export compute_theoretical_correlation_decay
+export compute_theoretical_correlation_decay, compute_theoretical_lambda_eff
+# MPS conversion and library-based spectrum
+export reshape_to_mps, spectrum_MPSKit, transfer_matrix_ITensor
 
 # =============================================================================
 # Exact Tensor Contraction - Observables

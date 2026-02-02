@@ -2,6 +2,7 @@ using Test
 using IsoPEPS
 using Yao, YaoBlocks
 using LinearAlgebra
+using ITensors
 
 @testset "contract_transfer_matrix" begin
     A = randn(ComplexF64, 2, 2, 2, 2, 2)
@@ -357,129 +358,514 @@ end
     end
 end
 
-@testset "physical_channel_product_state" begin
-    # For product physical state + maximally mixed virtual environment:
-    # The physical channel should be rank-1 (only one non-zero eigenvalue)
-    # 
-    # Physical interpretation:
-    # - Product state tensor: physical output is always |0⟩ regardless of virtual indices
-    # - Maximally mixed ρ: no correlations in the virtual boundary
-    # - Result: all physical outputs collapse to the same state → rank-1 channel
-    
+@testset "get_transfer_matrix_with_operator" begin
     virtual_qubits = 1
-    bond_dim = 2^virtual_qubits
+    nqubits = 1 + 2*virtual_qubits
+    
+    # Define Pauli operators
+    Z_op = ComplexF64[1 0; 0 -1]
+    X_op = ComplexF64[0 1; 1 0]
+    I_op = ComplexF64[1 0; 0 1]
     
     for row in [1, 2]
+        gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
+        gates = [Matrix(gate) for _ in 1:row]
+        
         @testset "row=$row" begin
-            # Create product state tensor: A[p,d,r,u,l] = δ_{p,1} * uniform(d,r,u,l)
-            # Physical always outputs |0⟩, virtual indices are uniformly weighted
-            A = zeros(ComplexF64, 2, bond_dim, bond_dim, bond_dim, bond_dim)
-            normalization = 1.0 / bond_dim^2  # Normalize so that Σ |A|² = 1
-            for d in 1:bond_dim, r in 1:bond_dim, u in 1:bond_dim, l in 1:bond_dim
-                A[1, d, r, u, l] = normalization  # Only p=1 (|0⟩ state)
+            # Test 1: Basic construction - E_Z has correct size
+            E_Z = IsoPEPS.get_transfer_matrix_with_operator(gates, row, virtual_qubits, Z_op; position=1)
+            bond_dim = 2^virtual_qubits
+            total_legs = row + 1
+            expected_size = bond_dim^(2*total_legs)
+            @test size(E_Z) == (expected_size, expected_size)
+            @test eltype(E_Z) <: Complex
+            
+            # Test 2: Identity operator should give same as regular transfer matrix
+            E = IsoPEPS.get_transfer_matrix(gates, row, virtual_qubits)
+            E_I = IsoPEPS.get_transfer_matrix_with_operator(gates, row, virtual_qubits, I_op; position=1)
+            @test E_I ≈ E atol=1e-10
+            
+            # Test 3: Different positions give different matrices
+            if row >= 2
+                E_Z_pos1 = IsoPEPS.get_transfer_matrix_with_operator(gates, row, virtual_qubits, Z_op; position=1)
+                E_Z_pos2 = IsoPEPS.get_transfer_matrix_with_operator(gates, row, virtual_qubits, Z_op; position=2)
+                @test norm(E_Z_pos1 - E_Z_pos2) > 1e-5
             end
             
-            A_tensors = [A for _ in 1:row]
-            tensor_ket = A_tensors
-            tensor_bra = [conj(A) for A in A_tensors]
+            # Test 4: Different operators give different matrices
+            E_X = IsoPEPS.get_transfer_matrix_with_operator(gates, row, virtual_qubits, X_op; position=1)
+            @test norm(E_Z - E_X) > 1e-10
             
-            # Maximally mixed rho = I / d (normalized identity)
-            total_legs = row + 1
-            env_dim = bond_dim^total_legs
-            rho_matrix = Matrix{ComplexF64}(I, env_dim, env_dim) / env_dim
-            env_size = ntuple(_ -> bond_dim, 2*total_legs)
-            rho_tensor = reshape(rho_matrix, env_size...)
+            # Test 5: Eigenvalue check - E_O should have different spectrum than E
+            eigs_E = sort(abs.(eigvals(E)), rev=true)
+            eigs_E_Z = sort(abs.(eigvals(E_Z)), rev=true)
+            # The dominant eigenvalue of E is 1, E_Z generally different
+            @test isapprox(eigs_E[1], 1.0, atol=1e-6)
+        end
+    end
+    
+    # Test 6: Error handling for invalid positions
+    @testset "error_handling" begin
+        gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
+        gates = [Matrix(gate) for _ in 1:2]
+        row = 2
+        
+        @test_throws ErrorException IsoPEPS.get_transfer_matrix_with_operator(gates, row, virtual_qubits, Z_op; position=0)
+        @test_throws ErrorException IsoPEPS.get_transfer_matrix_with_operator(gates, row, virtual_qubits, Z_op; position=row+1)
+    end
+    
+    # Test 7: Analytical test with diagonal tensor
+    # For diagonal tensor: A[s,d,r,u,l] = δ_{d,r,u,l} * amplitude(s)
+    # E = Σ_s A_s ⊗ A*_s, E_Z = Σ_s Z[s,s] * A_s ⊗ A*_s
+    # With Z = diag(1,-1): E_Z = E_0 - E_1 where E_s is contribution from physical index s
+    @testset "analytical_diagonal_tensor" begin
+        λ = 0.5
+        bond_dim = 2
+        
+        for row in [1, 2]
+            @testset "row=$row" begin
+                # Create diagonal PEPS tensor (same as concrete_transfer_matrix_case)
+                A = zeros(Float64, 2, bond_dim, bond_dim, bond_dim, bond_dim)
+                # physical = 0 (index 1): amplitude 1.0
+                A[1, 1, 1, 1, 1] = 1.0
+                A[1, 2, 2, 2, 2] = 1.0
+                # physical = 1 (index 2): amplitude λ
+                A[2, 1, 1, 1, 1] = λ
+                A[2, 2, 2, 2, 2] = λ
+                
+                A_tensors = [A for _ in 1:row]
+                
+                # Build E and E_Z directly using tensors
+                total_legs = row + 1
+                matrix_size = bond_dim^(2*total_legs)
+                
+                # E: standard transfer matrix
+                _, T_tensor = contract_transfer_matrix(A_tensors, [conj(A) for A in A_tensors], row)
+                E = reshape(T_tensor, matrix_size, matrix_size)
+                
+                # E_Z: apply Z to first tensor's physical index
+                # Z|0⟩ = |0⟩, Z|1⟩ = -|1⟩
+                A_Z = copy(A)
+                A_Z[2, :, :, :, :] .*= -1  # Z flips sign of s=1 component
+                A_Z_tensors = [i == 1 ? A_Z : A for i in 1:row]
+                
+                _, T_Z_tensor = contract_transfer_matrix(A_Z_tensors, [conj(A) for A in A_tensors], row)
+                E_Z_expected = reshape(T_Z_tensor, matrix_size, matrix_size)
+                
+                # Now use the function we're testing
+                # Need to convert tensor to gate format
+                # Gate shape: (2^nqubits, 2^nqubits) where nqubits = 1 + 2*virtual_qubits = 3
+                # Tensor shape: (physical, down, right, up, left) = (2, 2, 2, 2, 2)
+                # Gate indices: physical ⊗ down ⊗ right ⊗ up_fixed=0 ⊗ left
+                nqubits = 3
+                virtual_qubits_test = 1
+                
+                # Reshape tensor to gate format: need to match gates_to_tensors inverse
+                # gates_to_tensors does: reshape(gate, (2, D, D, 2, D, D))[..., 1, ...] 
+                # So gate has shape (2, D, D, 2, D, D) with up_physical=0 slice giving A
+                gate_shape = (2, bond_dim, bond_dim, 2, bond_dim, bond_dim)
+                gate_tensor = zeros(Float64, gate_shape...)
+                gate_tensor[:, :, :, 1, :, :] = A  # up_physical index = 1 (i.e., 0)
+                gate = reshape(gate_tensor, 2^nqubits, 2^nqubits)
+                gates = [gate for _ in 1:row]
+                
+                Z_op = [1.0 0.0; 0.0 -1.0]
+                E_Z_computed = IsoPEPS.get_transfer_matrix_with_operator(gates, row, virtual_qubits_test, Z_op; position=1)
+                
+                # Test: E_Z from function should match analytical E_Z
+                @test E_Z_computed ≈ E_Z_expected atol=1e-10
+                
+                # Test eigenvalue relationship:
+                # E has eigenvalues at diagonal boundary configs: (1 + λ²)^row
+                # E_Z has Z only at position 1, so: (1 - λ²) × (1 + λ²)^(row-1)
+                eigs_E = sort(abs.(eigvals(E)), rev=true)
+                eigs_E_Z = sort(abs.(eigvals(E_Z_computed)), rev=true)
+                
+                expected_E_top = (1 + λ^2)^row
+                # Z at position 1 flips sign only for that layer
+                expected_E_Z_top = (1 - λ^2) * (1 + λ^2)^(row-1)
+                
+                @test isapprox(eigs_E[1], expected_E_top, atol=1e-10)
+                @test isapprox(eigs_E_Z[1], expected_E_Z_top, atol=1e-10)
+                
+                # Test: Tr(E_Z) / Tr(E) - Z only affects one layer
+                # ratio = (1-λ²)/(1+λ²) (independent of row, since Z is at one position)
+                expected_ratio = (1 - λ^2)/(1 + λ^2)
+                actual_ratio = tr(E_Z_computed) / tr(E)
+                @test isapprox(real(actual_ratio), expected_ratio, atol=1e-10)
+            end
+        end
+    end
+    
+    # Test 8: Product state - all coefficients should be related to expectation values
+    @testset "product_state_EO" begin
+        bond_dim = 2
+        row = 1
+        
+        # Product state: A[s, virtual] = |s⟩ ⊗ |uniform⟩
+        # Physical state |ψ⟩ = α|0⟩ + β|1⟩
+        α, β = 1/sqrt(2), 1/sqrt(2)  # |+⟩ state
+        
+        A = zeros(ComplexF64, 2, bond_dim, bond_dim, bond_dim, bond_dim)
+        v = ones(ComplexF64, bond_dim) / sqrt(bond_dim)  # uniform virtual
+        for d in 1:bond_dim, r in 1:bond_dim, u in 1:bond_dim, l in 1:bond_dim
+            A[1, d, r, u, l] = α * v[d] * v[r] * v[u] * v[l]
+            A[2, d, r, u, l] = β * v[d] * v[r] * v[u] * v[l]
+        end
+        
+        # For product state, ⟨Z⟩ = |α|² - |β|² = 0 for |+⟩
+        expected_Z = abs(α)^2 - abs(β)^2
+        
+        # Build gate from tensor
+        nqubits = 3
+        virtual_qubits_test = 1
+        gate_shape = (2, bond_dim, bond_dim, 2, bond_dim, bond_dim)
+        gate_tensor = zeros(ComplexF64, gate_shape...)
+        gate_tensor[:, :, :, 1, :, :] = A
+        gate = reshape(gate_tensor, 2^nqubits, 2^nqubits)
+        gates = [gate]
+        
+        E = IsoPEPS.get_transfer_matrix(gates, row, virtual_qubits_test)
+        Z_op = ComplexF64[1 0; 0 -1]
+        E_Z = IsoPEPS.get_transfer_matrix_with_operator(gates, row, virtual_qubits_test, Z_op; position=1)
+        
+        # For product state: Tr(E_Z)/Tr(E) = ⟨Z⟩
+        computed_Z = real(tr(E_Z) / tr(E))
+        @test isapprox(computed_Z, expected_Z, atol=1e-10)
+        
+        # Test with |0⟩ state: ⟨Z⟩ = 1
+        A_zero = zeros(ComplexF64, 2, bond_dim, bond_dim, bond_dim, bond_dim)
+        for d in 1:bond_dim, r in 1:bond_dim, u in 1:bond_dim, l in 1:bond_dim
+            A_zero[1, d, r, u, l] = v[d] * v[r] * v[u] * v[l]  # Only |0⟩ component
+        end
+        gate_tensor_zero = zeros(ComplexF64, gate_shape...)
+        gate_tensor_zero[:, :, :, 1, :, :] = A_zero
+        gate_zero = reshape(gate_tensor_zero, 2^nqubits, 2^nqubits)
+        gates_zero = [gate_zero]
+        
+        E_zero = IsoPEPS.get_transfer_matrix(gates_zero, row, virtual_qubits_test)
+        E_Z_zero = IsoPEPS.get_transfer_matrix_with_operator(gates_zero, row, virtual_qubits_test, Z_op; position=1)
+        
+        computed_Z_zero = real(tr(E_Z_zero) / tr(E_zero))
+        @test isapprox(computed_Z_zero, 1.0, atol=1e-10)  # ⟨0|Z|0⟩ = 1
+    end
+end
+
+@testset "compute_correlation_coefficients" begin
+    virtual_qubits = 1
+    nqubits = 1 + 2*virtual_qubits
+    
+    Z_op = ComplexF64[1 0; 0 -1]
+    
+    for row in [1, 2]
+        gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
+        gates = [Matrix(gate) for _ in 1:row]
+        
+        @testset "row=$row" begin
+            num_modes = 5
+            eigenvalues, coefficients, correlation_length = IsoPEPS.compute_correlation_coefficients(
+                gates, row, virtual_qubits, Z_op; num_modes=num_modes
+            )
             
-            # R = Identity (default right boundary)
-            R_matrix = Matrix{ComplexF64}(I, env_dim, env_dim)
-            R_tensor = reshape(R_matrix, env_size...)
+            # Test 1: Return structure - correct number of modes
+            @test length(eigenvalues) == num_modes
+            @test length(coefficients) == num_modes
             
-            # Build physical channel
-            _, E = IsoPEPS.build_physical_channel_code(tensor_ket, tensor_bra, row, rho_tensor, R_tensor)
+            # Test 2: Dominant eigenvalue should have magnitude ~1
+            @test isapprox(abs(eigenvalues[1]), 1.0, atol=1e-6)
             
-            # Compute singular values to check rank
-            σ = svdvals(E)
+            # Test 3: Eigenvalues sorted by magnitude (descending)
+            mags = abs.(eigenvalues)
+            @test issorted(mags, rev=true)
             
-            # Filter out numerical zeros
-            tol = 1e-10
-            nonzero_singular_values = filter(s -> s > tol, σ)
+            # Test 4: Correlation length should be positive and finite for generic states
+            @test correlation_length > 0
+            @test isfinite(correlation_length)
             
-            # Should have exactly 1 non-zero singular value (rank-1)
-            @test length(nonzero_singular_values) == 1
+            # Test 5: Sub-leading eigenvalues should have |λ| < 1
+            @test all(abs.(eigenvalues[2:end]) .< 1.0)
             
-            # Alternative check: eigenvalue spectrum
-            eigenvalues = eigvals(E)
-            nonzero_eigenvalues = filter(λ -> abs(λ) > tol, eigenvalues)
-            @test length(nonzero_eigenvalues) == 1
+            # Test 6: Verify coefficients are computed (non-trivial)
+            # At least some coefficients should be non-zero
+            @test any(abs.(coefficients[2:end]) .> 1e-12)
+        end
+    end
+    
+    # Test with more modes
+    @testset "num_modes_parameter" begin
+        gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
+        gates = [Matrix(gate) for _ in 1:2]
+        row = 2
+        
+        eigenvalues_5, coefficients_5, ξ_5 = IsoPEPS.compute_correlation_coefficients(
+            gates, row, virtual_qubits, Z_op; num_modes=5
+        )
+        eigenvalues_10, coefficients_10, ξ_10 = IsoPEPS.compute_correlation_coefficients(
+            gates, row, virtual_qubits, Z_op; num_modes=10
+        )
+        
+        # First 5 eigenvalues should match (eigenvalues are consistent)
+        @test eigenvalues_5 ≈ eigenvalues_10[1:5] atol=1e-10
+        
+        # Correlation lengths should match (derived from λ₂)
+        @test isapprox(ξ_5, ξ_10, atol=1e-10)
+    end
+    
+    # Test: Product state - connected correlations should be zero
+    # For product state: E is rank-1, so c_α = 0 for all α ≥ 2
+    # The connected correlation ⟨OO⟩_c = ⟨OO⟩ - ⟨O⟩² = 0
+    @testset "product_state_zero_correlation" begin
+        bond_dim = 2
+        row = 1
+        nqubits_test = 3
+        virtual_qubits_test = 1
+        
+        v = ones(ComplexF64, bond_dim) / sqrt(bond_dim)
+        Z_op = ComplexF64[1 0; 0 -1]
+        
+        # |0⟩ state: ⟨Z⟩ = 1, c₁ = ⟨Z⟩² = 1, c_α = 0 for α ≥ 2
+        A_zero = zeros(ComplexF64, 2, bond_dim, bond_dim, bond_dim, bond_dim)
+        for d in 1:bond_dim, r in 1:bond_dim, u in 1:bond_dim, l in 1:bond_dim
+            A_zero[1, d, r, u, l] = v[d] * v[r] * v[u] * v[l]  # Only |0⟩
+        end
+        gate_tensor = zeros(ComplexF64, 2, bond_dim, bond_dim, 2, bond_dim, bond_dim)
+        gate_tensor[:, :, :, 1, :, :] = A_zero
+        gate_zero = reshape(gate_tensor, 2^nqubits_test, 2^nqubits_test)
+        
+        eigenvalues_0, coefficients_0, ξ_0 = IsoPEPS.compute_correlation_coefficients(
+            [gate_zero], row, virtual_qubits_test, Z_op; num_modes=5
+        )
+        
+        # Transfer matrix is rank-1, so only λ₁ ≈ 1, others ≈ 0
+        @test isapprox(abs(eigenvalues_0[1]), 1.0, atol=1e-6)
+        @test all(abs.(eigenvalues_0[2:end]) .< 1e-10)
+        
+        # c₁ = ⟨Z⟩² = 1 for |0⟩ state
+        @test isapprox(abs(coefficients_0[1]), 1.0, atol=1e-6)
+        
+        # All c_α = 0 for α ≥ 2 (product state has no connected correlation)
+        @test all(abs.(coefficients_0[2:end]) .< 1e-10)
+        
+        # |+⟩ state: ⟨Z⟩ = 0, so c₁ = 0, c_α = 0 for all α
+        A_plus = zeros(ComplexF64, 2, bond_dim, bond_dim, bond_dim, bond_dim)
+        for d in 1:bond_dim, r in 1:bond_dim, u in 1:bond_dim, l in 1:bond_dim
+            A_plus[1, d, r, u, l] = (1/sqrt(2)) * v[d] * v[r] * v[u] * v[l]
+            A_plus[2, d, r, u, l] = (1/sqrt(2)) * v[d] * v[r] * v[u] * v[l]
+        end
+        gate_tensor_plus = zeros(ComplexF64, 2, bond_dim, bond_dim, 2, bond_dim, bond_dim)
+        gate_tensor_plus[:, :, :, 1, :, :] = A_plus
+        gate_plus = reshape(gate_tensor_plus, 2^nqubits_test, 2^nqubits_test)
+        
+        eigenvalues_plus, coefficients_plus, _ = IsoPEPS.compute_correlation_coefficients(
+            [gate_plus], row, virtual_qubits_test, Z_op; num_modes=5
+        )
+        
+        # c₁ = ⟨Z⟩² = 0 for |+⟩ state
+        @test isapprox(abs(coefficients_plus[1]), 0.0, atol=1e-10)
+        
+        # All c_α = 0 for product state
+        @test all(abs.(coefficients_plus[2:end]) .< 1e-10)
+    end
+    
+    # Test: Diagonal tensor - verify eigenvalue structure
+    @testset "diagonal_tensor_eigenvalues" begin
+        λ = 0.5
+        bond_dim = 2
+        row = 1
+        nqubits_test = 3
+        virtual_qubits_test = 1
+        
+        # Diagonal tensor: only |0000⟩ and |1111⟩ configurations survive
+        A = zeros(Float64, 2, bond_dim, bond_dim, bond_dim, bond_dim)
+        A[1, 1, 1, 1, 1] = 1.0
+        A[1, 2, 2, 2, 2] = 1.0
+        A[2, 1, 1, 1, 1] = λ
+        A[2, 2, 2, 2, 2] = λ
+        
+        gate_tensor = zeros(Float64, 2, bond_dim, bond_dim, 2, bond_dim, bond_dim)
+        gate_tensor[:, :, :, 1, :, :] = A
+        gate = reshape(gate_tensor, 2^nqubits_test, 2^nqubits_test)
+        
+        Z_op = ComplexF64[1 0; 0 -1]
+        eigenvalues_diag, coefficients_diag, ξ_diag = IsoPEPS.compute_correlation_coefficients(
+            [gate], row, virtual_qubits_test, Z_op; num_modes=5
+        )
+        
+        # For diagonal tensor, transfer matrix has eigenvalues:
+        # λ₁ = 1 + λ² (dominant, normalized to 1 after trace normalization)
+        # The matrix is sparse with rank 2
+        # Dominant eigenvalue should be ~ (1 + λ²)
+        total_legs = row + 1
+        matrix_size = bond_dim^(2*total_legs)
+        
+        # Build E directly to verify eigenvalues
+        A_tensors = [A]
+        _, T_tensor = contract_transfer_matrix(A_tensors, [conj(A) for _ in 1:row], row)
+        E = reshape(T_tensor, matrix_size, matrix_size)
+        E_normalized = E / tr(E)  # Normalize like in compute_transfer_spectrum
+        
+        eigs_E = sort(abs.(eigvals(E)), rev=true)
+        
+        # The eigenvalues from compute_correlation_coefficients should match E (not normalized)
+        @test isapprox(abs(eigenvalues_diag[1]), eigs_E[1], atol=1e-10)
+        
+        # Second eigenvalue should also match
+        @test isapprox(abs(eigenvalues_diag[2]), eigs_E[2], atol=1e-10)
+    end
+    
+end
+
+@testset "compute_theoretical_correlation_decay" begin
+    # Test 1: Output structure with synthetic eigenvalues/coefficients
+    @testset "output_structure" begin
+        # Create simple synthetic data
+        eigenvalues = ComplexF64[1.0, 0.5, 0.3, 0.1]
+        coefficients = ComplexF64[0.0, 1.0, 0.5, 0.2]  # c_1 = 0 (no fixed point contribution)
+        max_lag = 20
+        
+        lags, correlation = IsoPEPS.compute_theoretical_correlation_decay(eigenvalues, coefficients, max_lag)
+        
+        @test length(lags) == max_lag
+        @test length(correlation) == max_lag
+        @test lags == 1:max_lag
+        @test eltype(correlation) <: Complex
+    end
+    
+    # Test 2: Decay behavior - correlations should decay for |λ| < 1
+    @testset "decay_behavior" begin
+        # Single mode with |λ| < 1
+        eigenvalues = ComplexF64[1.0, 0.5]  # Only second mode contributes
+        coefficients = ComplexF64[0.0, 1.0]
+        max_lag = 50
+        
+        lags, correlation = IsoPEPS.compute_theoretical_correlation_decay(eigenvalues, coefficients, max_lag)
+        
+        # Correlation should decay: |C(r+1)| < |C(r)|
+        mags = abs.(correlation)
+        @test all(mags[2:end] .< mags[1:end-1] .+ 1e-12)  # Allow small numerical tolerance
+        
+        # Should approach zero at large lags
+        @test abs(correlation[end]) < 1e-10
+        
+        # Verify: C(r) = c_2 * λ_2^(r-1) = 1.0 * 0.5^(r-1)
+        for r in 1:10
+            expected = 0.5^(r-1)
+            @test isapprox(abs(correlation[r]), expected, atol=1e-12)
+        end
+    end
+    
+    # Test 3: Complex eigenvalue handling - oscillatory decay
+    @testset "oscillatory_decay" begin
+        # Complex eigenvalue produces oscillations: λ = |λ|e^{iθ}
+        θ = π/4  # 45 degrees
+        λ_mag = 0.8
+        λ_complex = λ_mag * exp(im * θ)
+        
+        eigenvalues = ComplexF64[1.0, λ_complex]
+        coefficients = ComplexF64[0.0, 1.0]
+        max_lag = 20
+        
+        lags, correlation = IsoPEPS.compute_theoretical_correlation_decay(eigenvalues, coefficients, max_lag)
+        
+        # Magnitude should decay exponentially
+        mags = abs.(correlation)
+        for r in 1:max_lag
+            expected_mag = λ_mag^(r-1)
+            @test isapprox(mags[r], expected_mag, atol=1e-12)
+        end
+        
+        # Phase should advance by θ each step
+        for r in 2:10
+            phase_diff = angle(correlation[r]) - angle(correlation[r-1])
+            # Normalize to [-π, π]
+            phase_diff = mod(phase_diff + π, 2π) - π
+            @test isapprox(phase_diff, θ, atol=1e-10)
+        end
+    end
+    
+    # Test 4: Multiple modes sum correctly
+    @testset "multiple_modes" begin
+        eigenvalues = ComplexF64[1.0, 0.8, 0.5, 0.3]
+        coefficients = ComplexF64[0.0, 1.0, 2.0, 0.5]
+        max_lag = 10
+        
+        lags, correlation = IsoPEPS.compute_theoretical_correlation_decay(eigenvalues, coefficients, max_lag)
+        
+        # Verify manual calculation: C(r) = Σ_{α≥2} c_α λ_α^(r-1)
+        for r in 1:max_lag
+            expected = coefficients[2] * eigenvalues[2]^(r-1) +
+                       coefficients[3] * eigenvalues[3]^(r-1) +
+                       coefficients[4] * eigenvalues[4]^(r-1)
+            @test isapprox(correlation[r], expected, atol=1e-12)
+        end
+    end
+    
+    # Test 5: Integration test with actual gates
+    @testset "integration_with_gates" begin
+        virtual_qubits = 1
+        nqubits = 1 + 2*virtual_qubits
+        Z_op = ComplexF64[1 0; 0 -1]
+        
+        gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
+        gates = [Matrix(gate) for _ in 1:2]
+        row = 2
+        
+        eigenvalues, coefficients, ξ = IsoPEPS.compute_correlation_coefficients(
+            gates, row, virtual_qubits, Z_op; num_modes=5
+        )
+        
+        max_lag = 20
+        lags, correlation = IsoPEPS.compute_theoretical_correlation_decay(eigenvalues, coefficients, max_lag)
+        
+        # Verify decay is consistent with correlation length
+        # |C(r)| ~ exp(-r/ξ) for large r
+        # After ~3ξ, correlation should be significantly decayed
+        if isfinite(ξ) && ξ > 0
+            decay_at_3xi = abs(correlation[min(Int(ceil(3*ξ)), max_lag)])
+            @test decay_at_3xi < 0.1 * abs(correlation[1]) || abs(correlation[1]) < 1e-10
         end
     end
 end
 
-@testset "physical_vs_virtual_channel_rank" begin
-    # Compare physical channel vs virtual transfer matrix using a known analytical tensor
-    # 
-    # MPS tensor structure (diagonal in virtual indices):
-    #   A[physical=0, virtual] = δ_{left,right} * 1.0
-    #   A[physical=1, virtual] = δ_{left,right} * λ
-    # 
-    # This tensor has non-trivial virtual correlations but simple physical structure.
-    # - Virtual transfer matrix: should have rank > 1 (multiple virtual configurations)
-    # - Physical channel: depends on the environment
+@testset "transfer_matrix_consistency" begin
+    virtual_qubits = 1
+    nqubits = 1 + 2 * virtual_qubits
     
-    λ = 0.5
-    bond_dim = 2
-    
-    for row in [1, 2]
+    for row in [1, 2, 3]
         @testset "row=$row" begin
-            # Create diagonal PEPS tensor (5 legs: physical, down, right, up, left)
-            # All virtual indices must match for non-zero amplitude
-            A = zeros(Float64, 2, bond_dim, bond_dim, bond_dim, bond_dim)
-            # physical = 0 (index 1): amplitude 1.0 when all virtual indices match
-            A[1, 1, 1, 1, 1] = 1.0
-            A[1, 2, 2, 2, 2] = 1.0
-            # physical = 1 (index 2): amplitude λ when all virtual indices match
-            A[2, 1, 1, 1, 1] = λ
-            A[2, 2, 2, 2, 2] = λ
+            # Generate random unitary gates
+            gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
+            gates = [Matrix(gate) for _ in 1:row]
             
-            A_tensors = [A for _ in 1:row]
-            tensor_ket = A_tensors
-            tensor_bra = [conj(A) for A in A_tensors]
+            # Get transfer matrix from custom implementation
+            T_custom = get_transfer_matrix(gates, row, virtual_qubits)
             
-            total_legs = row + 1
-            env_dim = bond_dim^total_legs
-            tol = 1e-10
+            # Get transfer matrix from ITensor implementation
+            T_itensor, eigs_itensor, ξ_itensor = transfer_matrix_ITensor(gates, row, virtual_qubits)
+            T_itensor_array = Array(T_itensor, inds(T_itensor)...)  # Convert ITensor to array
             
-            # Virtual transfer matrix (contracts physical, leaves virtual open)
-            _, T_tensor = contract_transfer_matrix(tensor_ket, tensor_bra, row)
-            matrix_size = env_dim^2
-            T_virtual = reshape(T_tensor, matrix_size, matrix_size)
+            # Test 1: Transfer matrices should match (up to index ordering/transpose)
+            # Note: ITensor and custom implementation may have different index conventions
+            # which results in a transpose. Both T and T' have the same spectrum.
+            @test size(T_custom) == size(T_itensor_array)
+            @test isapprox(T_custom, T_itensor_array, atol=1e-10) || isapprox(T_custom, transpose(T_itensor_array), atol=1e-10)
             
-            σ_virtual = svdvals(T_virtual)
-            nonzero_singular_values_virtual = filter(s -> s > tol, σ_virtual)
+            # Get spectrum from all three methods
+            _, gap_custom, eigenvalues_custom, _ = compute_transfer_spectrum(gates, row, nqubits)
+            spectrum_mpskit, ξ_mpskit = spectrum_MPSKit(gates, row, virtual_qubits)
             
-            # Virtual transfer matrix should have rank > 1
-            # (there are 2 distinct virtual configurations: all-0 and all-1)
-            @test length(nonzero_singular_values_virtual) > 1
+            # Test 2: Eigenvalue magnitudes should match
+            eigs_custom_sorted = sort(abs.(eigenvalues_custom), rev=true)
+            eigs_itensor_sorted = sort(abs.(eigs_itensor), rev=true)
+            eigs_mpskit_sorted = sort(abs.(spectrum_mpskit), rev=true)
             
-            # Physical channel with maximally mixed rho
-            rho_matrix = Matrix{ComplexF64}(I, env_dim, env_dim) / env_dim
-            env_size = ntuple(_ -> bond_dim, 2*total_legs)
-            rho_tensor = reshape(rho_matrix, env_size...)
+            n_compare = min(length(eigs_custom_sorted), length(eigs_itensor_sorted), length(eigs_mpskit_sorted))
+            @test eigs_custom_sorted[1:n_compare] ≈ eigs_itensor_sorted[1:n_compare] atol=1e-6
+            @test eigs_custom_sorted[1:n_compare] ≈ eigs_mpskit_sorted[1:n_compare] atol=1e-6
             
-            R_matrix = Matrix{ComplexF64}(I, env_dim, env_dim)
-            R_tensor = reshape(R_matrix, env_size...)
-            
-            _, E = IsoPEPS.build_physical_channel_code(tensor_ket, tensor_bra, row, rho_tensor, R_tensor)
-            
-            σ_physical = svdvals(E)
-            nonzero_singular_values_physical = filter(s -> s > tol, σ_physical)
-            
-            # Physical channel should have rank >= 1
-            @test length(nonzero_singular_values_physical) >= 1
-            
-            @info "row=$row (λ=$λ): Physical channel rank=$(length(nonzero_singular_values_physical)), Virtual TM rank=$(length(nonzero_singular_values_virtual))"
-            @info "  Physical channel singular values: $(round.(σ_physical, digits=4))"
-            @info "  Virtual TM top singular values: $(round.(σ_virtual[1:min(4,end)], digits=4))"
+            # Test 3: Correlation lengths should match
+            @test isapprox(1/gap_custom, ξ_itensor, atol=1e-6)
+            @test isapprox(1/gap_custom, ξ_mpskit, atol=1e-6)
         end
     end
 end

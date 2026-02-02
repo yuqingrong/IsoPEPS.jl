@@ -86,7 +86,7 @@ end
 
 simulation(;
     J=1.0,
-    g_values=[1.0],
+    g_values=[3.0],
     row=2,
     p=3,
     nqubits=3,
@@ -96,10 +96,10 @@ simulation(;
     verbose=true,
     output_dir=joinpath(@__DIR__, "results"),
     share_params=true,
-    conv_step=100,
-    samples=1000,
-    n_runs=11,
+    conv_step=1000,
+    samples=10000,
+    n_runs=1,
     abstol=1e-10,
-    sigma0=1.0,
+    sigma0=1.0, 
     popsize=30,
     zz_weight=0.0)

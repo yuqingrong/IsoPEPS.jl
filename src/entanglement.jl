@@ -97,8 +97,8 @@ in the thermodynamic limit using transfer matrix fixed points.
 
 Uses the canonical form procedure:
 1. Build transfer matrix E = Σ_s A^s ⊗ (A^s)*
-2. Get left fixed point l: E†(l) = l (or l·E = l as a row vector)
-3. Get right fixed point r: E(r) = r
+2. Get left fixed point l: E(l) = l (or l·E = l as a row vector)
+3. Get right fixed point r: E†(r) = r
 4. Normalize so Tr(l·r) = 1
 5. Build reduced density matrix: ρ = √l · r · √l
 6. Compute entropy: S = -Tr(ρ log ρ)
@@ -129,12 +129,12 @@ function mps_physical_entanglement_infinite(A; tol=1e-12)
     # Step 2: Get right fixed point r: E·r = λ·r (dominant eigenvector)
     vals, vecs, _ = KrylovKit.eigsolve(E, randn(ComplexF64, bond_dim^2), 1, :LM;
                                        ishermitian=false, krylovdim=min(30, bond_dim^2))
-    r = reshape(vecs[1], bond_dim, bond_dim)
+    l = reshape(vecs[1], bond_dim, bond_dim)
     
     # Step 3: Get left fixed point l: E†·l = λ·l (or l·E = λ·l)
-    vals_l, vecs_l, _ = KrylovKit.eigsolve(E', randn(ComplexF64, bond_dim^2), 1, :LM;
+    vals_r, vecs_r, _ = KrylovKit.eigsolve(E', randn(ComplexF64, bond_dim^2), 1, :LM;
                                            ishermitian=false, krylovdim=min(30, bond_dim^2))
-    l = reshape(vecs_l[1], bond_dim, bond_dim)
+    r = reshape(vecs_r[1], bond_dim, bond_dim)
     
     # Step 4: Use helper to compute entanglement from fixed points
     return _compute_entanglement_from_fixed_points(l, r; tol=tol)

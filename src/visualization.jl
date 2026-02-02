@@ -646,23 +646,26 @@ Plot autocorrelation function with optional exponential fit and theoretical deca
 - `fit_range`: (start_lag, end_lag) for automatic fitting (optional)
 - `fit_params`: Pre-computed fit params from `fit_acf` (optional, overrides fit_range)
 - `fit_oscillatory`: If true, use oscillatory model `A·exp(-r/ξ)·cos(kr+φ)` (default: false)
-- `theoretical_decay`: Theoretical correlation decay from eigenmode analysis (optional)
+- `theoretical_decay`: Dominant mode decay A·|λ_α|^r (optional, green solid line)
+- `exact_decay`: Exact decay from sum of all modes Σ c_α λ_α^(r-1) (optional, purple dotted line)
 - `title`: Plot title
 - `logscale`: Use log scale for y-axis (default: true)
 - `save_path`: Path to save figure (optional)
+- `show_lambda_eff`: If true, show second panel with λ_eff(r) = C(r+1)/C(r) (default: false)
+- `lambda_theory`: Theoretical λ₂ from transfer matrix to show in λ_eff panel (optional)
 
 # Returns
 - `Figure` object
 
-# Example with theoretical comparison
+# Example with λ_eff panel
 ```julia
-# Compute theoretical decay from eigenmodes
+# Compute correlation coefficients and get theoretical λ₂
 eigenvalues, coefficients, ξ = compute_correlation_coefficients(gates, row, virtual_qubits, Matrix(Z))
-theory_lags, theory_corr = compute_theoretical_correlation_decay(eigenvalues, coefficients, 50)
+λ₂_theory = abs(eigenvalues[2])
 
-# Plot with comparison
+# Plot with λ_eff panel
 lags, acf, acf_err = compute_acf(samples; max_lag=50)
-fig = plot_acf(lags, acf; theoretical_decay=(theory_lags, theory_corr), fit_oscillatory=true)
+fig = plot_acf(lags, acf; show_lambda_eff=true, lambda_theory=λ₂_theory)
 ```
 """
 function plot_acf(lags::AbstractVector, acf::AbstractVector;
@@ -671,14 +674,22 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
                   fit_params::Union{NamedTuple,Nothing}=nothing,
                   fit_oscillatory::Bool=false,
                   theoretical_decay::Union{Tuple{AbstractVector,AbstractVector},Nothing}=nothing,
+                  exact_decay::Union{Tuple{AbstractVector,AbstractVector},Nothing}=nothing,
+                  dominant_decay::Union{Tuple{AbstractVector,AbstractVector},Nothing}=nothing,
                   title::String="Autocorrelation Function",
                   logscale::Bool=true,
-                  save_path::Union{String,Nothing}=nothing)
+                  save_path::Union{String,Nothing}=nothing,
+                  show_lambda_eff::Bool=false,
+                  lambda_theory::Union{Real,Nothing}=nothing,
+                  lambda_eff_theory::Union{Tuple{AbstractVector,AbstractVector},Nothing}=nothing,
+                  lambda_eff_dominant::Union{Tuple{AbstractVector,AbstractVector},Nothing}=nothing)
     
-    fig = Figure(size=(600, 400))
+    # Determine figure size based on whether we show λ_eff panel
+    fig_height = show_lambda_eff ? 600 : 400
+    fig = Figure(size=(600, fig_height))
     
     # Prepare data - use absolute values for log scale
-    abs_acf = abs.(collect(acf))
+    abs_acf = collect(acf)
     lags_vec = collect(lags)
     
     if logscale
@@ -748,7 +759,7 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
                label=label_text)
     end
     
-    # Plot theoretical decay from eigenmode analysis
+    # Plot theoretical decay from eigenmode analysis (single dominant mode)
     if !isnothing(theoretical_decay)
         theory_lags, theory_corr = theoretical_decay
         theory_lags_vec = collect(theory_lags)
@@ -761,10 +772,116 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
         end
         
         lines!(ax, theory_lags_vec, theory_y, linewidth=2, linestyle=:solid, color=:green,
-               label="Theory (eigenmodes)")
+               label="Theory (dominant)")
     end
     
-    axislegend(ax, position=:rb)
+    # Plot exact decay from sum of all modes: Σ c_α λ_α^(r-1)
+    if !isnothing(exact_decay)
+        exact_lags, exact_corr = exact_decay
+        exact_lags_vec = collect(exact_lags)
+        
+        if logscale
+            exact_y = abs.(collect(exact_corr))
+            exact_y = max.(exact_y, min_threshold)
+        else
+            exact_y = real.(collect(exact_corr))
+        end
+        
+        lines!(ax, exact_lags_vec, exact_y, linewidth=2, linestyle=:dot, color=:purple,
+               label="Exact (all modes)")
+    end
+    
+    # Plot dominant modes decay: C(r) from only the few dominant modes
+    if !isnothing(dominant_decay)
+        dom_lags, dom_corr = dominant_decay
+        dom_lags_vec = collect(dom_lags)
+        
+        if logscale
+            dom_y = abs.(collect(dom_corr))
+            dom_y = max.(dom_y, min_threshold)
+        else
+            dom_y = real.(collect(dom_corr))
+        end
+        
+        lines!(ax, dom_lags_vec, dom_y, linewidth=2.5, linestyle=:dashdot, color=:orange,
+               label="Dominant modes")
+    end
+    
+    axislegend(ax, position=:rt)
+    
+    # Add λ_eff(r) = C(r+1)/C(r) panel if requested
+    if show_lambda_eff && length(acf) > 2
+        ax2 = Axis(fig[2, 1],
+                   xlabel="Lag r", ylabel="λ_eff(r) = C(r+1)/C(r)",
+                   title="Effective Eigenvalue")
+        
+        # Compute λ_eff(r) = C(r+1) / C(r)
+        # For exponential decay C(r) ~ λ^r, this gives λ_eff = λ
+        acf_vals = abs.(collect(acf))
+        lambda_eff_lags = collect(lags)[1:end-1]
+        lambda_eff = acf_vals[2:end] ./ acf_vals[1:end-1]
+        
+        # Filter out infinities and NaNs
+        valid_mask = isfinite.(lambda_eff) .& (lambda_eff .> 0) .& (lambda_eff .< 10)
+        if any(valid_mask)
+            scatter!(ax2, lambda_eff_lags[valid_mask], lambda_eff[valid_mask], 
+                    markersize=6, label="λ_eff(r) from data", color=:steelblue)
+        end
+        
+        # Add theoretical λ_eff from mixed-mode analysis if provided
+        # This is the weighted average: λ_eff(r) = Σ w_α(r) λ_α / Σ w_α(r)
+        if !isnothing(lambda_eff_theory)
+            theory_lags, theory_lambda_eff = lambda_eff_theory
+            theory_lags_vec = collect(theory_lags)
+            theory_vals = abs.(collect(theory_lambda_eff))
+            
+            # Filter to valid range
+            valid_theory = isfinite.(theory_vals) .& (theory_vals .> 0) .& (theory_vals .< 10)
+            if any(valid_theory)
+                lines!(ax2, theory_lags_vec[valid_theory], theory_vals[valid_theory], 
+                      linewidth=2.5, linestyle=:solid, color=:purple,
+                      label="λ_eff (all modes)")
+            end
+        end
+        
+        # Add λ_eff from dominant modes only (e.g., 3 largest coefficient modes)
+        if !isnothing(lambda_eff_dominant)
+            dom_lags, dom_lambda_eff = lambda_eff_dominant
+            dom_lags_vec = collect(dom_lags)
+            dom_vals = abs.(collect(dom_lambda_eff))
+            
+            # Filter to valid range
+            valid_dom = isfinite.(dom_vals) .& (dom_vals .> 0) .& (dom_vals .< 10)
+            if any(valid_dom)
+                lines!(ax2, dom_lags_vec[valid_dom], dom_vals[valid_dom], 
+                      linewidth=2.5, linestyle=:dashdot, color=:orange,
+                      label="λ_eff (dominant modes)")
+            end
+        end
+        
+        # Add single dominant eigenvalue from transfer matrix if provided
+        if !isnothing(lambda_theory)
+            hlines!(ax2, [lambda_theory], color=:green, linestyle=:dash, linewidth=2,
+                   label="λ_slow (contributing) = $(round(lambda_theory, digits=4))")
+        end
+        
+        # Add theoretical λ from fit if available
+        if !isnothing(fit_params)
+            λ_fit = haskey(fit_params, :λ₂) ? fit_params.λ₂ : 
+                    (haskey(fit_params, :λ₂_magnitude) ? fit_params.λ₂_magnitude : exp(-1/fit_params.ξ))
+            hlines!(ax2, [λ_fit], color=:red, linestyle=:dot, linewidth=2,
+                   label="λ₂ (single exp fit) = $(round(λ_fit, digits=4))")
+        end
+        
+        # Set y-axis limits to reasonable range
+        if any(valid_mask)
+            ymin = max(0.8 * minimum(lambda_eff[valid_mask]), 0.9)
+            ymax = min(1.2 * maximum(lambda_eff[valid_mask]), 1.1)
+            ylims!(ax2, ymin, ymax)
+        end
+        
+        axislegend(ax2, position=:rt)
+    end
     
     if !isnothing(save_path)
         save(save_path, fig)
@@ -804,42 +921,36 @@ Error bars from standard error across chains (each chain contributes one ACF est
 """
 function compute_acf(data::Matrix{Float64}; max_lag::Int=100, n_bootstrap::Int=100, normalize::Bool=true)
     n_chains, n_samples = size(data)
-    max_lag = min(max_lag, div(n_samples, 2))
     
-    # Compute global mean and variance using all data
-    μ_global = mean(data)
-    centered_global = data .- μ_global
-    var_global = mean(centered_global.^2)
+    # Limit max_lag to avoid unreliable estimates at large lags
+    # The ACF estimator has significant negative bias when lag > n_samples/10
+    # Standard practice in time series analysis is to limit to N/10
+    max_lag_limit = div(n_samples, 10)
+    if max_lag > max_lag_limit
+        @warn "Requested max_lag=$max_lag is too large for n_samples=$n_samples. Using max_lag=$max_lag_limit (n_samples/10) to avoid biased estimates."
+        max_lag = max_lag_limit
+    end
     
-    acf = zeros(max_lag)
     acf_per_chain = zeros(n_chains, max_lag)
     
-    # Compute ACF using all pairs from all chains
-    for k in 1:max_lag
-        lag = k - 1
+    # Compute ACF for each chain independently with its own mean and variance
+    # This is the correct approach when chains may have different statistical properties
+    for i in 1:n_chains
+        chain = data[i, :]
+        μ_chain = mean(chain)
+        chain_centered = chain .- μ_chain
+        var_chain = mean(chain_centered.^2)
         
-        # Collect all pairs from all chains
-        all_products = Float64[]
-        
-        for i in 1:n_chains
-            chain_centered = centered_global[i, :]
-            for j in 1:(n_samples - lag)
-                push!(all_products, chain_centered[j] * chain_centered[j + lag])
-            end
-        end
-        
-        # Mean over all pairs
-        raw_acf = mean(all_products)
-        acf[k] = normalize ? raw_acf / var_global : raw_acf
-        
-        # Also compute ACF per chain for error estimation
-        for i in 1:n_chains
-            chain_centered = centered_global[i, :]
+        for k in 1:max_lag
+            lag = k - 1
             n_pairs = n_samples - lag
-            raw_acf_chain = mean(chain_centered[j] * chain_centered[j + lag] for j in 1:n_pairs)
-            acf_per_chain[i, k] = normalize ? raw_acf_chain / var_global : raw_acf_chain
+            raw_acf = mean(chain_centered[j] * chain_centered[j + lag] for j in 1:n_pairs)
+            acf_per_chain[i, k] = normalize ? raw_acf / var_chain : raw_acf
         end
     end
+    
+    # Average ACF across chains
+    acf = vec(mean(acf_per_chain, dims=1))
     
     # Standard error from variance across chains
     acf_err = vec(std(acf_per_chain, dims=1) / sqrt(n_chains))

@@ -168,3 +168,6 @@ function compute_exact_energy(params::Vector{Float64}, g::Float64, J::Float64,
     return gap, energy
 end
 
+function correlation_function()
+
+end

@@ -154,72 +154,6 @@ function compute_transfer_spectrum(gates, row, nqubits; channel_type=:virtual, n
     return rho, gap, eigenvalues, eigenvalues_raw
 end
 
-"""
-    _compute_physical_channel_spectrum(gates, row, nqubits, virtual_qubits; num_eigenvalues=2)
-
-Internal helper to compute the physical channel spectrum.
-
-First computes the virtual transfer matrix fixed points (left ρ and right R), then builds 
-the physical channel E using both fixed points, and computes the spectrum of E.
-
-For a proper trace-preserving quantum channel, we need both left and right fixed points
-and proper normalization so that the dominant eigenvalue is exactly 1.
-"""
-function _compute_physical_channel_spectrum(gates, row, nqubits, virtual_qubits; num_eigenvalues=2)
-    # Step 1: Build full transfer matrix and compute both fixed points
-    T = get_transfer_matrix(gates, row, virtual_qubits)
-    matrix_size = size(T, 1)
-    bond_dim = 2^virtual_qubits
-    total_legs = row + 1
-    
-    # Compute left fixed point (dominant right eigenvector): T * ρ = λ₁ * ρ
-    vals_left, vecs_left, _ = KrylovKit.eigsolve(T, randn(ComplexF64, matrix_size), 2, :LM;
-                                                  ishermitian=false, krylovdim=max(30, 4))
-    sorted_idx_left = sortperm(abs.(vals_left), rev=true)
-    λ₁ = vals_left[sorted_idx_left[1]]  # Dominant eigenvalue of transfer matrix
-    rho_vec = vecs_left[sorted_idx_left[1]]
-    rho_virtual = reshape(rho_vec, Int(sqrt(matrix_size)), Int(sqrt(matrix_size)))
-    rho_virtual = rho_virtual ./ tr(rho_virtual)  # Normalize trace to 1
-    
-    # Compute right fixed point (dominant left eigenvector): R * T = λ₁ * R, or T' * R = λ₁ * R
-    vals_right, vecs_right, _ = KrylovKit.eigsolve(T', randn(ComplexF64, matrix_size), 2, :LM;
-                                                    ishermitian=false, krylovdim=max(30, 4))
-    sorted_idx_right = sortperm(abs.(vals_right), rev=true)
-    R_vec = vecs_right[sorted_idx_right[1]]
-    R_virtual = reshape(R_vec, Int(sqrt(matrix_size)), Int(sqrt(matrix_size)))
-    
-    # Normalize so that tr(ρ · R) = 1
-    norm_factor = tr(rho_virtual * R_virtual)
-    R_virtual = R_virtual ./ norm_factor
-    
-    # Step 2: Build physical channel using both fixed points
-    E = get_physical_channel(gates, row, virtual_qubits, rho_virtual; R=R_virtual)
-    
-    # Step 3: Compute spectrum of physical channel
-    # Note: The physical channel eigenvalue is bounded by |λ₁| of the transfer matrix.
-    # If |λ₁| < 1, the physical channel dominant eigenvalue will also be < 1.
-    phys_dim = 2^row
-    
-    if phys_dim <= 64
-        # Full eigendecomposition for small matrices
-        eig_result = LinearAlgebra.eigen(E)
-        sorted_indices = sortperm(abs.(eig_result.values), rev=true)
-        eigenvalues_raw = eig_result.values[sorted_indices]
-        eigenvalues = abs.(eigenvalues_raw)
-    else
-        # Iterative solver for larger matrices
-        vals, vecs, info = KrylovKit.eigsolve(E, num_eigenvalues, :LM; 
-                                              ishermitian=false, krylovdim=max(30, 2*num_eigenvalues))
-        sorted_indices = sortperm(abs.(vals), rev=true)
-        eigenvalues_raw = vals[sorted_indices]
-        eigenvalues = abs.(eigenvalues_raw)
-    end
-    
-    # Compute spectral gap
-    gap = length(eigenvalues) > 1 && eigenvalues[1] > 0 ? -log(eigenvalues[2]/eigenvalues[1]) : Inf
-    
-    return E, gap, eigenvalues, eigenvalues_raw
-end
 
 """
     get_transfer_matrix(gates, row, virtual_qubits)
@@ -388,6 +322,274 @@ function apply_transfer_matvec(code, tensor_ket, tensor_bra, v_tensor, total_leg
     return reshape(result, ntuple(_ -> bond_dim, 2*total_legs)...)
 end
 
+# ==============================================================================
+# reshape to MPS format and use reference
+# ==============================================================================
+
+"""
+    reshape_to_mps(gates, row, virtual_qubits)
+
+Reshape one column of the multiline MPS into a single MPS tensor.
+
+Takes `row` tensors from a column, contracts the vertical (up/down) bonds between them,
+and fuses the physical legs into a single index.
+
+# Tensor Structure
+Each input tensor has legs: [physical, down, right, up, left]
+- Vertical bonds: down[i] contracts with up[i+1] for i = 1:row-1
+- Open boundaries: up[1] and down[row] (vertical), left[1:row] and right[1:row] (horizontal)
+
+# Output
+MPS tensor with shape: (physical_dim, left_bond_dim, right_bond_dim)
+- physical_dim = 2^row (fused physical indices)
+- left_bond_dim = bond_dim^(row+1) (up[1] + all left indices)
+- right_bond_dim = bond_dim^(row+1) (down[row] + all right indices)
+
+# Arguments
+- `gates`: Vector of gate matrices
+- `row`: Number of rows (tensors in the column)
+- `virtual_qubits`: Number of virtual qubits per bond
+
+# Returns
+- `mps_tensor`: Array of shape (2^row, bond_dim^(row+1), bond_dim^(row+1))
+"""
+function reshape_to_mps(gates, row, virtual_qubits)
+    A_tensors = gates_to_tensors(gates, row, virtual_qubits)
+    bond_dim = 2^virtual_qubits
+    
+    # Tensor leg ordering: [physical, down, right, up, left]
+    # Each tensor has shape: (2, bond_dim, bond_dim, bond_dim, bond_dim)
+    
+    # Build einsum contraction for vertical bond contractions
+    store = IndexStore()
+    index_tensors = Vector{Vector{Int}}()
+    
+    # Allocate indices for each tensor
+    phys_indices = [newindex!(store) for _ in 1:row]
+    down_indices = [newindex!(store) for _ in 1:row]
+    right_indices = [newindex!(store) for _ in 1:row]
+    up_indices = [newindex!(store) for _ in 1:row]
+    left_indices = [newindex!(store) for _ in 1:row]
+    
+    # Create index structure: [physical, down, right, up, left]
+    for i in 1:row
+        push!(index_tensors, [phys_indices[i], down_indices[i], right_indices[i], 
+                              up_indices[i], left_indices[i]])
+    end
+    
+    # Contract vertical bonds: down[i] = up[i+1] for i = 1 to row-1
+    # This means up[i+1] should use down[i]'s index
+    for i in 1:(row-1)
+        # Replace up[i+1] with down[i] in the index structure
+        index_tensors[i+1][4] = down_indices[i]
+    end
+    
+    # Output indices ordering:
+    # 1. Physical indices (all row of them) - will fuse to dim 2^row
+    # 2. Left boundary: up[1], left[1], left[2], ..., left[row] - will fuse to bond_dim^(row+1)  
+    # 3. Right boundary: down[row], right[1], right[2], ..., right[row] - will fuse to bond_dim^(row+1)
+    output_indices = Int[]
+    append!(output_indices, phys_indices)                    # Physical: p1, p2, ..., p_row
+    push!(output_indices, up_indices[1])                     # Vertical boundary (top)
+    append!(output_indices, left_indices)                    # Horizontal left: l1, l2, ..., l_row
+    push!(output_indices, down_indices[row])                 # Vertical boundary (bottom)
+    append!(output_indices, right_indices)                   # Horizontal right: r1, r2, ..., r_row
+    
+    # Build and execute contraction
+    size_dict = OMEinsum.get_size_dict(index_tensors, A_tensors)
+    code = optimize_code(DynamicEinCode(index_tensors, output_indices), size_dict, GreedyMethod())
+    result = code(A_tensors...)
+    
+    # Result shape: (2, 2, ..., 2, bond_dim, bond_dim, ..., bond_dim, bond_dim, bond_dim, ..., bond_dim)
+    #               |___row___|  |______row+1________|  |_______row+1________|
+    # Reshape to MPS tensor: (physical_dim, left_bond, right_bond)
+    physical_dim = 2^row
+    left_bond_dim = bond_dim^(row + 1)   # up[1] + row left indices
+    right_bond_dim = bond_dim^(row + 1)  # down[row] + row right indices
+    
+    mps_tensor = reshape(result, physical_dim, left_bond_dim, right_bond_dim)
+    
+    return mps_tensor
+end
+
+"""
+    _to_ITensor(mps_tensor, row, virtual_qubits)
+
+Convert MPS tensor from reshape_to_mps to ITensor format for ITensorInfiniteMPS.
+
+# Arguments
+- `mps_tensor`: Array of shape (physical_dim, left_bond, right_bond) from reshape_to_mps
+- `row`: Number of rows (for metadata)
+- `virtual_qubits`: Number of virtual qubits per bond
+
+# Returns
+- `A_itensor`: ITensor object with indices (left, site, right)
+- `indices`: Named tuple (site=s, left=l, right=r) of Index objects
+"""
+function _to_ITensor(mps_tensor, row, virtual_qubits)
+    physical_dim, left_bond, right_bond = size(mps_tensor)
+    
+    # Create ITensor indices
+    s = Index(physical_dim, "Site,n=1")
+    l = Index(left_bond, "Link,l=0")
+    r = Index(right_bond, "Link,l=1")
+    
+    # Permute from (phys, left, right) to ITensor MPS convention: (left, phys, right)
+    A_permuted = permutedims(mps_tensor, (2, 1, 3))
+    A_itensor = ITensor(A_permuted, l, s, r)
+    
+    return A_itensor, (site=s, left=l, right=r)
+end
+
+"""
+    _to_MPSKit(mps_tensor, row, virtual_qubits)
+
+Convert MPS tensor from reshape_to_mps to TensorKit TensorMap format.
+
+# Arguments
+- `mps_tensor`: Array of shape (physical_dim, left_bond, right_bond) from reshape_to_mps
+- `row`: Number of rows (for metadata)
+- `virtual_qubits`: Number of virtual qubits per bond
+
+# Returns
+- `A_tensormap`: TensorMap with structure left_virtual ← physical ⊗ right_virtual
+"""
+function _to_MPSKit(mps_tensor, row, virtual_qubits)
+    physical_dim, left_bond, right_bond = size(mps_tensor)
+    
+    # Permute from (phys, left, right) to MPSKit convention: [left, phys, right]
+    A_permuted = permutedims(mps_tensor, (2, 1, 3))
+    
+    # Create TensorMap: left_virtual ← physical ⊗ right_virtual
+    A_tensormap = TensorMap(A_permuted, ComplexSpace(left_bond), 
+                            ComplexSpace(physical_dim) ⊗ ComplexSpace(right_bond))
+    
+    return A_tensormap
+end
+
+"""
+    transfer_matrix_ITensor(gates, row, virtual_qubits; num_eigenvalues=10)
+
+Compute transfer matrix spectrum using ITensorInfiniteMPS.
+
+# Arguments
+- `gates`: Vector of gate matrices
+- `row`: Number of rows
+- `virtual_qubits`: Number of virtual qubits per bond
+- `num_eigenvalues`: Number of eigenvalues to compute (default: 10)
+
+# Returns
+- `eigenvalues`: Transfer matrix eigenvalues sorted by magnitude
+- `correlation_length`: ξ = -1/log|λ₂|
+"""
+function transfer_matrix_ITensor(gates, row, virtual_qubits; num_eigenvalues=64)
+    # Get MPS tensor from gates
+    mps_tensor = reshape_to_mps(gates, row, virtual_qubits)
+    A, indices = _to_ITensor(mps_tensor, row, virtual_qubits)
+    
+    # Build transfer matrix: T = A * dag(A')
+    # Contract physical index, keep virtual indices open
+    s, l, r = indices.site, indices.left, indices.right
+    
+    # Create primed copies for bra layer
+    l_prime = prime(l)
+    r_prime = prime(r)
+    A_dag = dag(A)
+    A_dag = replaceinds(A_dag, [l, r], [l_prime, r_prime])
+    
+    # Contract physical index to form transfer matrix
+    # T has indices: (l, r, l', r') 
+    T = A * A_dag
+    
+    # Combine indices for matrix form
+    # Left combined index: (l, l'), Right combined index: (r, r')
+    left_comb = combiner(l, l_prime)
+    right_comb = combiner(r, r_prime)
+    T_matrix = T * left_comb * right_comb
+    
+    # Extract as dense matrix and compute eigenvalues
+    T_array = Array(T_matrix, combinedind(left_comb), combinedind(right_comb))
+    
+    # Compute eigenvalues using KrylovKit for large matrices
+    matrix_size = size(T_array, 1)
+    if matrix_size > 256
+        vals, _, _ = KrylovKit.eigsolve(T_array, num_eigenvalues, :LM; 
+                                        ishermitian=false, krylovdim=max(30, 2*num_eigenvalues))
+    else
+        eig_result = LinearAlgebra.eigen(T_array)
+        vals = eig_result.values
+    end
+    
+    # Sort by magnitude
+    sorted_idx = sortperm(abs.(vals), rev=true)
+    eigenvalues = vals[sorted_idx][1:min(num_eigenvalues, length(vals))]
+    
+    # Correlation length from second eigenvalue
+    correlation_length = length(eigenvalues) > 1 ? -1.0 / log(abs(eigenvalues[2] / eigenvalues[1])) : Inf
+    
+    return T_matrix, eigenvalues, correlation_length
+end
+
+"""
+    spectrum_MPSKit(gates, row, virtual_qubits; num_eigenvalues=64)
+
+Compute transfer matrix spectrum using TensorKit operations (MPSKit-style).
+
+Uses TensorKit's @tensor macro to build the transfer matrix and compute eigenvalues,
+which is equivalent to what MPSKit does internally for InfiniteMPS.
+
+# Arguments
+- `gates`: Vector of gate matrices
+- `row`: Number of rows
+- `virtual_qubits`: Number of virtual qubits per bond
+- `num_eigenvalues`: Number of eigenvalues to compute (default: 64)
+
+# Returns
+- `spectrum`: Transfer matrix eigenvalue spectrum
+- `corr_length`: Correlation length ξ = -1/log|λ₂|
+"""
+function spectrum_MPSKit(gates, row, virtual_qubits; num_eigenvalues=64)
+    # Get MPS tensor from gates
+    mps_tensor = reshape_to_mps(gates, row, virtual_qubits)
+    
+    # Convert to TensorMap
+    A = _to_MPSKit(mps_tensor, row, virtual_qubits)
+    
+    # Build transfer matrix using TensorKit: T = Σ_s A[s] ⊗ conj(A[s])
+    # A has structure: left ← physical ⊗ right
+    # Transfer matrix: (left ⊗ left') → (right ⊗ right')
+    
+    # Contract over physical index to form transfer matrix
+    @tensor T[-1 -2; -3 -4] := A[-1 1 -3] * conj(A[-2 1 -4])
+    
+    # Reshape to matrix form and compute eigenvalues
+    left_dim = TensorKit.dim(codomain(T))
+    right_dim = TensorKit.dim(domain(T))
+    T_array = reshape(convert(Array, T), left_dim, right_dim)
+    
+    # Compute eigenvalues
+    if left_dim > 256
+        vals, _, _ = KrylovKit.eigsolve(T_array, num_eigenvalues, :LM;
+                                        ishermitian=false, krylovdim=max(30, 2*num_eigenvalues))
+    else
+        eig_result = LinearAlgebra.eigen(T_array)
+        vals = eig_result.values
+    end
+    
+    # Sort by magnitude
+    sorted_idx = sortperm(abs.(vals), rev=true)
+    spectrum = vals[sorted_idx][1:min(num_eigenvalues, length(vals))]
+    
+    # Correlation length from second eigenvalue
+    corr_length = length(spectrum) > 1 ? -1.0 / log(abs(spectrum[2] / spectrum[1])) : Inf
+    
+    return spectrum, corr_length
+end
+
+
+
+
+
 # =============================================================================
 # Backward Compatibility Aliases
 # =============================================================================
@@ -516,51 +718,55 @@ function compute_correlation_coefficients(gates, row, virtual_qubits, O::Abstrac
     # Get E_O (transfer matrix with operator inserted)
     E_O = get_transfer_matrix_with_operator(gates, row, virtual_qubits, O; position=1, optimizer=optimizer)
     
-    # Compute full eigendecomposition
-    # For right eigenvectors: E * r_α = λ_α * r_α
-    eig_right = eigen(E)
+    # Compute eigendecomposition
+    # E[output, input] convention: eigen(E) gives vectors in INPUT space
+    # 
+    # Mathematical right eigenvector r: E * r = λ * r (lives in input space = physical LEFT)
+    # Mathematical left eigenvector l: l† * E = λ * l† (lives in output space = physical RIGHT)
+    #
+    # eigen(E) → right eigenvectors r_α (physical: left fixed point)
+    # eigen(E') → left eigenvectors l_α (since E'*l = conj(λ)*l ⟺ l†*E = λ*l†)
+    eig_E = eigen(E')
+    sorted_idx = sortperm(abs.(eig_E.values), rev=true)
+    eigenvalues = eig_E.values[sorted_idx]
+    R = eig_E.vectors[:, sorted_idx]  # Right eigenvectors (physical: left fixed point)
     
-    # Sort by magnitude (descending)
-    sorted_idx = sortperm(abs.(eig_right.values), rev=true)
-    eigenvalues = eig_right.values[sorted_idx]
-    R = eig_right.vectors[:, sorted_idx]  # Right eigenvectors as columns
+    eig_E_adj = eigen(E)
+    λ_adj = eig_E_adj.values  # eigenvalues of E' = conj(eigenvalues of E)
+    V_adj = eig_E_adj.vectors
     
-    # For left eigenvectors: l_α' * E = λ_α * l_α', equivalently E' * l_α = conj(λ_α) * l_α
-    # Since E is generally not Hermitian, we need left eigenvectors separately
-    eig_left = eigen(E')
-    
-    # Sort left eigenvectors to match right eigenvectors by eigenvalue
-    sorted_idx_left = sortperm(abs.(eig_left.values), rev=true)
-    L = eig_left.vectors[:, sorted_idx_left]  # Left eigenvectors as columns
-    
-    # Normalize so that ⟨l_α|r_β⟩ = δ_{αβ}
-    # The biorthogonal normalization: L' * R should be diagonal
-    # Rescale L columns so that diag(L' * R) = 1
-    overlap = L' * R
-    for α in 1:min(num_modes, size(L, 2))
-        if abs(overlap[α, α]) > 1e-12
-            L[:, α] ./= overlap[α, α]
-        end
+    # Match left eigenvectors to right eigenvectors by eigenvalue
+    # For each right eigenvector with eigenvalue λ, find the left eigenvector
+    # with eigenvalue conj(λ) (since E'l = conj(λ)l implies l†E = λl†)
+    n = length(eigenvalues)
+    L = similar(R)
+    for α in 1:n
+        λ_target = conj(eigenvalues[α])
+        # Find the closest eigenvalue in E'
+        distances = abs.(λ_adj .- λ_target)
+        best_idx = argmin(distances)
+        L[:, α] = V_adj[:, best_idx]
     end
     
-    # Compute coefficients c_α = ⟨l₁|E_O|r_α⟩ * ⟨l_α|E_O|r₁⟩
+    # Compute coefficients c_α = ⟨l₁|E_O|r_α⟩ * ⟨l_α|E_O|r₁⟩ / (⟨l₁|r₁⟩ * ⟨l_α|r_α⟩)
     num_modes = min(num_modes, length(eigenvalues))
     coefficients = zeros(ComplexF64, num_modes)
     
-    r_1 = R[:, 1]  # Fixed point right eigenvector
-    l_1 = L[:, 1]  # Fixed point left eigenvector
+    r_1 = R[:, 1]  # Dominant right eigenvector (physical: left fixed point)
+    l_1 = L[:, 1]  # Dominant left eigenvector (physical: right fixed point)
+    norm_1 = dot(l_1, r_1)  # Biorthogonal normalization
     
-    # E_O * r_α and l_α' * E_O * r_1
     E_O_r1 = E_O * r_1
     
     for α in 1:num_modes
         r_α = R[:, α]
         l_α = L[:, α]
+        norm_α = dot(l_α, r_α)
         
-        # c_α = ⟨l₁|E_O|r_α⟩ * ⟨l_α|E_O|r₁⟩
+        # c_α = ⟨l₁|E_O|r_α⟩ * ⟨l_α|E_O|r₁⟩ / (⟨l₁|r₁⟩ * ⟨l_α|r_α⟩)
         term1 = dot(l_1, E_O * r_α)
         term2 = dot(l_α, E_O_r1)
-        coefficients[α] = term1 * term2
+        coefficients[α] = term1 * term2 / (norm_1 * norm_α)
     end
     
     # Correlation length from second eigenvalue
@@ -599,4 +805,50 @@ function compute_theoretical_correlation_decay(eigenvalues, coefficients, max_la
     end
     
     return collect(lags), correlation
+end
+
+"""
+    compute_theoretical_lambda_eff(eigenvalues, coefficients, max_lag::Int)
+
+Compute the theoretical effective eigenvalue λ_eff(r) for a sum of exponential modes.
+
+For a correlator C(r) = Σ_{α≥2} c_α λ_α^{r-1}, the effective eigenvalue is:
+    λ_eff(r) = C(r+1)/C(r) = Σ_α w_α(r) λ_α / Σ_α w_α(r)
+where w_α(r) = c_α λ_α^{r-1} is the weight of mode α at distance r.
+
+This is a weighted average of eigenvalues, where faster-decaying modes contribute
+less at larger distances. At large r, λ_eff(r) → |λ₂| (the dominant eigenvalue).
+
+# Arguments
+- `eigenvalues`: Complex eigenvalues λ_α from `compute_correlation_coefficients`
+- `coefficients`: Complex coefficients c_α from `compute_correlation_coefficients`
+- `max_lag`: Maximum lag/distance r to compute
+
+# Returns
+- `lags`: Vector 1:(max_lag-1)
+- `lambda_eff`: Theoretical λ_eff(r) = C(r+1)/C(r)
+
+# Example
+```julia
+eigenvalues, coefficients, ξ = compute_correlation_coefficients(gates, row, virtual_qubits, Matrix(Z))
+lags, lambda_eff = compute_theoretical_lambda_eff(eigenvalues, coefficients, 200)
+```
+"""
+function compute_theoretical_lambda_eff(eigenvalues, coefficients, max_lag::Int)
+    # First compute the correlation C(r) for r = 1 to max_lag
+    _, correlation = compute_theoretical_correlation_decay(eigenvalues, coefficients, max_lag)
+    
+    # λ_eff(r) = C(r+1) / C(r)
+    lags = 1:(max_lag-1)
+    lambda_eff = zeros(ComplexF64, max_lag-1)
+    
+    for r in lags
+        if abs(correlation[r]) > 1e-15
+            lambda_eff[r] = correlation[r+1] / correlation[r]
+        else
+            lambda_eff[r] = NaN
+        end
+    end
+    @show mean(lambda_eff)
+    return collect(lags), lambda_eff
 end
