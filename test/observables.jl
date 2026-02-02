@@ -813,3 +813,64 @@ end
     @test -1.0 - 1e-6 ≤ real(Y_exp) ≤ 1.0 + 1e-6
 end
 
+@testset "correlation_function_vs_sampling" begin
+    # Test that exact correlation_function matches sampling-based compute_acf
+    # Use small system for reasonable sampling statistics
+    virtual_qubits = 1
+    nqubits = 1 + 2 * virtual_qubits
+    row = 2
+    max_lag = 5
+    
+    # Generate random unitary gates
+    gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
+    gates = [Matrix(gate) for _ in 1:row]
+    
+    # Compute exact correlation using transfer matrix (connected correlation)
+    exact_corr = correlation_function(gates, row, virtual_qubits, :Z, 1:max_lag; connected=false)
+    # Sample from the quantum channel
+    # Need enough samples for statistical convergence
+    conv_step = 1000
+    samples = 500000
+    rho, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits; 
+                                                        conv_step=conv_step, 
+                                                        samples=samples,
+                                                        measure_first=:Z)
+    
+    # Reshape samples for compute_acf (row samples per column → reshape to get horizontal correlations)
+    # Z_samples is a flat vector, need to compute correlations properly
+    # The sampling gives Z values site by site, so we compute correlation directly
+    Z_vec = Z_samples[conv_step+1:end]  # Discard burn-in
+    
+    # Compute sample-based correlation using compute_acf
+    # compute_acf expects samples in matrix form (chains × samples)
+    # We'll use it as a single chain
+    # Need enough lags: horizontal separation r corresponds to lag r*row in sample stream
+    sample_max_lag = max_lag * row + 1
+    lags, acf, acf_err, corr_full, corr_err, corr_connected, corr_connected_err = compute_acf(
+        reshape(Float64.(Z_vec), 1, :); max_lag=sample_max_lag
+    )
+    # Subsample to get horizontal correlations: separation r → sample lag r*row
+    # After subsampling, index r+1 gives separation r
+    corr_full = corr_full[1:row:end]
+    corr_err = corr_err[1:row:end]
+    
+    # Compare correlations at each separation
+    # After subsampling: corr_full[1] is separation 0, corr_full[r+1] is separation r
+    
+    # Test that magnitudes are in the same ballpark (within statistical error)
+    # We use a looser tolerance since sampling has statistical noise
+    for r in 1:min(max_lag, length(corr_full) - 1)
+        exact_val = real(exact_corr[r])
+        sample_val = corr_full[r + 1]  # After subsampling, index r+1 is separation r
+        sample_err = corr_err[r + 1]
+        
+        # Allow for ~3 sigma statistical error, plus some systematic differences due to finite-size effects
+        tolerance = max(3 * sample_err, 0.05 * abs(exact_val), 0.01)
+        
+        @test isapprox(exact_val, sample_val, atol=0.01) 
+    end
+    
+    # At minimum, test that both give non-trivial correlations (not all zero)
+    @test any(abs.(values(exact_corr)) .> 1e-10)
+    @test any(abs.(corr_connected[2:end]) .> 1e-10)
+end

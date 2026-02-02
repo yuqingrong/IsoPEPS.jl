@@ -592,7 +592,7 @@ function resample_circuit(filename::String; conv_step=1000, samples=100000, meas
     end
     
     # Extract parameters from result
-    params = result.params
+    params = result.final_params
     
     # Extract circuit configuration from input_args
     p = input_args[:p]
@@ -945,12 +945,25 @@ referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile)
 # Reconstruct gates and analyze
 
+fig, data = plot_correlation_function(datafile; 
+                                   max_separation=40,
+                                   conv_step=1000, 
+                                   samples=2000000,
+                                   save_path="project/results/figures/correlation_function.pdf")
+display(fig)
+
 gates, rho, gap, eigenvalues = reconstruct_gates(datafile; use_iterative=false, matrix_free=false)
 _, gap, eigenvalues, eigenvalues_raw = compute_transfer_spectrum(gates, row, nqubits)
 T_matrix, eigenvalues_itensor, correlation_length_itensor = transfer_matrix_ITensor(gates, row, virtual_qubits)
 spectrum, correlation_length_mpskit = spectrum_MPSKit(gates, row, virtual_qubits)
 _,coefficients,_= compute_correlation_coefficients(gates, row, virtual_qubits, Matrix(Z))  
-corr = correlation_function(gates, row, virtual_qubits, :Z, 1000; connected=true)                    
+corr = correlation_function(gates, row, virtual_qubits, :Z, 1000; connected=true)      
+rho, Z_samples, X_samples, params, gates = resample_circuit(datafile; conv_step=1000, samples=1000000)              
+_,acf, acf_err, corr, corr_err, corr_connected, corr_connected_err = compute_acf(Z_samples; max_lag=50)
+@show corr[1:2:end]
+IsoPEPS.expect(gates, row, virtual_qubits, :X)
+rho, Z_samples, X_samples, params, gates = resample_circuit(datafile; conv_step=1000, samples=1000000)
+mean(X_samples)
 
 # Save the plot
 save(joinpath(dirname(datafile), replace(basename(datafile), ".json" => "_eigenvalues.pdf")), fig)

@@ -617,50 +617,66 @@ _apply_transfer_to_vector(code, tensor_ket, tensor_bra, v_tensor, total_qubits) 
 """
     get_transfer_matrix_with_operator(gates, row, virtual_qubits, O::AbstractMatrix; 
                                        position::Int=1, optimizer=GreedyMethod())
+    get_transfer_matrix_with_operator(gates, row, virtual_qubits, operators::Dict{Int,<:AbstractMatrix}; 
+                                       optimizer=GreedyMethod())
 
-Build transfer matrix E_O with operator O inserted at a specific row position.
+Build transfer matrix E_O with operator(s) inserted at specific row position(s).
 
-This is used for computing connected correlation functions via eigenmode decomposition.
-The transfer matrix E_O contracts physical indices after applying operator O at the 
-specified position: E_O[i,j] = ⟨i|E_O|j⟩ where the physical leg at `position` has O inserted.
+This is used for computing correlation functions via eigenmode decomposition.
+The transfer matrix E_O contracts physical indices after applying operator(s) at the 
+specified position(s).
 
 # Arguments
 - `gates`: Vector of gate matrices
 - `row`: Number of rows
 - `virtual_qubits`: Number of virtual qubits per bond
-- `O`: 2×2 operator matrix (e.g., Pauli X, Z)
-- `position`: Row position (1 to row) where to insert the operator (default: 1)
+- `O`: 2×2 operator matrix (single operator case)
+- `operators`: Dict mapping position (1 to row) => operator matrix (multiple operators case)
+- `position`: Row position (1 to row) where to insert the operator (default: 1, single operator case)
 - `optimizer`: Contraction optimizer
 
 # Returns
-- `E_O`: Transfer matrix with operator inserted, shape (matrix_size, matrix_size)
-
-# Description
-For connected correlation ⟨O_i O_{i+r}⟩_c, we need E_O defined as:
-    E_O = Σ_s ⟨s|A† ⊗ O ⊗ A|s⟩
-where the sum is over the physical index at the operator position.
+- `E_O`: Transfer matrix with operator(s) inserted, shape (matrix_size, matrix_size)
 
 # Example
 ```julia
 gates = build_unitary_gate(params, p, row, nqubits)
+# Single operator at position 1
 E_Z = get_transfer_matrix_with_operator(gates, row, virtual_qubits, Matrix(Z); position=1)
+# Multiple operators at different positions
+E_ZZ = get_transfer_matrix_with_operator(gates, row, virtual_qubits, Dict(1 => Matrix(Z), 2 => Matrix(Z)))
+# Operators at all positions (1 to row)
+E_all = get_transfer_matrix_with_operator(gates, row, virtual_qubits, Dict(i => Matrix(Z) for i in 1:row))
 ```
 """
 function get_transfer_matrix_with_operator(gates, row, virtual_qubits, O::AbstractMatrix; 
                                             position::Int=1, optimizer=GreedyMethod())
-    if position < 1 || position > row
-        error("position must be between 1 and row=$row, got $position")
+    # Single operator case - convert to Dict and call the multi-operator version
+    operators = Dict(position => O)
+    return get_transfer_matrix_with_operator(gates, row, virtual_qubits, operators; optimizer=optimizer)
+end
+
+function get_transfer_matrix_with_operator(gates, row, virtual_qubits, operators::Dict{Int,<:AbstractMatrix}; 
+                                            optimizer=GreedyMethod())
+    # Validate positions
+    for pos in keys(operators)
+        if pos < 1 || pos > row
+            error("position must be between 1 and row=$row, got $pos")
+        end
     end
     
     A_tensors = gates_to_tensors(gates, row, virtual_qubits)
     
-    # Insert operator at specified position: AO = O * A (acting on physical index)
+    # Insert operators at specified positions: AO = O * A (acting on physical index)
     # Tensor leg ordering: [physical, down, right, up, left]
     # ein"iabcd,ji -> jabcd" applies O to the physical index
-    AO_tensor = ein"iabcd,ji -> jabcd"(A_tensors[position], O)
-    
-    # Create tensor lists with operator inserted
-    tensor_ket = [i == position ? AO_tensor : A_tensors[i] for i in 1:row]
+    tensor_ket = map(1:row) do i
+        if haskey(operators, i)
+            ein"iabcd,ji -> jabcd"(A_tensors[i], operators[i])
+        else
+            A_tensors[i]
+        end
+    end
     tensor_bra = [conj(A_tensors[i]) for i in 1:row]
     
     # Contract to get E_O

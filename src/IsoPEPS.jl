@@ -95,7 +95,7 @@ export reshape_to_mps, spectrum_MPSKit, transfer_matrix_ITensor
 # Exact Tensor Contraction - Observables
 # =============================================================================
 export compute_X_expectation, compute_Z_expectation, compute_ZZ_expectation, compute_single_expectation
-export compute_exact_energy, correlation_function
+export compute_exact_energy, correlation_function, expect
 
 # =============================================================================
 # Exact Tensor Contraction - Entanglement
@@ -121,5 +121,5 @@ export save_result, load_result, save_results, load_results
 export plot_acf, compute_acf, fit_acf, fit_acf_oscillatory
 export plot_training_history, plot_variance_vs_samples, plot_expectation_values
 export plot_corr_scale, plot_channel_analysis
-export plot_eigenvalue_spectrum, reconstruct_gates, plot_diagnosis
+export plot_eigenvalue_spectrum, reconstruct_gates, plot_diagnosis, plot_correlation_function
 end

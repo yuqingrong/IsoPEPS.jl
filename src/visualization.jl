@@ -892,73 +892,6 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
 end
 
 """
-    compute_acf(data; max_lag::Int=100, n_bootstrap::Int=100, normalize::Bool=true)
-
-Compute autocorrelation function with error estimates.
-
-Accepts either:
-- `Matrix{Float64}`: Each row is an independent chain (preferred for parallel sampling)
-- `Vector{Float64}`: Single time series (uses bootstrap for errors)
-
-When given a matrix (multiple chains), uses ALL pairs from ALL chains to compute ACF.
-For example, with 2 chains of length 5, lag=1 uses pairs:
-  chain1: (1,2), (2,3), (3,4), (4,5)
-  chain2: (1,2), (2,3), (3,4), (4,5)
-Total: 8 pairs for better statistics.
-
-Error bars from standard error across chains (each chain contributes one ACF estimate).
-
-# Arguments
-- `data`: Time series data (Vector or Matrix)
-- `max_lag`: Maximum lag to compute (default: 100)
-- `n_bootstrap`: Number of bootstrap samples for error estimation (only used for Vector input)
-- `normalize`: Whether to normalize by variance (default: true)
-
-# Returns
-- `lags`: Lag values (0 to max_lag-1)
-- `acf`: Autocorrelation at each lag (using all pairs from all chains)
-- `acf_err`: Standard error at each lag (from variance across chains)
-"""
-function compute_acf(data::Matrix{Float64}; max_lag::Int=100, n_bootstrap::Int=100, normalize::Bool=true)
-    n_chains, n_samples = size(data)
-    
-    # Limit max_lag to avoid unreliable estimates at large lags
-    # The ACF estimator has significant negative bias when lag > n_samples/10
-    # Standard practice in time series analysis is to limit to N/10
-    max_lag_limit = div(n_samples, 10)
-    if max_lag > max_lag_limit
-        @warn "Requested max_lag=$max_lag is too large for n_samples=$n_samples. Using max_lag=$max_lag_limit (n_samples/10) to avoid biased estimates."
-        max_lag = max_lag_limit
-    end
-    
-    acf_per_chain = zeros(n_chains, max_lag)
-    
-    # Compute ACF for each chain independently with its own mean and variance
-    # This is the correct approach when chains may have different statistical properties
-    for i in 1:n_chains
-        chain = data[i, :]
-        μ_chain = mean(chain)
-        chain_centered = chain .- μ_chain
-        var_chain = mean(chain_centered.^2)
-        
-        for k in 1:max_lag
-            lag = k - 1
-            n_pairs = n_samples - lag
-            raw_acf = mean(chain_centered[j] * chain_centered[j + lag] for j in 1:n_pairs)
-            acf_per_chain[i, k] = normalize ? raw_acf / var_chain : raw_acf
-        end
-    end
-    
-    # Average ACF across chains
-    acf = vec(mean(acf_per_chain, dims=1))
-    
-    # Standard error from variance across chains
-    acf_err = vec(std(acf_per_chain, dims=1) / sqrt(n_chains))
-    
-    return 0:(max_lag-1), acf, acf_err
-end
-
-"""
     plot_training_history(steps, values; kwargs...)
 
 Plot training loss/energy/observable vs training steps.
@@ -1809,4 +1742,203 @@ function plot_channel_analysis(result::CircuitOptimizationResult;
     )
     
     return fig, analysis
+end
+
+"""
+    plot_correlation_function(filename; max_separation=20, conv_step=1000, samples=100000, save_path=nothing)
+
+Plot two-point correlation functions comparing exact (transfer matrix) and sampling methods.
+
+Shows both full correlation ⟨Z_i Z_{i+r}⟩ and connected correlation ⟨Z_i Z_{i+r}⟩ - ⟨Z⟩² 
+on a log scale for different separations r.
+
+# Arguments
+- `filename`: Path to JSON file with circuit optimization results
+- `max_separation`: Maximum separation r to compute (default: 20)
+- `conv_step`: Convergence steps for sampling (default: 1000)
+- `samples`: Number of samples to generate (default: 100000)
+- `save_path`: Path to save figure (optional)
+
+# Returns
+- `fig`: CairoMakie Figure object
+- `data`: NamedTuple with computed correlation data
+
+# Example
+```julia
+fig, data = plot_correlation_function("results/circuit.json"; max_separation=30)
+```
+"""
+function plot_correlation_function(filename::String; 
+                                   max_separation::Int=20,
+                                   conv_step::Int=1000, 
+                                   samples::Int=100000,
+                                   save_path::Union{String,Nothing}=nothing)
+    # Load data and extract configuration
+    result, input_args = load_result(filename)
+    
+    p = input_args[:p]
+    row = input_args[:row]
+    nqubits = input_args[:nqubits]
+    g = get(input_args, :g, NaN)
+    virtual_qubits = (nqubits - 1) ÷ 2
+    share_params = get(input_args, :share_params, true)
+    
+    # Reconstruct gates from parameters
+    params = result.final_params
+    gates = build_unitary_gate(params, p, row, nqubits; share_params=share_params)
+    
+    println("=== Correlation Function Analysis ===")
+    println("File: ", basename(filename))
+    println("Configuration: g=$g, row=$row, nqubits=$nqubits")
+    
+    # Compute exact correlations using transfer matrix
+    println("\nComputing exact correlations (transfer matrix)...")
+    exact_full = correlation_function(gates, row, virtual_qubits, :Z, 1:max_separation; connected=false)
+    exact_connected = correlation_function(gates, row, virtual_qubits, :Z, 1:max_separation; connected=true)
+    
+    # Extract values in order
+    separations = collect(1:max_separation)
+    exact_full_vals = [real(exact_full[r]) for r in separations]
+    exact_connected_vals = [real(exact_connected[r]) for r in separations]
+    
+    # Compute correlation length from transfer matrix spectrum
+    _, gap, _, _ = compute_transfer_spectrum(gates, row, nqubits)
+    correlation_length = 1 / gap
+    println("Correlation length ξ = $(round(correlation_length, digits=2))")
+    
+    # Compute sample-based correlations
+    println("\nGenerating samples (conv_step=$conv_step, samples=$samples)...")
+    rho, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits; 
+                                                        conv_step=conv_step, 
+                                                        samples=samples,
+                                                        measure_first=:Z)
+    
+    # Compute ACF on samples
+    # Need enough lags for horizontal correlations: separation r → sample lag r*row
+    sample_max_lag = max_separation * row + 1
+    Z_vec = Z_samples[conv_step+1:end]  # Discard burn-in
+    
+    lags, acf, acf_err, corr_full, corr_err, corr_connected, corr_connected_err = compute_acf(
+        reshape(Float64.(Z_vec), 1, :); max_lag=sample_max_lag
+    )
+    
+    # Subsample to get horizontal correlations: separation r → sample lag r*row
+    # After subsampling, index r+1 gives separation r
+    sample_full = corr_full[1:row:end]
+    sample_connected = corr_connected[1:row:end]
+    
+    # Sampling error: 1/sqrt(N_eff) where N_eff = samples/row
+    sampling_error = 1.0 / sqrt(samples / row)
+    println("Sampling error (1/√(samples/row)): $(round(sampling_error, digits=6))")
+    
+    # Limit to available data
+    n_sample_seps = min(length(sample_full) - 1, max_separation)
+    sample_seps = 1:n_sample_seps
+    sample_full_vals = sample_full[2:n_sample_seps+1]  # index 2 is separation 1
+    sample_connected_vals = sample_connected[2:n_sample_seps+1]
+    
+    # Compute error between exact and sample
+    common_seps = min(length(exact_full_vals), length(sample_full_vals))
+    error_full = abs.(exact_full_vals[1:common_seps] .- sample_full_vals[1:common_seps])
+    error_connected = abs.(exact_connected_vals[1:common_seps] .- sample_connected_vals[1:common_seps])
+    mean_error_full = mean(error_full)
+    mean_error_connected = mean(error_connected)
+    println("Mean |exact - sample| error (full): $(round(mean_error_full, digits=6))")
+    println("Mean |exact - sample| error (connected): $(round(mean_error_connected, digits=6))")
+    
+    # Create figure with 2x1 layout
+    fig = Figure(size=(800, 700))
+    
+    # Minimum value for log scale (avoid log of zero/negative)
+    min_val = 1e-15
+    
+    # Title with g, row, nqubits info
+    title_str = "Correlation Function: g=$g, row=$row, nqubits=$nqubits, ξ=$(round(correlation_length, digits=2))"
+    Label(fig[0, 1], title_str, fontsize=16, font=:bold)
+    
+    # Top panel: Full correlation
+    ax1 = Axis(fig[1, 1],
+               xlabel="Separation r",
+               ylabel="|⟨Z_i Z_{i+r}⟩|",
+               title="Full Correlation",
+               yscale=log10)
+    
+    # Prepare data for log scale (clamp to min_val)
+    exact_full_abs = max.(abs.(exact_full_vals), min_val)
+    sample_full_abs = max.(abs.(sample_full_vals), min_val)
+    error_full_plot = max.(error_full, min_val)
+    
+    # Plot exact values
+    lines!(ax1, separations, exact_full_abs, 
+           label="Exact contraction", color=:blue, linewidth=2)
+    scatter!(ax1, separations, exact_full_abs, 
+             color=:blue, markersize=8)
+    
+    # Plot sample values with error bars
+    # Use asymmetric error bars to avoid negative values on log scale
+    err_low = min.(sampling_error, sample_full_abs .- min_val)  # Clamp lower bound
+    err_high = fill(sampling_error, length(sample_seps))
+    scatter!(ax1, collect(sample_seps), sample_full_abs, 
+             label="Sampling ± $(round(sampling_error, sigdigits=2))", color=:red, markersize=8, marker=:diamond)
+    errorbars!(ax1, collect(sample_seps), sample_full_abs, err_low, err_high,
+               color=:red, whiskerwidth=6)
+    
+    axislegend(ax1, position=:rt)
+    
+    # Bottom panel: Connected correlation
+    ax2 = Axis(fig[2, 1],
+               xlabel="Separation r",
+               ylabel="|⟨Z_i Z_{i+r}⟩_c|",
+               title="Connected Correlation",
+               yscale=log10)
+    
+    # Prepare data for log scale (clamp to min_val)
+    exact_connected_abs = max.(abs.(exact_connected_vals), min_val)
+    sample_connected_abs = max.(abs.(sample_connected_vals), min_val)
+    error_connected_plot = max.(error_connected, min_val)
+    
+    # Plot exact values
+    lines!(ax2, separations, exact_connected_abs, 
+           label="Exact contraction", color=:blue, linewidth=2)
+    scatter!(ax2, separations, exact_connected_abs, 
+             color=:blue, markersize=8)
+    
+    # Plot sample values with error bars
+    # Use asymmetric error bars to avoid negative values on log scale
+    err_low_conn = min.(sampling_error, sample_connected_abs .- min_val)  # Clamp lower bound
+    err_high_conn = fill(sampling_error, length(sample_seps))
+    scatter!(ax2, collect(sample_seps), sample_connected_abs, 
+             label="Sampling ± $(round(sampling_error, sigdigits=2))", color=:red, markersize=8, marker=:diamond)
+    errorbars!(ax2, collect(sample_seps), sample_connected_abs, err_low_conn, err_high_conn,
+               color=:red, whiskerwidth=6)
+    
+    axislegend(ax2, position=:rt)
+    
+    # Save if path provided
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        println("\nFigure saved to: $save_path")
+    end
+    
+    # Return data for further analysis
+    data = (
+        separations = separations,
+        exact_full = exact_full_vals,
+        exact_connected = exact_connected_vals,
+        sample_seps = collect(sample_seps),
+        sample_full = sample_full_vals,
+        sample_connected = sample_connected_vals,
+        sampling_error = sampling_error,
+        error_full = error_full,
+        error_connected = error_connected,
+        mean_error_full = mean_error_full,
+        mean_error_connected = mean_error_connected,
+        correlation_length = correlation_length,
+        g = g,
+        row = row,
+        nqubits = nqubits
+    )
+    
+    return fig, data
 end

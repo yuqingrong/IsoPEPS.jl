@@ -277,3 +277,174 @@ function correlation_function(gates, row, virtual_qubits, observable::Union{Symb
     
     return correlations
 end
+
+
+"""
+    expect(gates, row, virtual_qubits, observable; position=1, optimizer=GreedyMethod())
+    expect(gates, row, virtual_qubits, operators::Dict; optimizer=GreedyMethod())
+
+Compute expectation value ⟨O⟩ or ⟨O₁ O₂ ...⟩ using transfer matrix formalism.
+
+The expectation is computed as:
+    ⟨O⟩ = l† · E_O · r / (l† · r)
+
+where E_O is the transfer matrix with observable(s) inserted, and l, r are
+the left and right fixed points.
+
+# Arguments
+- `gates`: Vector of gate matrices
+- `row`: Number of rows
+- `virtual_qubits`: Number of virtual qubits per bond
+- `observable`: Observable operator, either `:X`, `:Z`, or a 2×2 matrix (single operator case)
+- `operators`: Dict mapping position (1 to row) => operator (multiple operators case)
+- `position`: Row position (1 to row) where to insert the observable (default: 1)
+- `optimizer`: Contraction optimizer (default: GreedyMethod())
+
+# Returns
+- `expectation`: Complex expectation value
+
+# Example
+```julia
+gates = build_unitary_gate(params, p, row, nqubits)
+# Single operator
+Z_expect = expect(gates, row, virtual_qubits, :Z)
+X_expect = expect(gates, row, virtual_qubits, :X; position=2)
+# Two operators at positions 1 and 2 (vertical ZZ within column)
+ZZ_vert = expect(gates, row, virtual_qubits, Dict(1 => :Z, 2 => :Z))
+# All Z operators
+Z_all = expect(gates, row, virtual_qubits, Dict(i => :Z for i in 1:row))
+```
+"""
+function expect(gates, row, virtual_qubits, observable::Union{Symbol,AbstractMatrix}; 
+                position::Int=1, optimizer=GreedyMethod())
+    # Single operator case - convert to Dict and call the multi-operator version
+    operators = Dict(position => observable)
+    return expect(gates, row, virtual_qubits, operators; optimizer=optimizer)
+end
+
+function expect(gates, row, virtual_qubits, operators::Dict{Int,<:Union{Symbol,AbstractMatrix}}; 
+                optimizer=GreedyMethod())
+    # Convert symbols to matrices
+    op_matrices = Dict{Int, Matrix{ComplexF64}}()
+    for (pos, op) in operators
+        O = if op isa Symbol
+            op == :X ? Matrix(X) : (op == :Z ? Matrix(Z) : error("Unknown observable: $op"))
+        else
+            Matrix{ComplexF64}(op)
+        end
+        op_matrices[pos] = O
+    end
+    
+    # Get transfer matrix and E_O with multiple operators
+    E = get_transfer_matrix(gates, row, virtual_qubits)
+    E_O = get_transfer_matrix_with_operator(gates, row, virtual_qubits, op_matrices; optimizer=optimizer)
+    
+    # Compute right fixed point: E * r = λ * r
+    eig_right = eigen(E)
+    sorted_idx_r = sortperm(abs.(eig_right.values), rev=true)
+    r_vec = eig_right.vectors[:, sorted_idx_r[1]]  # Dominant right eigenvector
+    
+    # Compute left fixed point: l† * E = λ * l†
+    # Equivalently: E' * l = λ* * l, so l is right eigenvector of E'
+    eig_left = eigen(E')
+    sorted_idx_l = sortperm(abs.(eig_left.values), rev=true)
+    l_vec = eig_left.vectors[:, sorted_idx_l[1]]  # Dominant left eigenvector
+    
+    # Biorthogonal normalization factor
+    norm_factor = dot(l_vec, r_vec)
+    
+    # Compute ⟨O₁ O₂ ...⟩ = l† · E_O · r / (l† · r)
+    O_expectation = dot(l_vec, E_O * r_vec) / norm_factor
+    
+    return O_expectation
+end
+
+"""
+    compute_acf(data; max_lag::Int=100, n_bootstrap::Int=100, normalize::Bool=true)
+
+Compute autocorrelation function with error estimates.
+
+Accepts either:
+- `Matrix{Float64}`: Each row is an independent chain (preferred for parallel sampling)
+- `Vector{Float64}`: Single time series (uses bootstrap for errors)
+
+When given a matrix (multiple chains), uses ALL pairs from ALL chains to compute ACF.
+For example, with 2 chains of length 5, lag=1 uses pairs:
+  chain1: (1,2), (2,3), (3,4), (4,5)
+  chain2: (1,2), (2,3), (3,4), (4,5)
+Total: 8 pairs for better statistics.
+
+Error bars from standard error across chains (each chain contributes one ACF estimate).
+
+# Arguments
+- `data`: Time series data (Vector or Matrix)
+- `max_lag`: Maximum lag to compute (default: 100)
+- `n_bootstrap`: Number of bootstrap samples for error estimation (only used for Vector input)
+- `normalize`: Whether to normalize by variance (default: true)
+
+# Returns
+- `lags`: Lag values (0 to max_lag-1)
+- `acf`: Normalized autocorrelation at each lag (connected correlation / variance)
+- `acf_err`: Standard error of normalized ACF
+- `corr`: Full correlation ⟨X_i X_{i+r}⟩ at each lag
+- `corr_err`: Standard error of full correlation
+- `corr_connected`: Connected correlation ⟨X_i X_{i+r}⟩ - ⟨X⟩² at each lag
+- `corr_connected_err`: Standard error of connected correlation
+"""
+function compute_acf(data::Matrix{Float64}; max_lag::Int=100, n_bootstrap::Int=100, normalize::Bool=true)
+    n_chains, n_samples = size(data)
+    
+    # Limit max_lag to avoid unreliable estimates at large lags
+    # The ACF estimator has significant negative bias when lag > n_samples/10
+    # Standard practice in time series analysis is to limit to N/10
+    max_lag_limit = div(n_samples, 10)
+    if max_lag > max_lag_limit
+        @warn "Requested max_lag=$max_lag is too large for n_samples=$n_samples. Using max_lag=$max_lag_limit (n_samples/10) to avoid biased estimates."
+        max_lag = max_lag_limit
+    end
+    
+    acf_per_chain = zeros(n_chains, max_lag)           # Normalized ACF
+    corr_per_chain = zeros(n_chains, max_lag)          # Full correlation ⟨X_i X_{i+r}⟩
+    corr_connected_per_chain = zeros(n_chains, max_lag) # Connected correlation
+    
+    # Compute correlations for each chain independently
+    for i in 1:n_chains
+        chain = data[i, :]
+        μ_chain = mean(chain)
+        chain_centered = chain .- μ_chain
+        var_chain = mean(chain_centered.^2)
+        
+        for k in 1:max_lag
+            lag = k - 1
+            n_pairs = n_samples - lag
+            
+            # Full correlation: ⟨X_i X_{i+r}⟩
+            full_corr = mean(chain[j] * chain[j + lag] for j in 1:n_pairs)
+            corr_per_chain[i, k] = full_corr
+            
+            # Connected correlation: ⟨X_i X_{i+r}⟩ - ⟨X⟩² = ⟨(X_i - μ)(X_{i+r} - μ)⟩
+            connected_corr = mean(chain_centered[j] * chain_centered[j + lag] for j in 1:n_pairs)
+            corr_connected_per_chain[i, k] = connected_corr
+            
+            # Normalized ACF: connected / variance
+            acf_per_chain[i, k] = connected_corr / var_chain
+        end
+    end
+    
+    # Average across chains
+    acf = vec(mean(acf_per_chain, dims=1))
+    corr = vec(mean(corr_per_chain, dims=1))
+    corr_connected = vec(mean(corr_connected_per_chain, dims=1))
+    
+    # Standard error from variance across chains
+    acf_err = vec(std(acf_per_chain, dims=1) / sqrt(n_chains))
+    corr_err = vec(std(corr_per_chain, dims=1) / sqrt(n_chains))
+    corr_connected_err = vec(std(corr_connected_per_chain, dims=1) / sqrt(n_chains))
+    
+    return 0:(max_lag-1), acf, acf_err, corr, corr_err, corr_connected, corr_connected_err
+end
+
+# Vector method: convert to single-row matrix
+function compute_acf(data::Vector{Float64}; max_lag::Int=100, n_bootstrap::Int=100, normalize::Bool=true)
+    return compute_acf(reshape(data, 1, :); max_lag=max_lag, n_bootstrap=n_bootstrap, normalize=normalize)
+end
