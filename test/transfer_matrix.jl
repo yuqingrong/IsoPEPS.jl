@@ -848,7 +848,7 @@ end
             # Note: ITensor and custom implementation may have different index conventions
             # which results in a transpose. Both T and T' have the same spectrum.
             @test size(T_custom) == size(T_itensor_array)
-            @test isapprox(T_custom, T_itensor_array, atol=1e-10) || isapprox(T_custom, transpose(T_itensor_array), atol=1e-10)
+            @test isapprox(T_custom, T_itensor_array, atol=1e-10) 
             
             # Get spectrum from all three methods
             _, gap_custom, eigenvalues_custom, _ = compute_transfer_spectrum(gates, row, nqubits)

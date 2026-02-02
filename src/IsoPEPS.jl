@@ -95,7 +95,7 @@ export reshape_to_mps, spectrum_MPSKit, transfer_matrix_ITensor
 # Exact Tensor Contraction - Observables
 # =============================================================================
 export compute_X_expectation, compute_Z_expectation, compute_ZZ_expectation, compute_single_expectation
-export compute_exact_energy
+export compute_exact_energy, correlation_function
 
 # =============================================================================
 # Exact Tensor Contraction - Entanglement

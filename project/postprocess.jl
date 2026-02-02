@@ -949,13 +949,14 @@ gates, rho, gap, eigenvalues = reconstruct_gates(datafile; use_iterative=false, 
 _, gap, eigenvalues, eigenvalues_raw = compute_transfer_spectrum(gates, row, nqubits)
 T_matrix, eigenvalues_itensor, correlation_length_itensor = transfer_matrix_ITensor(gates, row, virtual_qubits)
 spectrum, correlation_length_mpskit = spectrum_MPSKit(gates, row, virtual_qubits)
-
+_,coefficients,_= compute_correlation_coefficients(gates, row, virtual_qubits, Matrix(Z))  
+corr = correlation_function(gates, row, virtual_qubits, :Z, 1000; connected=true)                    
 
 # Save the plot
 save(joinpath(dirname(datafile), replace(basename(datafile), ".json" => "_eigenvalues.pdf")), fig)
 println("Energy: $energy")
 # Analyze autocorrelation (using saved samples)
-lags, acf, fit_params = analyze_acf(datafile, row; max_lag=10, resample=false, samples=1000000)
+lags, acf, fit_params = analyze_acf(datafile, row; max_lag=100, resample=false, samples=1000000)
 
 data_dir = joinpath(@__DIR__, "results")
 datafile1 = joinpath(data_dir, "circuit_J=1.0_g=2.0_row=2_nqubits=3_ones.json")

@@ -59,7 +59,7 @@ function simulation(; J::Float64, g_values::Vector{Float64}, row::Int, p::Int, n
         verbose && println("Thread $(Threads.threadid()): Starting simulation for g = $(g)")
         
         Random.seed!(seed)  # Different seed for each thread
-        params = initialize_tfim_params(p, nqubits, g; mode=:entangled)
+        params = rand(2*nqubits*p)
         result = optimize_circuit(params, J, g, p, row, nqubits; 
                                   maxiter=maxiter, 
                                   measure_first=measure_first,

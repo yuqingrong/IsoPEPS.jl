@@ -168,7 +168,7 @@ function get_transfer_matrix(gates, row, virtual_qubits)
     _, T = contract_transfer_matrix([A_tensors[i] for i in 1:row], 
                                          [conj(A_tensors[i]) for i in 1:row], row)
     T = reshape(T, matrix_size, matrix_size)
-    return T
+    return transpose(T)
 end
 
 """
@@ -671,7 +671,7 @@ function get_transfer_matrix_with_operator(gates, row, virtual_qubits, O::Abstra
     _, T_O = contract_transfer_matrix(tensor_ket, tensor_bra, row; optimizer=optimizer)
     E_O = reshape(T_O, matrix_size, matrix_size)
     
-    return E_O
+    return transpose(E_O)
 end
 
 """

@@ -168,6 +168,112 @@ function compute_exact_energy(params::Vector{Float64}, g::Float64, J::Float64,
     return gap, energy
 end
 
-function correlation_function()
+"""
+    correlation_function(gates, row, virtual_qubits, observable, separations; 
+                         position::Int=1, connected::Bool=false, optimizer=GreedyMethod())
 
+Compute two-point correlation function ⟨O_i O_{i+r}⟩ using transfer matrix formalism.
+
+The correlation is computed as:
+    ⟨O_i O_{i+r}⟩ = l† · E_O · E^(r-1) · E_O · r / (l† · r)
+
+where E is the transfer matrix, E_O has observable O inserted, and l, r are
+the left and right fixed points.
+
+# Arguments
+- `gates`: Vector of gate matrices
+- `row`: Number of rows
+- `virtual_qubits`: Number of virtual qubits per bond
+- `observable`: Observable operator, either `:X`, `:Z`, or a 2×2 matrix
+- `separations`: Separations to compute (Int, range, or vector)
+- `position`: Row position (1 to row) where to insert the observable (default: 1)
+- `connected`: If true, return connected correlation ⟨O_i O_{i+r}⟩ - ⟨O⟩² (default: false)
+- `optimizer`: Contraction optimizer (default: GreedyMethod())
+
+# Returns
+- `correlations`: Dictionary mapping separation r => correlation value
+
+# Example
+```julia
+gates = build_unitary_gate(params, p, row, nqubits)
+# Compute ⟨Z_i Z_{i+r}⟩ for r = 1 to 10
+corr = correlation_function(gates, row, virtual_qubits, :Z, 1:10)
+# Connected correlation
+corr_c = correlation_function(gates, row, virtual_qubits, :Z, 1:10; connected=true)
+```
+"""
+function correlation_function(gates, row, virtual_qubits, observable::Union{Symbol,AbstractMatrix}, 
+                              separations; position::Int=1, connected::Bool=false, 
+                              optimizer=GreedyMethod())
+    # Get the operator matrix
+    O = if observable isa Symbol
+        observable == :X ? Matrix(X) : (observable == :Z ? Matrix(Z) : error("Unknown observable: $observable"))
+    else
+        observable
+    end
+    
+    # Handle single separation
+    seps = separations isa Integer ? [separations] : collect(separations)
+    if isempty(seps)
+        return Dict{Int, ComplexF64}()
+    end
+    
+    # Get transfer matrix and E_O
+    E = get_transfer_matrix(gates, row, virtual_qubits)
+    E_O = get_transfer_matrix_with_operator(gates, row, virtual_qubits, O; position=position, optimizer=optimizer)
+    
+    # Compute right fixed point: E * r = λ * r
+    # Using eigen(E') to get right eigenvectors of E
+    eig_right = eigen(E)
+    sorted_idx_r = sortperm(abs.(eig_right.values), rev=true)
+    r_vec = eig_right.vectors[:, sorted_idx_r[1]]  # Dominant right eigenvector
+    
+    # Compute left fixed point: l† * E = λ * l†
+    # Equivalently: E' * l = λ* * l, so l is right eigenvector of E'
+    eig_left = eigen(E')
+    sorted_idx_l = sortperm(abs.(eig_left.values), rev=true)
+    l_vec = eig_left.vectors[:, sorted_idx_l[1]]  # Dominant left eigenvector
+    
+    # Biorthogonal normalization factor
+    norm_factor = dot(l_vec, r_vec)
+    
+    # Efficient computation for multiple separations
+    # Sort separations to iterate in order
+    sorted_seps = sort(seps)
+    max_sep = maximum(sorted_seps)
+    
+    # Initialize: current = E_O * r (right boundary with second operator applied)
+    current = E_O * r_vec
+    
+    # l† * E_O for left boundary with first operator
+    l_E_O = E_O' * l_vec
+    
+    # Compute correlations iteratively
+    correlations = Dict{Int, ComplexF64}()
+    prev_sep = 1
+    
+    for sep in sorted_seps
+        # Apply E^(sep - prev_sep) times to advance from previous separation
+        for _ in 1:(sep - prev_sep)
+            current = E * current
+        end
+        prev_sep = sep
+        
+        # Compute correlation: l† · E_O · E^(r-1) · E_O · r = (E_O' * l)† · current
+        corr_value = dot(l_E_O, current) / norm_factor
+        correlations[sep] = corr_value
+    end
+    
+    # Subtract ⟨O⟩² for connected correlation
+    if connected
+        # Compute ⟨O⟩ = l† · E_O · r / (l† · r)  (separation r=0)
+        O_expectation = dot(l_vec, E_O * r_vec) / norm_factor
+        O_squared = O_expectation^2
+        
+        for sep in keys(correlations)
+            correlations[sep] -= O_squared
+        end
+    end
+    
+    return correlations
 end
