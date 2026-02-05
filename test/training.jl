@@ -53,12 +53,12 @@ end
                               maxiter=2, conv_step=10, samples=50)
     
     @test result isa CircuitOptimizationResult
-    @test result.energy isa Float64
+    @test result.final_cost isa Float64
     @test length(result.energy_history) > 0
-    @test length(result.gates) == row
-    @test result.params isa Vector{Float64}
-    @test result.Z_samples isa Vector{Float64}
-    @test result.X_samples isa Vector{Float64}
+    @test length(result.final_gates) == row
+    @test result.final_params isa Vector{Float64}
+    @test result.final_Z_samples isa Vector{Float64}
+    @test result.final_X_samples isa Vector{Float64}
     @test result.converged isa Bool
 end
 

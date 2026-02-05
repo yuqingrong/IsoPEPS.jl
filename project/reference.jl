@@ -131,6 +131,52 @@ function plot_pepskit_energy(json_file::String; save_path=nothing)
     return fig
 end
 
+"""
+    plot_corr_PEPSKit(filename::String; save_path=nothing)
+
+Plot correlation length vs transverse field g from PEPSKit results.
+
+# Arguments
+- `filename`: Path to JSON file with PEPSKit results
+- `save_path`: Optional path to save the figure
+
+# Returns
+- `fig`: Makie Figure object
+"""
+function plot_corr_PEPSKit(filename::String="project/results/pepskit_results_D=2.json"; 
+                           save_path::Union{String,Nothing}=nothing)
+    # Load data
+    data = JSON3.read(read(filename, String))
+    
+    g_values = data[:g_values]
+    correlation_lengths = data[:correlation_lengths]
+    energies = data[:energies]
+    
+    # Create figure
+    fig = Figure(size=(600, 400))
+    ax = Axis(fig[1, 1],
+              xlabel="Transverse field g",
+              ylabel="Correlation length ξ",
+              title="PEPSKit: Correlation Length vs g (D=$(data[:parameters][:D]))")
+    
+    # Plot correlation length
+    lines!(ax, g_values, correlation_lengths, color=:blue, linewidth=2, label="PEPSKit")
+    scatter!(ax, g_values, correlation_lengths, color=:blue, markersize=8)
+    
+    # Add vertical line at critical point g ≈ 3.04
+    vlines!(ax, [3.04], color=:red, linestyle=:dash, linewidth=1.5, label="g_c ≈ 3.04")
+    
+    # Legend
+    axislegend(ax, position=:rt)
+    
+    if !isnothing(save_path)
+        save(save_path, fig)
+        @info "Figure saved to $save_path"
+    end
+    
+    return fig
+end
+
 # Run the scan
 if abspath(PROGRAM_FILE) == @__FILE__
     results = run_pepskit_scan(
@@ -146,4 +192,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
     )
 end
 
-plot_pepskit_energy("project/results/pepskit_results_D=2.json")
+plot_pepskit_energy("project/results/pepskit_results_D=2.json"; save_path="project/results/figures/pepskit_energy.pdf")
+
+fig = plot_corr_PEPSKit(referfile; 
+                           save_path="project/results/figures/pepskit_correlation_length.pdf")
+display(fig)

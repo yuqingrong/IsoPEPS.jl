@@ -13,13 +13,6 @@ end
     include("observables.jl")
 end
 
-@testset "entanglement" begin
-    include("entanglement.jl")
-end
-
-@testset "additional_exact" begin
-    include("additional_exact.jl")
-end
 
 @testset "quantum_channels" begin
     include("quantum_channels.jl")

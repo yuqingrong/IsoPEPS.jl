@@ -61,7 +61,6 @@ include("reference.jl")
 # Exact tensor contraction (split into logical modules)
 include("transfer_matrix.jl")  # Core transfer matrix operations
 include("observables.jl")       # Expectation value computations
-include("entanglement.jl")      # Entanglement entropy calculations
 
 # =============================================================================
 # Quantum Channel Simulation
@@ -100,10 +99,11 @@ export compute_exact_energy, correlation_function, expect
 # =============================================================================
 # Exact Tensor Contraction - Entanglement
 # =============================================================================
-export mps_bond_entanglement, mps_physical_entanglement, mps_physical_entanglement_infinite
-export multiline_mps_entanglement, multiline_mps_entanglement_from_params
-export multiline_mps_physical_entanglement, multiline_mps_physical_entanglement_from_params
-export multiline_mps_physical_entanglement_infinite
+# Note: Entanglement functions not yet implemented
+# export mps_bond_entanglement, mps_physical_entanglement, mps_physical_entanglement_infinite
+# export multiline_mps_entanglement, multiline_mps_entanglement_from_params
+# export multiline_mps_physical_entanglement, multiline_mps_physical_entanglement_from_params
+# export multiline_mps_physical_entanglement_infinite
 
 # =============================================================================
 # Diagnostics (defined in visualization.jl)
@@ -117,7 +117,7 @@ export mpskit_ground_state, mpskit_ground_state_1d, pepskit_ground_state
 # =============================================================================
 # Data I/O & Visualization
 # =============================================================================
-export save_result, load_result, save_results, load_results
+export save_result, load_result, save_results, load_results, resample_circuit
 export plot_acf, compute_acf, fit_acf, fit_acf_oscillatory
 export plot_training_history, plot_variance_vs_samples, plot_expectation_values
 export plot_corr_scale, plot_channel_analysis

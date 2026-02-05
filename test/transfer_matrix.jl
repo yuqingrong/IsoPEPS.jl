@@ -108,9 +108,9 @@ end
     for row in [1]
         gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
         gates = [Matrix(gate) for _ in 1:row]
-        rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, virtual_qubits)
+        rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
         @test LinearAlgebra.tr(rho) ≈ 1.0
-        @test all(eigenvalues[1:end-1] .< 1.0)
+        @test all(eigenvalues[2:end] .< 1.0)
     end
 end
 

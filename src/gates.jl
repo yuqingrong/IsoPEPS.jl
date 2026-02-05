@@ -128,7 +128,7 @@ function _build_layer(params, r, nqubits)
     
     cnot_full = Matrix{ComplexF64}(I, dim, dim)
    if nqubits >= 5  
-    cnot_full *= Matrix(cnot(nqubits, nqubits,1))  # 1→5 
+    cnot_full *= Matrix(cnot(nqubits, nqubits,1))  # 5→1 
    end
     
     

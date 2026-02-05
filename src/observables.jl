@@ -379,6 +379,7 @@ Error bars from standard error across chains (each chain contributes one ACF est
 # Arguments
 - `data`: Time series data (Vector or Matrix)
 - `max_lag`: Maximum lag to compute (default: 100)
+- `row`: Subsample step - take every `row`-th sample from each chain (default: 1, no subsampling)
 - `n_bootstrap`: Number of bootstrap samples for error estimation (only used for Vector input)
 - `normalize`: Whether to normalize by variance (default: true)
 
@@ -391,15 +392,19 @@ Error bars from standard error across chains (each chain contributes one ACF est
 - `corr_connected`: Connected correlation ⟨X_i X_{i+r}⟩ - ⟨X⟩² at each lag
 - `corr_connected_err`: Standard error of connected correlation
 """
-function compute_acf(data::Matrix{Float64}; max_lag::Int=100, n_bootstrap::Int=100, normalize::Bool=true)
-    n_chains, n_samples = size(data)
+function compute_acf(data::Matrix{Float64}; max_lag::Int=100, row::Int=1, n_bootstrap::Int=100, normalize::Bool=true)
+    n_chains, n_samples_raw = size(data)
+    
+    # Subsample: take every row-th sample from each chain
+    # This makes lag in subsampled data = horizontal separation in PEPS
+    n_samples = div(n_samples_raw, row)
     
     # Limit max_lag to avoid unreliable estimates at large lags
     # The ACF estimator has significant negative bias when lag > n_samples/10
     # Standard practice in time series analysis is to limit to N/10
     max_lag_limit = div(n_samples, 10)
     if max_lag > max_lag_limit
-        @warn "Requested max_lag=$max_lag is too large for n_samples=$n_samples. Using max_lag=$max_lag_limit (n_samples/10) to avoid biased estimates."
+        @warn "Requested max_lag=$max_lag is too large for n_samples=$n_samples (after subsampling with row=$row). Using max_lag=$max_lag_limit (n_samples/10) to avoid biased estimates."
         max_lag = max_lag_limit
     end
     
@@ -407,24 +412,39 @@ function compute_acf(data::Matrix{Float64}; max_lag::Int=100, n_bootstrap::Int=1
     corr_per_chain = zeros(n_chains, max_lag)          # Full correlation ⟨X_i X_{i+r}⟩
     corr_connected_per_chain = zeros(n_chains, max_lag) # Connected correlation
     
+    # Standard errors within each chain (from variance of products)
+    corr_stderr_per_chain = zeros(n_chains, max_lag)
+    corr_connected_stderr_per_chain = zeros(n_chains, max_lag)
+    
     # Compute correlations for each chain independently
     for i in 1:n_chains
-        chain = data[i, :]
+        # Subsample: take every row-th sample
+        chain = data[i, 1:row:end]
+        n_chain = length(chain)
         μ_chain = mean(chain)
         chain_centered = chain .- μ_chain
         var_chain = mean(chain_centered.^2)
         
         for k in 1:max_lag
             lag = k - 1
-            n_pairs = n_samples - lag
+            n_pairs = n_chain - lag
+            if n_pairs < 1
+                continue
+            end
             
             # Full correlation: ⟨X_i X_{i+r}⟩
-            full_corr = mean(chain[j] * chain[j + lag] for j in 1:n_pairs)
+            products_full = [chain[j] * chain[j + lag] for j in 1:n_pairs]
+            full_corr = mean(products_full)
             corr_per_chain[i, k] = full_corr
+            # Standard error: std(products) / sqrt(n_pairs)
+            corr_stderr_per_chain[i, k] = std(products_full) / sqrt(n_pairs)
             
             # Connected correlation: ⟨X_i X_{i+r}⟩ - ⟨X⟩² = ⟨(X_i - μ)(X_{i+r} - μ)⟩
-            connected_corr = mean(chain_centered[j] * chain_centered[j + lag] for j in 1:n_pairs)
+            products_connected = [chain_centered[j] * chain_centered[j + lag] for j in 1:n_pairs]
+            connected_corr = mean(products_connected)
             corr_connected_per_chain[i, k] = connected_corr
+            # Standard error: std(products) / sqrt(n_pairs)
+            corr_connected_stderr_per_chain[i, k] = std(products_connected) / sqrt(n_pairs)
             
             # Normalized ACF: connected / variance
             acf_per_chain[i, k] = connected_corr / var_chain
@@ -436,15 +456,31 @@ function compute_acf(data::Matrix{Float64}; max_lag::Int=100, n_bootstrap::Int=1
     corr = vec(mean(corr_per_chain, dims=1))
     corr_connected = vec(mean(corr_connected_per_chain, dims=1))
     
-    # Standard error from variance across chains
-    acf_err = vec(std(acf_per_chain, dims=1) / sqrt(n_chains))
-    corr_err = vec(std(corr_per_chain, dims=1) / sqrt(n_chains))
-    corr_connected_err = vec(std(corr_connected_per_chain, dims=1) / sqrt(n_chains))
+    # Standard error: combine within-chain and across-chain variance
+    # For single chain: use within-chain stderr (from variance of products)
+    # For multiple chains: use across-chain std / sqrt(n_chains)
+    if n_chains == 1
+        # Single chain: use within-chain standard error from product variance
+        acf_err = vec(corr_connected_stderr_per_chain[1, :] ./ var(data[1, :]))
+        corr_err = vec(corr_stderr_per_chain[1, :])
+        corr_connected_err = vec(corr_connected_stderr_per_chain[1, :])
+    else
+        # Multiple chains: use standard error across chains
+        acf_err = vec(std(acf_per_chain, dims=1) / sqrt(n_chains))
+        corr_err = vec(std(corr_per_chain, dims=1) / sqrt(n_chains))
+        corr_connected_err = vec(std(corr_connected_per_chain, dims=1) / sqrt(n_chains))
+        
+        # Also consider within-chain variance (take max for robustness)
+        within_corr_err = vec(mean(corr_stderr_per_chain, dims=1))
+        within_conn_err = vec(mean(corr_connected_stderr_per_chain, dims=1))
+        corr_err = max.(corr_err, within_corr_err)
+        corr_connected_err = max.(corr_connected_err, within_conn_err)
+    end
     
     return 0:(max_lag-1), acf, acf_err, corr, corr_err, corr_connected, corr_connected_err
 end
 
 # Vector method: convert to single-row matrix
-function compute_acf(data::Vector{Float64}; max_lag::Int=100, n_bootstrap::Int=100, normalize::Bool=true)
-    return compute_acf(reshape(data, 1, :); max_lag=max_lag, n_bootstrap=n_bootstrap, normalize=normalize)
+function compute_acf(data::Vector{Float64}; max_lag::Int=100, row::Int=1, n_bootstrap::Int=100, normalize::Bool=true)
+    return compute_acf(reshape(data, 1, :); max_lag=max_lag, row=row, n_bootstrap=n_bootstrap, normalize=normalize)
 end

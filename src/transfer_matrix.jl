@@ -727,7 +727,7 @@ eigenvalues, coefficients, ξ = compute_correlation_coefficients(gates, row, vir
 ```
 """
 function compute_correlation_coefficients(gates, row, virtual_qubits, O::AbstractMatrix;
-                                           num_modes::Int=10, optimizer=GreedyMethod())
+                                           num_modes::Int=64, optimizer=GreedyMethod())
     # Get the transfer matrix
     E = get_transfer_matrix(gates, row, virtual_qubits)
     

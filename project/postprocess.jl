@@ -48,7 +48,7 @@ function analyze_result(filename::String; pepskit_results_file::Union{String,Not
     display(fig)
     
     # Plot expectation values (using exact contraction if parameters available)
-    fig_exp = plot_expectation_values(result; g=g, J=J, row=row, p=p, nqubits=nqubits, use_exact=use_exact)
+    fig_exp = plot_expectation_values(result; g=g, J=J, row=row, p=p, nqubits=nqubits, use_exact=use_exact, datafile=filename)
     display(fig_exp)
     
     
@@ -938,7 +938,7 @@ function run_energy_evolution(file1::String, file2::String; n_runs=50, conv_step
 end
 # Example usage (commented out)
 # Analyze a single result
-J=1.0;g = 3.0; row=2 ; nqubits=3; p=3; virtual_qubits=1;D=2
+J=1.0;g = 1.0; row=3 ; nqubits=3; p=3; virtual_qubits=1;D=2
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
@@ -948,15 +948,18 @@ result, args = analyze_result(datafile; pepskit_results_file=referfile)
 fig, data = plot_correlation_function(datafile; 
                                    max_separation=40,
                                    conv_step=1000, 
-                                   samples=2000000,
+                                   samples=3000000,
                                    save_path="project/results/figures/correlation_function.pdf")
 display(fig)
 
 gates, rho, gap, eigenvalues = reconstruct_gates(datafile; use_iterative=false, matrix_free=false)
 _, gap, eigenvalues, eigenvalues_raw = compute_transfer_spectrum(gates, row, nqubits)
-T_matrix, eigenvalues_itensor, correlation_length_itensor = transfer_matrix_ITensor(gates, row, virtual_qubits)
-spectrum, correlation_length_mpskit = spectrum_MPSKit(gates, row, virtual_qubits)
+eigenvalues_raw
+xi = -log(abs(eigenvalues[5]/eigenvalues[1]))
 _,coefficients,_= compute_correlation_coefficients(gates, row, virtual_qubits, Matrix(Z))  
+picked_idx = findall(abs.(coefficients) .> 1e-3)
+[(i, coefficients[i]) for i in picked_idx]
+
 corr = correlation_function(gates, row, virtual_qubits, :Z, 1000; connected=true)      
 rho, Z_samples, X_samples, params, gates = resample_circuit(datafile; conv_step=1000, samples=1000000)              
 _,acf, acf_err, corr, corr_err, corr_connected, corr_connected_err = compute_acf(Z_samples; max_lag=50)

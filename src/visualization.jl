@@ -205,6 +205,75 @@ function load_result(filename::String; result_type::Symbol=:auto)
 end
 
 """
+    resample_circuit(filename::String; conv_step=1000, samples=100000, measure_first=nothing)
+
+Extract final parameters from a saved result and re-run the circuit to generate new samples.
+
+# Arguments
+- `filename`: Path to JSON result file containing CircuitOptimizationResult
+- `conv_step`: Number of convergence steps before sampling (default: 1000)
+- `samples`: Number of samples to collect (default: 100000)
+- `measure_first`: Which observable to measure first, :X or :Z (default: use value from saved result)
+
+# Returns
+- Tuple of (rho, Z_samples, X_samples, params, gates) where:
+  - `rho`: Final quantum state
+  - `Z_samples`: Vector of Z measurement outcomes
+  - `X_samples`: Vector of X measurement outcomes
+  - `params`: Parameters used (from the saved result)
+  - `gates`: Gates reconstructed from parameters
+
+# Example
+```julia
+rho, Z_samples, X_samples, params, gates = resample_circuit("results/circuit_J=1.0_g=2.0_row=6.json"; samples=50000)
+```
+"""
+function resample_circuit(filename::String; conv_step=100, samples=1000, measure_first=nothing)
+    result, input_args = load_result(filename)
+    
+    if !(result isa CircuitOptimizationResult)
+        @warn "Result is not CircuitOptimizationResult, cannot resample"
+        return nothing
+    end
+    
+    # Extract parameters from result
+    params = result.final_params
+    
+    # Extract circuit configuration from input_args
+    p = input_args[:p]
+    row = input_args[:row]
+    nqubits = input_args[:nqubits]
+    share_params = get(input_args, :share_params, true)
+    
+    # Use measure_first from result if not specified
+    if isnothing(measure_first)
+        measure_first = Symbol(get(input_args, :measure_first, "Z"))
+    end
+    
+    println("=== Resampling Circuit ===")
+    println("File: ", basename(filename))
+    println("Parameters: $(length(params)) params")
+    println("Configuration: p=$p, row=$row, nqubits=$nqubits")
+    println("Share params: $share_params")
+    println("Measure first: $measure_first")
+    println("Conv steps: $conv_step, Samples: $samples")
+    
+    # Reconstruct gates from parameters
+    gates = build_unitary_gate(params, p, row, nqubits; share_params=share_params)
+    
+    # Run the quantum channel to generate new samples
+    println("\nGenerating new samples...")
+    rho, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits; 
+                                                        conv_step=conv_step, 
+                                                        samples=samples,
+                                                        measure_first=measure_first)
+    
+    println("Generated $(length(Z_samples)) Z samples and $(length(X_samples)) X samples")
+    
+    return rho, Z_samples, X_samples, params, gates
+end
+
+"""
     save_results(filename::String; kwargs...)
 
 Save arbitrary results to a JSON file. Accepts keyword arguments for flexibility.
@@ -1017,17 +1086,6 @@ function plot_expectation_values(; energy::Union{Real,Nothing}=nothing,
                                    nqubits::Union{Int,Nothing}=nothing,
                                    save_path::Union{String,Nothing}=nothing)
     
-    # Auto-compute connected correlation if not provided
-    # ⟨ZZ⟩_c = ⟨ZZ⟩ - ⟨Z⟩² (nearest neighbor term)
-    ZZ_conn = ZZ_connected
-    if isnothing(ZZ_conn) && !isnothing(Z)
-        # Use vertical ZZ if available, otherwise horizontal
-        ZZ_for_conn = !isnothing(ZZ_vert) ? ZZ_vert : ZZ_horiz
-        if !isnothing(ZZ_for_conn)
-            ZZ_conn = ZZ_for_conn - Z^2
-        end
-    end
-    
     # Collect available values
     labels = String[]
     values = Float64[]
@@ -1052,11 +1110,6 @@ function plot_expectation_values(; energy::Union{Real,Nothing}=nothing,
         push!(labels, "⟨ZZ⟩ₕ")
         push!(values, ZZ_horiz)
     end
-    if !isnothing(ZZ_conn)
-        push!(labels, "⟨ZZ⟩_c")
-        push!(values, ZZ_conn)
-    end
-    
     if isempty(values)
         @warn "No expectation values provided"
         return nothing
@@ -1129,7 +1182,7 @@ end
 """
     plot_expectation_values(result::CircuitOptimizationResult; row=nothing, p=nothing, nqubits=nothing, J=1.0, g=nothing, kwargs...)
 
-Plot expectation values from CircuitOptimizationResult, showing both sample-based and exact contraction values.
+Plot expectation values from CircuitOptimizationResult, showing both sample-based and exact transfer-matrix values.
 
 # Arguments
 - `row`: Number of rows
@@ -1139,8 +1192,10 @@ Plot expectation values from CircuitOptimizationResult, showing both sample-base
 - `g`: Transverse field strength (needed for energy calculation)
 - `title`: Plot title (optional)
 - `save_path`: Path to save figure (optional)
+- `datafile`: Optional result JSON path; if provided, resamples using optimized parameters
 
 Shows grouped bar chart comparing sample-based estimation vs exact tensor contraction.
+Sample values include error bars showing standard error (SE = std/√n).
 """
 function plot_expectation_values(result::CircuitOptimizationResult; 
                                   row::Union{Int,Nothing}=nothing,
@@ -1150,30 +1205,71 @@ function plot_expectation_values(result::CircuitOptimizationResult;
                                   g::Union{Real,Nothing}=nothing,
                                   title::String="Expectation Values",
                                   save_path::Union{String,Nothing}=nothing,
+                                  datafile::Union{String,Nothing}=nothing,
                                   kwargs...)
     
     # Compute sample-based values
     Z_samples = result.final_Z_samples
     X_samples = result.final_X_samples
+    if !isnothing(datafile)
+        if isfile(datafile)
+            resampled = resample_circuit(datafile; conv_step=1000, samples=1000000, measure_first=nothing)
+            if !isnothing(resampled)
+                _, Z_samples, X_samples, _, _ = resampled
+            else
+                @warn "Resampling failed for $datafile; using samples in result"
+            end
+        else
+            @warn "Resample datafile not found: $datafile; using samples in result"
+        end
+    end
     
     Z_sample = isempty(Z_samples) ? nothing : mean(Z_samples)
     X_sample = isempty(X_samples) ? nothing : mean(X_samples)
     
+    # Calculate standard errors
+    Z_stderr = isempty(Z_samples) ? nothing : std(Z_samples) / sqrt(length(Z_samples))
+    X_stderr = isempty(X_samples) ? nothing : std(X_samples) / sqrt(length(X_samples))
+    
     ZZ_vert_sample = nothing
     ZZ_horiz_sample = nothing
-    ZZ_conn_sample = nothing
-    energy_sample = result.final_cost
+    energy_sample = nothing
+    ZZ_vert_stderr = nothing
+    ZZ_horiz_stderr = nothing
+    energy_stderr = nothing
     
     N = length(Z_samples)
-    if N > 1
-        ZZ_vert_sample = mean(Z_samples[i] * Z_samples[i+1] for i in 1:N-1)
-        # Connected correlation: ⟨ZZ⟩_c = ⟨ZZ⟩ - ⟨Z⟩²
-        if !isnothing(Z_sample)
-            ZZ_conn_sample = ZZ_vert_sample - Z_sample^2
-        end
+    if !isnothing(row) && row > 1 && N > 1
+        # Vertical bonds: Z[i]*Z[i+1] only within columns (skip cross-column pairs)
+        ZZ_vert_pairs = [Z_samples[i] * Z_samples[i+1] for i in 1:N-1 if i % row != 0]
+        ZZ_vert_sample = mean(ZZ_vert_pairs)
+        ZZ_vert_stderr = std(ZZ_vert_pairs) / sqrt(length(ZZ_vert_pairs))
+    elseif N > 1
+        # row=1 case: no vertical bonds, skip ZZ_vert_sample
     end
     if !isnothing(row) && N > row
-        ZZ_horiz_sample = mean(Z_samples[i] * Z_samples[i+row] for i in 1:N-row)
+        ZZ_horiz_pairs = [Z_samples[i] * Z_samples[i+row] for i in 1:N-row]
+        ZZ_horiz_sample = mean(ZZ_horiz_pairs)
+        ZZ_horiz_stderr = std(ZZ_horiz_pairs) / sqrt(length(ZZ_horiz_pairs))
+    end
+    if !isnothing(g) && !isnothing(row) && N > 0 && !isempty(X_samples)
+        energy_sample = compute_energy(X_samples, Z_samples, g, J, row)
+        
+        # Calculate energy standard error using error propagation
+        # E = -g*⟨X⟩ - J*⟨ZZ⟩, where measurements are independent
+        # σ_E = sqrt(g² * σ_X² + J² * σ_ZZ²)
+        if row == 1
+            # Only horizontal bonds
+            ZZ_stderr_total = isnothing(ZZ_horiz_stderr) ? 0.0 : ZZ_horiz_stderr
+        else
+            # Both vertical and horizontal bonds contribute
+            # For uncorrelated measurements: σ_(A+B)² = σ_A² + σ_B²
+            ZZ_vert_se = isnothing(ZZ_vert_stderr) ? 0.0 : ZZ_vert_stderr
+            ZZ_horiz_se = isnothing(ZZ_horiz_stderr) ? 0.0 : ZZ_horiz_stderr
+            ZZ_stderr_total = sqrt(ZZ_vert_se^2 + ZZ_horiz_se^2)
+        end
+        X_se = isnothing(X_stderr) ? 0.0 : X_stderr
+        energy_stderr = sqrt(g^2 * X_se^2 + J^2 * ZZ_stderr_total^2)
     end
     
     # Compute exact values if parameters are available
@@ -1181,7 +1277,6 @@ function plot_expectation_values(result::CircuitOptimizationResult;
     Z_exact = nothing
     ZZ_vert_exact = nothing
     ZZ_horiz_exact = nothing
-    ZZ_conn_exact = nothing
     energy_exact = nothing
     
     can_compute_exact = !isnothing(row) && !isnothing(p) && !isnothing(nqubits) && !isempty(result.final_params)
@@ -1190,18 +1285,29 @@ function plot_expectation_values(result::CircuitOptimizationResult;
         virtual_qubits = (nqubits - 1) ÷ 2
         
         gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=true)
-        rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
         
-        X_exact = real(compute_X_expectation(rho, gates, row, virtual_qubits))
-        Z_exact = real(compute_Z_expectation(rho, gates, row, virtual_qubits))
-        ZZ_vert_exact, ZZ_horiz_exact = compute_ZZ_expectation(rho, gates, row, virtual_qubits)
-        ZZ_vert_exact = real(ZZ_vert_exact)
-        ZZ_horiz_exact = real(ZZ_horiz_exact)
+        # Average over all positions (samples average over all rows)
+        X_exact = mean(real(expect(gates, row, virtual_qubits, :X; position=i)) for i in 1:row)
+        Z_exact = mean(real(expect(gates, row, virtual_qubits, :Z; position=i)) for i in 1:row)
         
-        # Connected correlation: ⟨ZZ⟩_c = ⟨ZZ⟩ - ⟨Z⟩²
-        ZZ_conn_exact = ZZ_vert_exact - Z_exact^2
+        # Average ZZ_vert over all vertical bonds (row-1 bonds per column)
+        if row > 1
+            ZZ_vert_exact = mean(real(expect(gates, row, virtual_qubits, Dict(i => :Z, i+1 => :Z))) for i in 1:row-1)
+        end
         
-        if !isnothing(g)
+        # ZZ_horiz: average correlation at separation=1 over all starting positions
+        ZZ_horiz_vals = Float64[]
+        for pos in 1:row
+            correlations = correlation_function(gates, row, virtual_qubits, :Z, 1; position=pos)
+            if haskey(correlations, 1)
+                push!(ZZ_horiz_vals, real(correlations[1]))
+            end
+        end
+        if !isempty(ZZ_horiz_vals)
+            ZZ_horiz_exact = mean(ZZ_horiz_vals)
+        end
+        
+        if !isnothing(g) && !isnothing(ZZ_horiz_exact) && (row == 1 || !isnothing(ZZ_vert_exact))
             energy_exact = -g*X_exact - J*(row == 1 ? ZZ_horiz_exact : ZZ_vert_exact + ZZ_horiz_exact)
         end
     end
@@ -1218,12 +1324,14 @@ function plot_expectation_values(result::CircuitOptimizationResult;
     labels = String[]
     sample_values = Float64[]
     exact_values = Float64[]
+    sample_errors = Float64[]  # Standard errors for sample values
     
     # Energy
     if !isnothing(energy_sample)
         push!(labels, "E")
         push!(sample_values, energy_sample)
         push!(exact_values, isnothing(energy_exact) ? NaN : energy_exact)
+        push!(sample_errors, isnothing(energy_stderr) ? 0.0 : energy_stderr)
     end
     
     # X expectation
@@ -1231,6 +1339,7 @@ function plot_expectation_values(result::CircuitOptimizationResult;
         push!(labels, "⟨X⟩")
         push!(sample_values, isnothing(X_sample) ? NaN : X_sample)
         push!(exact_values, isnothing(X_exact) ? NaN : X_exact)
+        push!(sample_errors, isnothing(X_stderr) ? 0.0 : X_stderr)
     end
     
     # Z expectation
@@ -1238,6 +1347,7 @@ function plot_expectation_values(result::CircuitOptimizationResult;
         push!(labels, "⟨Z⟩")
         push!(sample_values, isnothing(Z_sample) ? NaN : Z_sample)
         push!(exact_values, isnothing(Z_exact) ? NaN : Z_exact)
+        push!(sample_errors, isnothing(Z_stderr) ? 0.0 : Z_stderr)
     end
     
     # ZZ vertical
@@ -1245,6 +1355,7 @@ function plot_expectation_values(result::CircuitOptimizationResult;
         push!(labels, "⟨ZZ⟩ᵥ")
         push!(sample_values, isnothing(ZZ_vert_sample) ? NaN : ZZ_vert_sample)
         push!(exact_values, isnothing(ZZ_vert_exact) ? NaN : ZZ_vert_exact)
+        push!(sample_errors, isnothing(ZZ_vert_stderr) ? 0.0 : ZZ_vert_stderr)
     end
     
     # ZZ horizontal
@@ -1252,13 +1363,7 @@ function plot_expectation_values(result::CircuitOptimizationResult;
         push!(labels, "⟨ZZ⟩ₕ")
         push!(sample_values, isnothing(ZZ_horiz_sample) ? NaN : ZZ_horiz_sample)
         push!(exact_values, isnothing(ZZ_horiz_exact) ? NaN : ZZ_horiz_exact)
-    end
-    
-    # Connected correlation ⟨ZZ⟩_c = ⟨ZZ⟩ - ⟨Z⟩²
-    if !isnothing(ZZ_conn_sample) || !isnothing(ZZ_conn_exact)
-        push!(labels, "⟨ZZ⟩_c")
-        push!(sample_values, isnothing(ZZ_conn_sample) ? NaN : ZZ_conn_sample)
-        push!(exact_values, isnothing(ZZ_conn_exact) ? NaN : ZZ_conn_exact)
+        push!(sample_errors, isnothing(ZZ_horiz_stderr) ? 0.0 : ZZ_horiz_stderr)
     end
     
     if isempty(labels)
@@ -1284,10 +1389,19 @@ function plot_expectation_values(result::CircuitOptimizationResult;
         barplot!(ax, positions_sample[valid_sample], sample_values[valid_sample], 
                  width=bar_width, color=:steelblue, strokewidth=1, strokecolor=:black,
                  label="Sample")
-        # Add value labels
-        for (i, (pos, val)) in enumerate(zip(positions_sample, sample_values))
+        
+        # Add error bars
+        valid_errors = sample_errors[valid_sample]
+        if any(valid_errors .> 0)
+            errorbars!(ax, positions_sample[valid_sample], sample_values[valid_sample], 
+                      valid_errors, 
+                      color=:black, linewidth=1.5, whiskerwidth=8)
+        end
+        
+        # Add value labels (adjust offset to account for error bars)
+        for (i, (pos, val, err)) in enumerate(zip(positions_sample, sample_values, sample_errors))
             if !isnan(val)
-                offset = val >= 0 ? 0.03 : -0.03
+                offset = val >= 0 ? (0.03 + err) : (-0.03 - err)
                 align = val >= 0 ? (:center, :bottom) : (:center, :top)
                 text!(ax, pos, val + offset; text=string(round(val, digits=3)), align=align, fontsize=9)
             end
@@ -1447,304 +1561,6 @@ return fig
 end
 
 """
-    plot_diagnosis(diag::NamedTuple; title::String="", save_path::Union{String,Nothing}=nothing)
-
-Visualize the transfer channel diagnosis results.
-
-# Arguments
-- `diag`: Named tuple returned by `diagnose_transfer_channel`
-- `title`: Plot title (default: "")
-- `save_path`: Path to save figure (default: nothing, no save)
-
-# Returns
-- `Figure` object
-
-# Example
-```julia
-diag = diagnose_transfer_channel(gates, row, virtual_qubits)
-fig = plot_diagnosis(diag; title="Channel Diagnosis", save_path="diagnosis.pdf")
-```
-"""
-function plot_diagnosis(diag::NamedTuple; 
-                        title::String="",
-                        save_path::Union{String,Nothing}=nothing)
-    # Extract data from diagnosis
-    eigenvalues_raw = diag.eigenvalues_complex
-    gap = diag.gap
-    unitality = diag.unitality
-    is_unital = diag.is_unital
-    is_unitary_channel = diag.is_unitary_channel
-    dist_to_identity = diag.dist_to_identity
-    
-    # Sort eigenvalues by magnitude
-    sorted_indices = sortperm(abs.(eigenvalues_raw), rev=true)
-    sorted_raw = eigenvalues_raw[sorted_indices]
-    sorted_eigs = abs.(sorted_raw)
-    n = length(sorted_eigs)
-    
-    # Compute correlation length
-    ξ = gap > 0 ? 1 / gap : Inf
-    
-    # Create figure with three panels
-    fig = Figure(size=(1400, 500))
-    
-    # === Left panel: Bar plot of eigenvalue magnitudes ===
-    ax1 = Axis(fig[1, 1], 
-               xlabel="Eigenvalue index (sorted)", 
-               ylabel="Eigenvalue magnitude |λ|",
-               title="Eigenvalue Spectrum")
-    
-    # Color by distance from 1
-    colors = [λ > 0.99 ? :red : (λ > 0.9 ? :orange : :steelblue) for λ in sorted_eigs]
-    
-    barplot!(ax1, 1:n, sorted_eigs, color=colors, strokewidth=0.5, strokecolor=:black)
-    
-    # Reference lines
-    hlines!(ax1, [1.0], color=:black, linestyle=:dash, linewidth=1.5, label="λ=1")
-    hlines!(ax1, [0.99], color=:red, linestyle=:dot, linewidth=1, alpha=0.5, label="λ=0.99")
-    
-    # Highlight λ₁ and λ₂
-    λ₁ = sorted_eigs[1]
-    λ₂ = length(sorted_eigs) > 1 ? sorted_eigs[2] : 0.0
-    scatter!(ax1, [1], [λ₁], markersize=15, color=:green, marker=:star5, label="λ₁=$(round(λ₁, digits=4))")
-    if length(sorted_eigs) > 1
-        scatter!(ax1, [2], [λ₂], markersize=12, color=:purple, marker=:diamond, label="λ₂=$(round(λ₂, digits=4))")
-    end
-    
-    axislegend(ax1, position=:rb)
-    
-    # === Middle panel: Complex plane ===
-    ax2 = Axis(fig[1, 2],
-               xlabel="Re(λ)",
-               ylabel="Im(λ)",
-               title="Eigenvalues in Complex Plane",
-               aspect=DataAspect())
-    
-    # Draw unit circle
-    θ = range(0, 2π, length=100)
-    lines!(ax2, cos.(θ), sin.(θ), color=:black, linestyle=:dash, linewidth=1.5, label="Unit circle")
-    lines!(ax2, 0.99 .* cos.(θ), 0.99 .* sin.(θ), color=:red, linestyle=:dot, linewidth=1, alpha=0.5, label="|λ|=0.99")
-    
-    # Plot all eigenvalues
-    re_parts = real.(sorted_raw)
-    im_parts = imag.(sorted_raw)
-    colors_scatter = [abs(λ) > 0.99 ? :red : (abs(λ) > 0.9 ? :orange : :steelblue) for λ in sorted_raw]
-    scatter!(ax2, re_parts, im_parts, color=colors_scatter, markersize=8, strokewidth=0.5, strokecolor=:black)
-    
-    # Highlight λ₁ and λ₂
-    scatter!(ax2, [real(sorted_raw[1])], [imag(sorted_raw[1])], markersize=15, color=:green, marker=:star5, label="λ₁")
-    if length(sorted_raw) > 1
-        scatter!(ax2, [real(sorted_raw[2])], [imag(sorted_raw[2])], markersize=12, color=:purple, marker=:diamond, label="λ₂")
-    end
-    
-    axislegend(ax2, position=:lt)
-    
-    # === Right panel: Diagnosis summary ===
-    ax3 = Axis(fig[1, 3],
-               title="Channel Properties",
-               limits=(0, 1, 0, 1))
-    hidedecorations!(ax3)
-    hidespines!(ax3)
-    
-    # Build summary text
-    status_gap = gap > 0.1 ? "✓ Good" : (gap > 0.01 ? "⚠ Poor" : "✗ Bad")
-    status_color = gap > 0.1 ? :green : (gap > 0.01 ? :orange : :red)
-    
-    unital_status = is_unital ? "⚠ Yes (preserves I/d)" : "✓ No"
-    unitary_status = is_unitary_channel ? "⚠ Yes (problematic)" : "✓ No"
-    
-    n_near_1 = count(x -> x > 0.99, sorted_eigs)
-    n_near_095 = count(x -> x > 0.95, sorted_eigs)
-    
-    lines = [
-        ("Spectral Gap:", "$(round(gap, digits=4)) ($status_gap)", status_color),
-        ("Correlation Length ξ:", "$(round(ξ, digits=2))", :black),
-        ("", "", :black),
-        ("λ₁ (largest):", "$(round(λ₁, digits=6))", :black),
-        ("λ₂ (2nd largest):", "$(round(λ₂, digits=6))", :black),
-        ("", "", :black),
-        ("|λ| > 0.99:", "$n_near_1 / $n", n_near_1 > 1 ? :orange : :black),
-        ("|λ| > 0.95:", "$n_near_095 / $n", :black),
-        ("", "", :black),
-        ("Unital:", unital_status, is_unital ? :orange : :green),
-        ("Unitary Channel:", unitary_status, is_unitary_channel ? :red : :green),
-        ("Unitality Deviation:", "$(round(unitality, digits=4))", :black),
-        ("Dist to Identity:", "$(round(dist_to_identity, digits=4))", :black),
-    ]
-    
-    y_pos = 0.95
-    for (label, value, color) in lines
-        if !isempty(label)
-            text!(ax3, 0.05, y_pos, text=label, fontsize=12, align=(:left, :center))
-            text!(ax3, 0.55, y_pos, text=value, fontsize=12, align=(:left, :center), color=color)
-        end
-        y_pos -= 0.07
-    end
-    
-    # Add title at top
-    if !isempty(title)
-        Label(fig[0, 1:3], title, fontsize=18, font=:bold, halign=:center)
-    end
-    
-    # Save if requested
-    if !isnothing(save_path)
-        save(save_path, fig)
-        @info "Figure saved to $save_path"
-    end
-    
-    return fig
-end
-
-# =============================================================================
-# Channel Analysis Visualization
-# =============================================================================
-
-"""
-    plot_channel_analysis(result::CircuitOptimizationResult; row=nothing, p=nothing, nqubits=nothing, 
-                          g=nothing, share_params=true, save_path=nothing)
-
-Plot channel analysis showing entropy and spectral gaps for both virtual and physical channels.
-
-# Arguments
-- `result`: CircuitOptimizationResult from optimization
-- `row`: Number of rows
-- `p`: Number of layers
-- `nqubits`: Number of qubits per gate
-- `g`: Transverse field strength (for title)
-- `share_params`: Whether parameters are shared across rows
-- `save_path`: Path to save figure (optional)
-
-# Returns
-- `fig`: Figure object
-- `analysis`: NamedTuple with (S_virtual, gap_virtual, S_physical, gap_physical)
-
-# Description
-Computes and visualizes:
-- Virtual bond entropy (from virtual transfer matrix)
-- Virtual channel spectral gap
-- Physical entropy (from physical channel fixed point)
-- Physical channel spectral gap
-
-When physical gap is large but physical entropy is small, this confirms the 
-physical state is close to a product state despite potentially large virtual entanglement.
-"""
-function plot_channel_analysis(result::CircuitOptimizationResult;
-                                row::Union{Int,Nothing}=nothing,
-                                p::Union{Int,Nothing}=nothing,
-                                nqubits::Union{Int,Nothing}=nothing,
-                                g::Union{Real,Nothing}=nothing,
-                                share_params::Bool=true,
-                                save_path::Union{String,Nothing}=nothing)
-    
-    # Check required parameters
-    if isnothing(row) || isnothing(p) || isnothing(nqubits)
-        error("row, p, and nqubits must be provided for channel analysis")
-    end
-    
-    if isempty(result.final_params)
-        error("No parameters available in result")
-    end
-    
-    # Reconstruct gates
-    gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
-    
-    # Compute virtual channel entropy and gap
-    S_virtual, spectrum_virtual, gap_virtual = multiline_mps_entanglement(gates, row; nqubits=nqubits)
-    
-    # Compute physical channel entropy and gap
-    S_physical, probs_physical, gap_physical = multiline_mps_physical_entanglement_infinite(gates, row; nqubits=nqubits)
-    
-    # Create figure
-    fig = Figure(size=(800, 450))
-    
-    # Generate title
-    title_str = "Channel Analysis"
-    if !isnothing(g) && !isnothing(row) && !isnothing(nqubits)
-        title_str = "Channel Analysis: row=$row, g=$g, nqubits=$nqubits"
-    elseif !isnothing(row) && !isnothing(nqubits)
-        title_str = "Channel Analysis: row=$row, nqubits=$nqubits"
-    end
-    
-    Label(fig[0, 1:2], title_str, fontsize=16, font=:bold)
-    
-    # Left panel: Entropy comparison
-    ax1 = Axis(fig[1, 1],
-               xlabel="Entropy Type",
-               ylabel="Entropy (nats)",
-               title="Entanglement Entropy",
-               xticks=(1:2, ["Virtual Bond", "Physical"]))
-    
-    colors = [:steelblue, :coral]
-    barplot!(ax1, [1, 2], [S_virtual, S_physical], 
-             color=colors,
-             strokewidth=1, strokecolor=:black)
-    
-    # Add maximum entropy reference line: S_max = log(2^(row+1)) = (row+1) * log(2)
-    S_max = (row + 1) * log(2)
-    hlines!(ax1, [S_max], color=:gray40, linestyle=:dash, linewidth=2)
-    
-    # Add label for S_max line with description and value (positioned above the line, inside plot)
-    text!(ax1, 1.5, S_max + 0.08; 
-          text="Smax = log(2^$(row+1)) = $(round(S_max, digits=2))", 
-          align=(:center, :bottom), fontsize=10, color=:gray40)
-    
-    # Add value labels
-    y_offset = max(S_virtual, S_physical, S_max) * 0.05 + 0.01
-    text!(ax1, 1, S_virtual + y_offset; text=string(round(S_virtual, digits=3)), 
-          align=(:center, :bottom), fontsize=11)
-    text!(ax1, 2, S_physical + y_offset; text=string(round(S_physical, digits=3)), 
-          align=(:center, :bottom), fontsize=11)
-    
-    # Set y-axis limit to include S_max
-    ylims!(ax1, 0, max(S_virtual, S_physical, S_max) * 1.15 + 0.1)
-    
-    # Right panel: Gap comparison
-    ax2 = Axis(fig[1, 2],
-               xlabel="Channel Type",
-               ylabel="Spectral Gap",
-               title="Channel Spectral Gaps",
-               xticks=(1:2, ["Virtual", "Physical"]))
-    
-    barplot!(ax2, [1, 2], [gap_virtual, gap_physical], 
-             color=colors,
-             strokewidth=1, strokecolor=:black)
-    
-    # Add value labels
-    y_offset_gap = max(gap_virtual, gap_physical) * 0.05 + 0.02
-    text!(ax2, 1, gap_virtual + y_offset_gap; text=string(round(gap_virtual, digits=3)), 
-          align=(:center, :bottom), fontsize=11)
-    text!(ax2, 2, gap_physical + y_offset_gap; text=string(round(gap_physical, digits=3)), 
-          align=(:center, :bottom), fontsize=11)
-    
-    # Set y-axis limit
-    ylims!(ax2, 0, max(gap_virtual, gap_physical) * 1.3 + 0.1)
-    
-    # Add interpretation note
-    if gap_physical > 1.0 && S_physical < 0.1
-        note = "Physical state is close to a product state"
-        Label(fig[2, 1:2], note, fontsize=11, color=:gray50, halign=:center)
-    end
-    
-    # Save if requested
-    if !isnothing(save_path)
-        save(save_path, fig)
-        @info "Figure saved to $save_path"
-    end
-    
-    # Return figure and analysis data
-    analysis = (
-        S_virtual = S_virtual,
-        gap_virtual = gap_virtual,
-        spectrum_virtual = spectrum_virtual,
-        S_physical = S_physical,
-        gap_physical = gap_physical,
-        probs_physical = probs_physical
-    )
-    
-    return fig, analysis
-end
-
-"""
     plot_correlation_function(filename; max_separation=20, conv_step=1000, samples=100000, save_path=nothing)
 
 Plot two-point correlation functions comparing exact (transfer matrix) and sampling methods.
@@ -1814,28 +1630,29 @@ function plot_correlation_function(filename::String;
                                                         measure_first=:Z)
     
     # Compute ACF on samples
-    # Need enough lags for horizontal correlations: separation r → sample lag r*row
-    sample_max_lag = max_separation * row + 1
+    # With row parameter, lag in subsampled data = horizontal separation directly
     Z_vec = Z_samples[conv_step+1:end]  # Discard burn-in
     
     lags, acf, acf_err, corr_full, corr_err, corr_connected, corr_connected_err = compute_acf(
-        reshape(Float64.(Z_vec), 1, :); max_lag=sample_max_lag
+        reshape(Float64.(Z_vec), 1, :); max_lag=max_separation+1, row=row
     )
     
-    # Subsample to get horizontal correlations: separation r → sample lag r*row
-    # After subsampling, index r+1 gives separation r
-    sample_full = corr_full[1:row:end]
-    sample_connected = corr_connected[1:row:end]
-    
-    # Sampling error: 1/sqrt(N_eff) where N_eff = samples/row
-    sampling_error = 1.0 / sqrt(samples / row)
-    println("Sampling error (1/√(samples/row)): $(round(sampling_error, digits=6))")
+    # Extract correlations and their errors
+    sample_full = corr_full
+    sample_full_err = corr_err
+    sample_connected = corr_connected
+    sample_connected_err = corr_connected_err
     
     # Limit to available data
     n_sample_seps = min(length(sample_full) - 1, max_separation)
     sample_seps = 1:n_sample_seps
     sample_full_vals = sample_full[2:n_sample_seps+1]  # index 2 is separation 1
+    sample_full_err_vals = sample_full_err[2:n_sample_seps+1]
     sample_connected_vals = sample_connected[2:n_sample_seps+1]
+    sample_connected_err_vals = sample_connected_err[2:n_sample_seps+1]
+    
+    println("Sampling std errors range (full): $(round(minimum(sample_full_err_vals), sigdigits=2)) - $(round(maximum(sample_full_err_vals), sigdigits=2))")
+    println("Sampling std errors range (connected): $(round(minimum(sample_connected_err_vals), sigdigits=2)) - $(round(maximum(sample_connected_err_vals), sigdigits=2))")
     
     # Compute error between exact and sample
     common_seps = min(length(exact_full_vals), length(sample_full_vals))
@@ -1862,6 +1679,7 @@ function plot_correlation_function(filename::String;
                ylabel="|⟨Z_i Z_{i+r}⟩|",
                title="Full Correlation",
                yscale=log10)
+               
     
     # Prepare data for log scale (clamp to min_val)
     exact_full_abs = max.(abs.(exact_full_vals), min_val)
@@ -1874,12 +1692,12 @@ function plot_correlation_function(filename::String;
     scatter!(ax1, separations, exact_full_abs, 
              color=:blue, markersize=8)
     
-    # Plot sample values with error bars
+    # Plot sample values with error bars (per-lag standard errors)
     # Use asymmetric error bars to avoid negative values on log scale
-    err_low = min.(sampling_error, sample_full_abs .- min_val)  # Clamp lower bound
-    err_high = fill(sampling_error, length(sample_seps))
+    err_low = min.(sample_full_err_vals, sample_full_abs .- min_val)  # Clamp lower bound
+    err_high = sample_full_err_vals
     scatter!(ax1, collect(sample_seps), sample_full_abs, 
-             label="Sampling ± $(round(sampling_error, sigdigits=2))", color=:red, markersize=8, marker=:diamond)
+             label="Sampling ± std err", color=:red, markersize=8, marker=:diamond)
     errorbars!(ax1, collect(sample_seps), sample_full_abs, err_low, err_high,
                color=:red, whiskerwidth=6)
     
@@ -1903,12 +1721,12 @@ function plot_correlation_function(filename::String;
     scatter!(ax2, separations, exact_connected_abs, 
              color=:blue, markersize=8)
     
-    # Plot sample values with error bars
+    # Plot sample values with error bars (per-lag standard errors)
     # Use asymmetric error bars to avoid negative values on log scale
-    err_low_conn = min.(sampling_error, sample_connected_abs .- min_val)  # Clamp lower bound
-    err_high_conn = fill(sampling_error, length(sample_seps))
+    err_low_conn = min.(sample_connected_err_vals, sample_connected_abs .- min_val)  # Clamp lower bound
+    err_high_conn = sample_connected_err_vals
     scatter!(ax2, collect(sample_seps), sample_connected_abs, 
-             label="Sampling ± $(round(sampling_error, sigdigits=2))", color=:red, markersize=8, marker=:diamond)
+             label="Sampling ± std err", color=:red, markersize=8, marker=:diamond)
     errorbars!(ax2, collect(sample_seps), sample_connected_abs, err_low_conn, err_high_conn,
                color=:red, whiskerwidth=6)
     
@@ -1928,8 +1746,9 @@ function plot_correlation_function(filename::String;
         exact_connected = exact_connected_vals,
         sample_seps = collect(sample_seps),
         sample_full = sample_full_vals,
+        sample_full_err = sample_full_err_vals,
         sample_connected = sample_connected_vals,
-        sampling_error = sampling_error,
+        sample_connected_err = sample_connected_err_vals,
         error_full = error_full,
         error_connected = error_connected,
         mean_error_full = mean_error_full,

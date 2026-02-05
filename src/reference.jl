@@ -21,7 +21,7 @@ Uses VUMPS from MPSKit to find the ground state of the transverse field
 Ising model on an infinite cylinder: H = -g∑Xᵢ - ∑ZᵢZⱼ
 """
 function mpskit_ground_state(d::Int, D::Int, g::Float64, row::Int)
-    mps = InfiniteMPS([ComplexSpace(d) for _ in 1:row], [ComplexSpace(D) for _ in 1:row])
+    mps = MPSKit.InfiniteMPS([ComplexSpace(d) for _ in 1:row], [ComplexSpace(D) for _ in 1:row])
     H = transverse_field_ising(InfiniteCylinder(row); g=g)
     psi, _ = find_groundstate(mps, H, VUMPS())
     
@@ -49,7 +49,7 @@ Compute 1D chain ground state using MPSKit.
 Named tuple with energy, correlation_length, entropy, spectrum, and psi (wavefunction)
 """
 function mpskit_ground_state_1d(d::Int, D::Int, g::Float64)
-    mps = InfiniteMPS([ComplexSpace(d)], [ComplexSpace(D)])
+    mps = MPSKit.InfiniteMPS([ComplexSpace(d)], [ComplexSpace(D)])
     H = transverse_field_ising(; g=g)
     psi, _ = find_groundstate(mps, H, VUMPS())
     
