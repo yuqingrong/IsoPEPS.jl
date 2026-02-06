@@ -946,7 +946,7 @@ result, args = analyze_result(datafile; pepskit_results_file=referfile)
 
 optimize_peps_gate(; d=2, D=2, J=1.0, g=2.0,
                              save_path="data", χ=20, ctmrg_tol=1e-10,
-                             grad_tol=1e-6, maxiter=1000)
+                             grad_tol=1e-6, maxiter=100)
 sample_peps_ground_state(; d=2, D=2, J=1.0, g=2.0, row=3,
                        conv_step=1000, samples=10000, measure_first=:Z,
                        save_path="data", χ=20, ctmrg_tol=1e-10,
