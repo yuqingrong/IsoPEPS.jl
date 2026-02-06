@@ -3,8 +3,10 @@ using IsoPEPS
 using LinearAlgebra
 using Statistics
 using Yao, YaoBlocks
+using Random
 
 @testset "build_unitary_gate" begin
+    Random.seed!(1234)
     for row in 3:6, p in 2:4, nqubits in [3]
         # Shared parameters: all gates should be equal
         # Uses 3 params per qubit per layer (Rz-Ry-Rz decomposition)
@@ -20,6 +22,7 @@ using Yao, YaoBlocks
 end
 
 @testset "compute_energy" begin
+    Random.seed!(2345)
     for row in 3:6
         a = rand()
         b = rand()
@@ -33,6 +36,7 @@ end
 end
 
 @testset "build_unitary_gate_transfer_matrix_spectrum" begin
+    Random.seed!(3456)
     virtual_qubits = 1
     nqubits = 1 + 2*virtual_qubits  # = 3 qubits
     

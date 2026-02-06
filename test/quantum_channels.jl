@@ -2,8 +2,10 @@ using Test
 using IsoPEPS
 using Yao, YaoBlocks
 using Statistics
+using Random
 
 @testset "sample_quantum_channel" begin
+    Random.seed!(4567)
     nqubits = 3
     row = 3
     virtual_qubits = 1  # Bond qubits per side (nqubits = 1 physical + 2*virtual_qubits)
