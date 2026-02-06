@@ -2,6 +2,7 @@ using Test
 using IsoPEPS
 using Yao, YaoBlocks
 using LinearAlgebra
+using Random
 
 # =============================================================================
 # Basic Observable Tests (Random States)
@@ -441,7 +442,6 @@ end
     p = 2
     J = 1.0
     
-    using Random
     Random.seed!(808)
     params = randn(3 * nqubits * p)
     
@@ -471,7 +471,6 @@ end
     row = 2
     nqubits = 3
     
-    using Random
     Random.seed!(909)
     
     params1 = randn(3 * nqubits * p)
@@ -497,7 +496,6 @@ end
 
 @testset "observable_hermiticity" begin
     # All observables should be Hermitian → real expectation values
-    using Random
     Random.seed!(1010)
     
     row = 2
@@ -530,7 +528,6 @@ end
 @testset "observable_bounds" begin
     # Single-site observables should be in [-1, 1]
     # Two-site observables should also be in [-1, 1]
-    using Random
     Random.seed!(1111)
     
     for row in [1, 2, 3]
@@ -622,7 +619,6 @@ end
     row = 2
     nqubits = 3
     
-    using Random
     Random.seed!(1212)
     params = randn(3 * nqubits * p)
     
@@ -648,7 +644,6 @@ end
     row = 2
     nqubits = 3
     
-    using Random
     Random.seed!(1313)
     params = randn(3 * nqubits * p)
     
@@ -674,7 +669,6 @@ end
     nqubits = 3
     virtual_qubits = 1
     
-    using Random
     Random.seed!(1414)
     params = randn(3 * nqubits * p)
     
@@ -714,7 +708,6 @@ end
     nqubits = 3
     virtual_qubits = 1
     
-    using Random
     Random.seed!(1515)
     
     results = []
@@ -752,7 +745,6 @@ end
     nqubits = 3
     virtual_qubits = 1
     
-    using Random
     Random.seed!(1616)
     gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
     gates = [Matrix(gate) for _ in 1:row]  # Same gate for all rows
