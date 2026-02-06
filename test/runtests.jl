@@ -1,6 +1,6 @@
 using IsoPEPS
 using Test
-using Random
+
 @testset "gates" begin
     include("gates.jl")
 end
