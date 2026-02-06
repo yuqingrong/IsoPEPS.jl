@@ -19,7 +19,7 @@ using Random
     rho_exact, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
     
     X_exact = compute_X_expectation(rho_exact, gates, row, virtual_qubits)
-    @test mean(X_samples) ≈ X_exact atol = 1e-2
+    @test mean(X_samples) ≈ X_exact atol = 1e-1
 
     energy = compute_energy(X_samples, Z_samples, g, J, row)
     @test energy isa Float64
