@@ -484,3 +484,137 @@ end
 function compute_acf(data::Vector{Float64}; max_lag::Int=100, row::Int=1, n_bootstrap::Int=100, normalize::Bool=true)
     return compute_acf(reshape(data, 1, :); max_lag=max_lag, row=row, n_bootstrap=n_bootstrap, normalize=normalize)
 end
+
+"""
+    mutual_information(filename::String; conv_step=100, samples=1000)
+
+Compute the mutual information I(A:B) between every pair of qubits in the quantum state.
+
+Loads parameters from a data file, resamples the circuit to converge to the steady state,
+then reconstructs the full quantum state (adding back the measured qubit and applying the 
+gate without measuring) to compute mutual information using Yao.jl's built-in function.
+
+# Arguments
+- `filename`: Path to JSON result file containing CircuitOptimizationResult
+- `conv_step`: Number of convergence steps before state reconstruction (default: 100)
+- `samples`: Number of samples during convergence phase (default: 1000)
+
+# Returns
+- `mi_matrix`: n_qubits × n_qubits matrix where mi_matrix[i,j] = I(i:j)
+- `rho`: The reconstructed quantum state (Yao register)
+
+# Example
+```julia
+# Compute mutual information from saved result file
+mi_matrix, rho = mutual_information("results/circuit.json"; conv_step=100)
+
+# Display mutual information between qubits 1 and 2
+println("I(1:2) = ", mi_matrix[1,2])
+```
+
+# Notes
+- The mutual information is always non-negative: I(A:B) ≥ 0
+- Uses Yao.jl's built-in `mutual_information(state, subsystem_A, subsystem_B)` function
+- The state is reconstructed by adding |0⟩ and applying the gate without measurement
+"""
+function mutual_information(filename::String; conv_step=100, samples=1000)
+    result, input_args = load_result(filename)
+    
+    if !(result isa CircuitOptimizationResult)
+        @warn "Result is not CircuitOptimizationResult, cannot compute mutual information"
+        return nothing
+    end
+    
+    # Extract parameters from result
+    params = result.final_params
+    
+    # Extract circuit configuration from input_args
+    p = input_args[:p]
+    row = input_args[:row]
+    nqubits = input_args[:nqubits]
+    share_params = get(input_args, :share_params, true)
+    measure_first = Symbol(get(input_args, :measure_first, "Z"))
+    
+    println("=== Computing Mutual Information ===")
+    println("File: ", basename(filename))
+    println("Configuration: p=$p, row=$row, nqubits=$nqubits")
+    println("Conv steps: $conv_step")
+    
+    # Reconstruct gates from parameters
+    gates = build_unitary_gate(params, p, row, nqubits; share_params=share_params)
+    
+    # Compute mutual information using the reconstructed state
+    return mutual_information(gates, row, nqubits; conv_step=conv_step, samples=samples, measure_first=measure_first)
+end
+
+"""
+    mutual_information(gates, row, nqubits; conv_step=100, samples=1000, measure_first=:Z)
+
+Compute mutual information between all qubit pairs from gates directly.
+
+# Arguments
+- `gates`: Vector of gate matrices, one per row
+- `row`: Number of rows in the PEPS structure
+- `nqubits`: Number of qubits per gate
+- `conv_step`: Convergence steps before state reconstruction (default: 100)
+- `samples`: Number of samples during convergence phase (default: 1000)
+- `measure_first`: Which observable to measure during convergence, :X or :Z (default: :Z)
+
+# Returns
+- `mi_matrix`: n_qubits × n_qubits matrix where mi_matrix[i,j] = I(i:j)
+- `rho`: The reconstructed quantum state (Yao register)
+"""
+function mutual_information(gates, row::Int, nqubits::Int; conv_step=100, samples=1000, measure_first=:Z)
+    # Use sample_quantum_channel to converge to steady state
+    rho, _, _ = sample_quantum_channel(gates, row, nqubits; 
+                                        conv_step=conv_step, 
+                                        samples=samples, 
+                                        measure_first=measure_first)
+    
+    # Now reconstruct the full state WITHOUT measuring
+    # Add |0⟩ and apply the gate one more time
+    virtual_qubits = Int((nqubits-1)/2)
+    total_qubits = virtual_qubits*(row+1)+1
+    fixed_qubits = (nqubits+1)÷2
+    remaining_qubits = virtual_qubits
+    
+    rho_p = zero_state(1)
+    rho = join(rho, rho_p)
+    qubit_positions = tuple((1:fixed_qubits)..., (fixed_qubits + 0*remaining_qubits + 1:fixed_qubits + 1*remaining_qubits)...)
+    rho = Yao.apply!(rho, put(total_qubits, qubit_positions=>matblock(gates[1])))
+    # Don't measure! Keep the full quantum state
+    
+    n_qubits = Yao.nqubits(rho)
+    println("Reconstructed state has $n_qubits qubits")
+    
+    # Compute mutual information matrix for all pairs
+    mi_matrix = zeros(n_qubits, n_qubits)
+    
+    println("\nMutual Information Matrix (bits):")
+    for i in 1:n_qubits
+        for j in (i+1):n_qubits
+            # Use Yao's built-in mutual_information function
+            mi = Yao.mutual_information(rho, (i,), (j,))
+            mi_matrix[i, j] = mi
+            mi_matrix[j, i] = mi  # Symmetric
+        end
+        # Diagonal: self-information (equals 2*S(ρ_i) for pure states)
+        mi_matrix[i, i] = 2 * Yao.von_neumann_entropy(rho, (i,))
+    end
+    
+    # Print the matrix
+    print("     ")
+    for j in 1:n_qubits
+        print(lpad(j, 8))
+    end
+    println()
+    for i in 1:n_qubits
+        print("  $i: ")
+        for j in 1:n_qubits
+            print(lpad(round(mi_matrix[i,j], digits=4), 8))
+        end
+        println()
+    end
+    
+    return mi_matrix, rho
+end

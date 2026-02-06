@@ -870,3 +870,18 @@ end
     @test any(abs.(values(exact_corr)) .> 1e-10)
     @test any(abs.(corr_connected[2:end]) .> 1e-10)
 end
+
+
+@testset "mutual_information" begin
+    # Test mutual information calculation
+    row = 2
+    nqubits = 3
+    virtual_qubits = 1
+    
+    using Random
+    Random.seed!(1818)
+    gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
+    gates = [Matrix(gate) for _ in 1:row]
+    mi_matrix, rho=mutual_information(gates, row, nqubits)
+    @show mi_matrix
+end

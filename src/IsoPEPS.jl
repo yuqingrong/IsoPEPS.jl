@@ -95,6 +95,7 @@ export reshape_to_mps, spectrum_MPSKit, transfer_matrix_ITensor
 # =============================================================================
 export compute_X_expectation, compute_Z_expectation, compute_ZZ_expectation, compute_single_expectation
 export compute_exact_energy, correlation_function, expect
+export mutual_information
 
 # =============================================================================
 # Exact Tensor Contraction - Entanglement
@@ -113,6 +114,7 @@ export diagnose_transfer_channel, diagnose_from_params
 # Reference Implementations
 # =============================================================================
 export mpskit_ground_state, mpskit_ground_state_1d, pepskit_ground_state
+export optimize_peps_gate, load_peps_gate, sample_peps_gate, complete_to_unitary
 
 # =============================================================================
 # Data I/O & Visualization
@@ -122,4 +124,5 @@ export plot_acf, compute_acf, fit_acf, fit_acf_oscillatory
 export plot_training_history, plot_variance_vs_samples, plot_expectation_values
 export plot_corr_scale, plot_channel_analysis
 export plot_eigenvalue_spectrum, reconstruct_gates, plot_diagnosis, plot_correlation_function
+export plot_MI
 end

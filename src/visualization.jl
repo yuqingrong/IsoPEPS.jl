@@ -1761,3 +1761,120 @@ function plot_correlation_function(filename::String;
     
     return fig, data
 end
+
+"""
+    plot_MI(mi_matrix::Matrix; title="", save_path=nothing, show_values=true, unit=:nats)
+    plot_MI(filename::String; conv_step=100, samples=1000, title="", save_path=nothing, show_values=true, unit=:nats)
+
+Plot mutual information matrix as a heatmap.
+
+# Arguments
+- `mi_matrix`: n×n mutual information matrix (from `mutual_information`)
+- `filename`: Path to result file (alternative: compute MI from file)
+- `conv_step`: Convergence steps for MI computation (default: 100)
+- `samples`: Samples for MI computation (default: 1000)
+- `title`: Plot title (default: auto-generated or empty)
+- `save_path`: Path to save figure (default: nothing, no save)
+- `show_values`: Show MI values in each cell (default: true)
+- `unit`: Unit for display, :nats or :bits (default: :nats)
+
+# Returns
+- `fig`: Figure object
+- `mi_matrix`: The mutual information matrix (useful when computed from filename)
+
+# Example
+```julia
+# From pre-computed matrix
+mi_matrix, rho = mutual_information("result.json")
+fig, _ = plot_MI(mi_matrix; title="My Circuit")
+
+# Directly from file
+fig, mi_matrix = plot_MI("result.json"; conv_step=1000)
+
+# Save the plot
+fig, _ = plot_MI(mi_matrix; save_path="mi_plot.pdf")
+```
+"""
+function plot_MI(filename::String; conv_step=100, samples=1000, 
+                 title::String="", save_path::Union{String,Nothing}=nothing,
+                 show_values::Bool=true, unit::Symbol=:nats)
+    # Compute mutual information from file
+    mi_matrix, rho = mutual_information(filename; conv_step=conv_step, samples=samples)
+    
+    # Auto-generate title if not provided
+    if isempty(title)
+        title = "Mutual Information: $(basename(filename))"
+    end
+    
+    fig = plot_MI(mi_matrix; title=title, save_path=save_path, show_values=show_values, unit=unit)
+    return fig, mi_matrix
+end
+
+function plot_MI(mi_matrix::Matrix; title::String="", 
+                 save_path::Union{String,Nothing}=nothing,
+                 show_values::Bool=true, unit::Symbol=:nats)
+    n = size(mi_matrix, 1)
+    
+    # Convert to bits if requested
+    display_matrix = unit == :bits ? mi_matrix ./ log(2) : mi_matrix
+    unit_label = unit == :bits ? "bits" : "nats"
+    
+    # Create figure
+    fig = Figure(size=(700, 600))
+    
+    # Main heatmap
+    ax = Axis(fig[1, 1],
+              xlabel="Qubit j",
+              ylabel="Qubit i",
+              title=isempty(title) ? "Mutual Information I(i:j)" : title,
+              xticks=1:n,
+              yticks=1:n,
+              yreversed=true,  # So (1,1) is top-left
+              aspect=DataAspect())
+    
+    # Plot heatmap
+    max_val = maximum(display_matrix)
+    hm = heatmap!(ax, 1:n, 1:n, display_matrix',  # Transpose for correct orientation
+                  colormap=:viridis,
+                  colorrange=(0, max_val))
+    
+    # Add colorbar
+    Colorbar(fig[1, 2], hm, label="I(i:j) [$unit_label]")
+    
+    # Add text annotations with values
+    if show_values
+        for i in 1:n
+            for j in 1:n
+                val = display_matrix[i, j]
+                # Choose text color based on background brightness
+                text_color = val > max_val * 0.5 ? :white : :black
+                text!(ax, j, i, text=string(round(val, digits=3)),
+                      align=(:center, :center),
+                      fontsize=10,
+                      color=text_color)
+            end
+        end
+    end
+    
+    # Add summary statistics
+    # Extract off-diagonal elements for statistics
+    off_diag = [mi_matrix[i,j] for i in 1:n for j in 1:n if i != j]
+    if !isempty(off_diag)
+        max_mi = maximum(off_diag)
+        mean_mi = mean(off_diag)
+        max_mi_display = unit == :bits ? max_mi / log(2) : max_mi
+        mean_mi_display = unit == :bits ? mean_mi / log(2) : mean_mi
+        
+        Label(fig[2, 1:2], 
+              "Max MI: $(round(max_mi_display, digits=4)) $unit_label  |  Mean MI: $(round(mean_mi_display, digits=4)) $unit_label  |  Qubits: $n",
+              fontsize=12, halign=:center)
+    end
+    
+    if !isnothing(save_path)
+        save(save_path, fig)
+        @info "Figure saved to $save_path"
+    end
+    
+    return fig
+end
+
