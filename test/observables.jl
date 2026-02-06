@@ -768,7 +768,6 @@ end
     nqubits = 3
     virtual_qubits = 1
     
-    using Random
     Random.seed!(1717)
     gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
     gates = [Matrix(gate) for _ in 1:row]
