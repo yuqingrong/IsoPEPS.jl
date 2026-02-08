@@ -564,7 +564,7 @@ Compute mutual information between all qubit pairs from gates directly.
 - `mi_matrix`: n_qubits × n_qubits matrix where mi_matrix[i,j] = I(i:j)
 - `rho`: The reconstructed quantum state (Yao register)
 """
-function mutual_information(gates, row::Int, nqubits::Int; conv_step=100, samples=1000, measure_first=:Z)
+function mutual_information(gates, row::Int, nqubits::Int; conv_step=1000, samples=10000, measure_first=:Z)
     # Use sample_quantum_channel to converge to steady state
     rho, _, _ = sample_quantum_channel(gates, row, nqubits; 
                                         conv_step=conv_step, 

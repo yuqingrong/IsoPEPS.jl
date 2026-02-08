@@ -943,32 +943,214 @@ data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile)
+fig, _ = plot_MI(datafile; title="J=1_g=0.0_D=2_row=3")
+display(fig)
+gates, rho, gap, eigenvalues = reconstruct_gates(datafile; use_iterative=false, matrix_free=false)
 
-E, peps = pepskit_ground_state(d, D, J, g; 
-                               χ=20, ctmrg_tol=1e-10, 
-                               grad_tol=1e-6, maxiter=1)
-A = peps.A[1, 1] 
-A_array = convert(Array, A) 
-A_arrray=permutedims(A_array, ())
-A=reshape(A_array, (d*D^2, D^2))
 
-optimize_peps_gate(; d=2, D=2, J=1.0, g=2.0,
-                             save_path="data", χ=20, ctmrg_tol=1e-10,
-                             grad_tol=1e-6, maxiter=1)
-gate_file = "data/peps_gate_J=1.0_g=2.0_D=2.json"
-sample_peps_gate(gate_file; row=3, conv_step=1000, 
+optimize_mps_gate(; d=2, D=2, J=1.0, g=1.0,
+                             row=3, save_path="data")
+gate_file1 = "data/mps_gate_J=1.0_g=1.0_D=2_row=3.json"
+
+sample_peps_gate(gate_file1; row=3, conv_step=1000, 
                              samples=10000, measure_first=:Z,
                              save_results=true, save_path="data")
 
-optimize_mps_gate(; d=2, D=2, J=1.0, g=2.0,
-                             row=3, save_path="data")
-gate_file1 = "data/mps_gate_J=1.0_g=2.0_D=2_row=3.json"
+# ============================================================================
+# MPS Gate Analysis: expectation values, spectrum, correlation, mutual info
+# ============================================================================
 
-sample_peps_gate(gate_file1; row=3, conv_step=1000, 
-                             samples=100000, measure_first=:Z,
-                             save_results=true, save_path="data")
+# --- 1. Load gate and extract parameters ---
+gate_file1 = "data/mps_gate_J=1.0_g=1.0_D=2_row=3.json"
+gate_matrix, gate_params, E_mps = load_peps_gate(gate_file1)
+J_g = gate_params[:J]; g_g = gate_params[:g]; row_g = gate_params[:row]
+nqubits_g = gate_params[:nqubits]; D_g = gate_params[:D]
+virtual_qubits_g = (nqubits_g - 1) ÷ 2
+gates_g = [Matrix{ComplexF64}(gate_matrix) for _ in 1:row_g]
+println("Loaded MPS gate: J=$J_g, g=$g_g, row=$row_g, nqubits=$nqubits_g, D=$D_g")
+println("MPS energy: $E_mps")
 
+figures_dir_g = joinpath(@__DIR__, "results", "figures")
+mkpath(figures_dir_g)
+base_label = "mps_J=$(J_g)_g=$(g_g)_D=$(D_g)_row=$(row_g)"
 
+# --- 2. Expectation values (Sample + Exact comparison) ---
+# Use sample_peps_gate which handles both sampling and exact computation
+println("\n=== Computing expectation values (Sample + Exact) ===")
+rho_exp_g, Z_samples_exp_g, X_samples_exp_g, energy_sample_g, energy_exact_g = sample_peps_gate(
+    gate_file1; row=row_g, conv_step=1000, samples=1000000, 
+    measure_first=:Z, save_results=false, save_path="data")
+
+# Compute exact observables via transfer matrix
+rho_g, gap_g, eigenvalues_g, eigenvalues_raw_g = compute_transfer_spectrum(gates_g, row_g, nqubits_g)
+X_exact_g = real(compute_X_expectation(rho_g, gates_g, row_g, virtual_qubits_g))
+ZZ_vert_exact_g, ZZ_horiz_exact_g = compute_ZZ_expectation(rho_g, gates_g, row_g, virtual_qubits_g)
+ZZ_vert_exact_g = real(ZZ_vert_exact_g)
+ZZ_horiz_exact_g = real(ZZ_horiz_exact_g)
+
+# Compute sample-based observables with standard errors
+Z_samples_clean = Z_samples_exp_g[1001:end]
+X_sample_g = mean(X_samples_exp_g)
+Z_sample_g = mean(Z_samples_clean)
+X_stderr_g = std(X_samples_exp_g) / sqrt(length(X_samples_exp_g))
+Z_stderr_g = std(Z_samples_clean) / sqrt(length(Z_samples_clean))
+
+if row_g > 1
+    ZZ_vert_samples_g = [Z_samples_exp_g[i] * Z_samples_exp_g[i+1] for i in 1001:(length(Z_samples_exp_g)-1)]
+    ZZ_vert_sample_g = mean(ZZ_vert_samples_g)
+    ZZ_vert_stderr_g = std(ZZ_vert_samples_g) / sqrt(length(ZZ_vert_samples_g))
+else
+    ZZ_vert_sample_g = nothing
+    ZZ_vert_stderr_g = 0.0
+end
+
+ZZ_horiz_samples_g = [Z_samples_exp_g[i] * Z_samples_exp_g[i+row_g] for i in 1001:(length(Z_samples_exp_g)-row_g)]
+ZZ_horiz_sample_g = mean(ZZ_horiz_samples_g)
+ZZ_horiz_stderr_g = std(ZZ_horiz_samples_g) / sqrt(length(ZZ_horiz_samples_g))
+
+# Compute energy: align X_samples (no burn-in) with Z_samples (discard burn-in)
+# X_samples_exp_g has length = samples (no burn-in)
+# Z_samples_exp_g has length = conv_step + samples (includes burn-in)
+Z_for_energy_g = Z_samples_exp_g[1001:end]
+n_energy_samples = min(length(X_samples_exp_g), length(Z_for_energy_g) - row_g)
+energy_samples_g = if row_g == 1
+    [-g_g * X_samples_exp_g[i] - J_g * Z_for_energy_g[i] * Z_for_energy_g[i+row_g] for i in 1:n_energy_samples]
+else
+    [-g_g * X_samples_exp_g[i] - J_g * (Z_for_energy_g[i] * Z_for_energy_g[i+1] + Z_for_energy_g[i] * Z_for_energy_g[i+row_g]) 
+     for i in 1:n_energy_samples]
+end
+energy_stderr_g = std(energy_samples_g) / sqrt(length(energy_samples_g))
+
+println("\n=== Exact vs Sample Expectation Values ===")
+println("                Exact           Sample")
+println("Energy:    $(round(energy_exact_g, digits=6))    $(round(energy_sample_g, digits=6)) ± $(round(energy_stderr_g, digits=6))")
+println("⟨X⟩:       $(round(X_exact_g, digits=6))    $(round(X_sample_g, digits=6)) ± $(round(X_stderr_g, digits=6))")
+println("⟨Z⟩:       N/A             $(round(Z_sample_g, digits=6)) ± $(round(Z_stderr_g, digits=6))")
+if !isnothing(ZZ_vert_sample_g)
+    println("⟨ZZ⟩_vert: $(round(ZZ_vert_exact_g, digits=6))    $(round(ZZ_vert_sample_g, digits=6)) ± $(round(ZZ_vert_stderr_g, digits=6))")
+end
+println("⟨ZZ⟩_horiz:$(round(ZZ_horiz_exact_g, digits=6))    $(round(ZZ_horiz_sample_g, digits=6)) ± $(round(ZZ_horiz_stderr_g, digits=6))")
+println("Gap:       $(round(gap_g, digits=6))")
+
+# Use existing plotting infrastructure for grouped bar chart
+labels_exp_g = row_g > 1 ? ["E", "⟨X⟩", "⟨ZZ⟩ᵥ", "⟨ZZ⟩ₕ"] : ["E", "⟨X⟩", "⟨ZZ⟩ₕ"]
+exact_vals_g = row_g > 1 ? [energy_exact_g, X_exact_g, ZZ_vert_exact_g, ZZ_horiz_exact_g] : 
+                            [energy_exact_g, X_exact_g, ZZ_horiz_exact_g]
+sample_vals_g = row_g > 1 ? [energy_sample_g, X_sample_g, ZZ_vert_sample_g, ZZ_horiz_sample_g] :
+                             [energy_sample_g, X_sample_g, ZZ_horiz_sample_g]
+sample_errs_g = row_g > 1 ? [energy_stderr_g, X_stderr_g, ZZ_vert_stderr_g, ZZ_horiz_stderr_g] :
+                             [energy_stderr_g, X_stderr_g, ZZ_horiz_stderr_g]
+
+fig_exp_g = Figure(size=(700, 450))
+ax_exp_g = Axis(fig_exp_g[1, 1],
+    xlabel="Observable", ylabel="Value",
+    title="Expectation Values: row=$row_g, g=$g_g, nqubits=$nqubits_g",
+    xticks=(1:length(labels_exp_g), labels_exp_g))
+
+bar_width = 0.35
+x_positions = collect(1:length(labels_exp_g))
+
+barplot!(ax_exp_g, x_positions .- bar_width/2, exact_vals_g,
+    width=bar_width, color=:steelblue, label="Exact")
+barplot!(ax_exp_g, x_positions .+ bar_width/2, sample_vals_g,
+    width=bar_width, color=:coral, label="Sample")
+errorbars!(ax_exp_g, x_positions .+ bar_width/2, sample_vals_g, sample_errs_g,
+    color=:black, whiskerwidth=8)
+
+for (i, (exact_val, sample_val)) in enumerate(zip(exact_vals_g, sample_vals_g))
+    text!(ax_exp_g, i - bar_width/2, exact_val + 0.05, 
+        text=string(round(exact_val, digits=3)), align=(:center, :bottom), fontsize=10)
+    text!(ax_exp_g, i + bar_width/2, sample_val + 0.05,
+        text=string(round(sample_val, digits=3)), align=(:center, :bottom), fontsize=10)
+end
+
+hlines!(ax_exp_g, [0], color=:black, linewidth=1)
+axislegend(ax_exp_g, position=:lt)
+
+display(fig_exp_g)
+save(joinpath(figures_dir_g, "$(base_label)_expectation_values.pdf"), fig_exp_g)
+println("Expectation values figure saved.")
+
+# --- 3. Transfer matrix spectrum ---
+fig_spec_g = plot_eigenvalue_spectrum(eigenvalues_raw_g;
+    title="Eigenvalue Spectrum: $base_label",
+    save_path=joinpath(figures_dir_g, "$(base_label)_eigenvalues.pdf"),
+    show_gap=true)
+display(fig_spec_g)
+
+# --- 4. Correlation function (exact + sampled) ---
+max_sep_g = 40
+exact_full_g = correlation_function(gates_g, row_g, virtual_qubits_g, :Z, 1:max_sep_g; connected=false)
+exact_connected_g = correlation_function(gates_g, row_g, virtual_qubits_g, :Z, 1:max_sep_g; connected=true)
+
+separations_g = collect(1:max_sep_g)
+exact_full_vals_g = [real(exact_full_g[r]) for r in separations_g]
+exact_connected_vals_g = [real(exact_connected_g[r]) for r in separations_g]
+correlation_length_g = 1 / gap_g
+println("\nCorrelation length ξ = $(round(correlation_length_g, digits=2))")
+
+# Sample-based correlations
+println("Generating samples for correlation function...")
+_, Z_samples_g, X_samples_g = sample_quantum_channel(gates_g, row_g, nqubits_g;
+    conv_step=1000, samples=1000000, measure_first=:Z)
+Z_vec_g = Z_samples_g[1001:end]  # Discard burn-in
+
+_, _, _, corr_full_g, corr_err_g, corr_connected_g, corr_connected_err_g = compute_acf(
+    reshape(Float64.(Z_vec_g), 1, :); max_lag=max_sep_g+1, row=row_g)
+
+n_sample_seps_g = min(length(corr_full_g) - 1, max_sep_g)
+sample_seps_g = 1:n_sample_seps_g
+sample_full_vals_g = corr_full_g[2:n_sample_seps_g+1]
+sample_full_err_g = corr_err_g[2:n_sample_seps_g+1]
+sample_connected_vals_g = corr_connected_g[2:n_sample_seps_g+1]
+sample_connected_err_g = corr_connected_err_g[2:n_sample_seps_g+1]
+
+# Plot correlation function
+min_val_g = 1e-15
+fig_corr_g = Figure(size=(800, 700))
+title_str_g = "Correlation Function: g=$g_g, row=$row_g, nqubits=$nqubits_g, ξ=$(round(correlation_length_g, digits=2))"
+Label(fig_corr_g[0, 1], title_str_g, fontsize=16, font=:bold)
+
+# Top: full correlation
+ax1_g = Axis(fig_corr_g[1, 1], xlabel="Separation r", ylabel="|⟨Z_i Z_{i+r}⟩|",
+             title="Full Correlation", yscale=log10)
+exact_full_abs_g = max.(abs.(exact_full_vals_g), min_val_g)
+sample_full_abs_g = max.(abs.(sample_full_vals_g), min_val_g)
+lines!(ax1_g, separations_g, exact_full_abs_g, label="Exact contraction", color=:blue, linewidth=2)
+scatter!(ax1_g, separations_g, exact_full_abs_g, color=:blue, markersize=8)
+err_low_g = min.(sample_full_err_g, sample_full_abs_g .- min_val_g)
+scatter!(ax1_g, collect(sample_seps_g), sample_full_abs_g,
+         label="Sampling ± std err", color=:red, markersize=8, marker=:diamond)
+errorbars!(ax1_g, collect(sample_seps_g), sample_full_abs_g, err_low_g, sample_full_err_g,
+           color=:red, whiskerwidth=6)
+axislegend(ax1_g, position=:rt)
+
+# Bottom: connected correlation
+ax2_g = Axis(fig_corr_g[2, 1], xlabel="Separation r", ylabel="|⟨Z_i Z_{i+r}⟩_c|",
+             title="Connected Correlation", yscale=log10)
+exact_conn_abs_g = max.(abs.(exact_connected_vals_g), min_val_g)
+sample_conn_abs_g = max.(abs.(sample_connected_vals_g), min_val_g)
+lines!(ax2_g, separations_g, exact_conn_abs_g, label="Exact contraction", color=:blue, linewidth=2)
+scatter!(ax2_g, separations_g, exact_conn_abs_g, color=:blue, markersize=8)
+err_low_conn_g = min.(sample_connected_err_g, sample_conn_abs_g .- min_val_g)
+scatter!(ax2_g, collect(sample_seps_g), sample_conn_abs_g,
+         label="Sampling ± std err", color=:red, markersize=8, marker=:diamond)
+errorbars!(ax2_g, collect(sample_seps_g), sample_conn_abs_g, err_low_conn_g, sample_connected_err_g,
+           color=:red, whiskerwidth=6)
+axislegend(ax2_g, position=:rt)
+
+display(fig_corr_g)
+save(joinpath(figures_dir_g, "$(base_label)_correlation_function.pdf"), fig_corr_g)
+println("Correlation function figure saved.")
+
+# --- 5. Mutual information ---
+mi_matrix_g, rho_mi_g = IsoPEPS.mutual_information(gates_g, row_g, nqubits_g; conv_step=1000, samples=10000)
+fig_mi_g = plot_MI(mi_matrix_g;
+    title="Mutual Information: peps_J=1_g=1_D=2_row=3",
+    save_path=joinpath(figures_dir_g, "$(base_label)_mutual_information.pdf"))
+display(fig_mi_g)
+
+println("\n=== All MPS gate analysis figures saved to $figures_dir_g ===")
 
 mi_matrix, rho=mutual_information(datafile; conv_step=1000, samples=10000)
 
@@ -979,7 +1161,7 @@ fig, data = plot_correlation_function(datafile;
                                    save_path="project/results/figures/correlation_function.pdf")
 display(fig)
 
-gates, rho, gap, eigenvalues = reconstruct_gates(datafile; use_iterative=false, matrix_free=false)
+
 _, gap, eigenvalues, eigenvalues_raw = compute_transfer_spectrum(gates, row, nqubits)
 eigenvalues_raw
 xi = -log(abs(eigenvalues[5]/eigenvalues[1]))
