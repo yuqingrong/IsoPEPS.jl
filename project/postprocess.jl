@@ -938,19 +938,36 @@ function run_energy_evolution(file1::String, file2::String; n_runs=50, conv_step
 end
 # Example usage (commented out)
 # Analyze a single result
-J=1.0;g = 2.0; row=3 ; nqubits=3; p=3; virtual_qubits=1;D=2
+J=1.0;g = 0.0; row=3 ; nqubits=3; p=3; virtual_qubits=1;D=d=2
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile)
 
+E, peps = pepskit_ground_state(d, D, J, g; 
+                               χ=20, ctmrg_tol=1e-10, 
+                               grad_tol=1e-6, maxiter=1)
+A = peps.A[1, 1] 
+A_array = convert(Array, A) 
+A_arrray=permutedims(A_array, ())
+A=reshape(A_array, (d*D^2, D^2))
+
 optimize_peps_gate(; d=2, D=2, J=1.0, g=2.0,
                              save_path="data", χ=20, ctmrg_tol=1e-10,
-                             grad_tol=1e-6, maxiter=100)
-sample_peps_ground_state(; d=2, D=2, J=1.0, g=2.0, row=3,
-                       conv_step=1000, samples=10000, measure_first=:Z,
-                       save_path="data", χ=20, ctmrg_tol=1e-10,
-                       grad_tol=1e-6, maxiter=1000)
+                             grad_tol=1e-6, maxiter=1)
+gate_file = "data/peps_gate_J=1.0_g=2.0_D=2.json"
+sample_peps_gate(gate_file; row=3, conv_step=1000, 
+                             samples=10000, measure_first=:Z,
+                             save_results=true, save_path="data")
+optimize_mps_gate(; d=2, D=2, J=1.0, g=2.0,
+                             row=1, save_path="data")
+gate_file1 = "data/mps_gate_J=1.0_g=2.0_D=2_row=1.json"
+
+sample_peps_gate(gate_file1; row=3, conv_step=1000, 
+                             samples=10000, measure_first=:Z,
+                             save_results=true, save_path="data")
+
+
 
 mi_matrix, rho=mutual_information(datafile; conv_step=1000, samples=10000)
 

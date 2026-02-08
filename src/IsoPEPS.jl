@@ -114,7 +114,7 @@ export diagnose_transfer_channel, diagnose_from_params
 # Reference Implementations
 # =============================================================================
 export mpskit_ground_state, mpskit_ground_state_1d, pepskit_ground_state
-export optimize_peps_gate, load_peps_gate, sample_peps_gate, complete_to_unitary
+export optimize_peps_gate, load_peps_gate, sample_peps_gate, complete_to_unitary, optimize_mps_gate
 
 # =============================================================================
 # Data I/O & Visualization

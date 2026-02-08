@@ -15,6 +15,7 @@ Named tuple with:
 - `correlation_length`: Correlation length
 - `entropy`: Entanglement entropy
 - `spectrum`: Transfer matrix spectrum
+- `psi`: Optimized InfiniteMPS wavefunction
 
 # Description
 Uses VUMPS from MPSKit to find the ground state of the transverse field 
@@ -32,7 +33,7 @@ function mpskit_ground_state(d::Int, D::Int, g::Float64, row::Int)
     len = isempty(corr_lengths) ? NaN : corr_lengths[1]
     entropy = MPSKit.entropy(psi)
     
-    return (energy=E, correlation_length=len, entropy=entropy, spectrum=spectrum)
+    return (energy=E, correlation_length=len, entropy=entropy, spectrum=spectrum, psi=psi)
 end
 
 """
@@ -182,36 +183,62 @@ function optimize_peps_gate(; d::Int=2, D::Int=2, J::Float64=1.0, g::Float64=1.0
     
     # Step 2: Extract unit tensor
     println("\n[2/4] Extracting unit tensor...")
-    A = peps.A[1, 1]  # TensorKit TensorMap
-    A_array = Array(A)  # Convert to Julia array
-    # Leg ordering: [physical, down, right, up, left] = [d, D, D, D, D]
-    println("Tensor shape: $(size(A_array))")
+    A = peps.A[1, 1]  # TensorKit TensorMap: P ← N ⊗ E ⊗ S ⊗ W
+    A_array = convert(Array, A)  # Convert to Julia array
+    # PEPSKit leg ordering: [physical, N, E, S, W] = [physical, up, right, down, left]
+    println("Tensor shape (P,N,E,S,W): $(size(A_array))")
     
-    # Step 3: Reshape to isometry matrix
-    # Input legs: [physical, down, right] → d × D × D = d*D^2
-    # Output legs: [up, left] → D × D = D^2
-    println("\n[3/4] Reshaping to isometry matrix...")
+    # Step 3: Reshape PEPS tensor to isometric form via QR decomposition
+    # IsoPEPS convention: tensor legs [physical, down, right, up, left]
+    # Gate tensor: G[p_out, down, right, p_in, up, left]
+    # Selecting p_in=1 (|0⟩): G[:,:,:,1,:,:] = A[physical, down, right, up, left]
+    # This is an isometry from (up, left) → (physical, down, right)
+    println("\n[3/4] Building isometric form via QR...")
     
-    # Permute to [up, left, phy, down, right] then reshape
-    A_perm = permutedims(A_array, (4, 5, 1, 2, 3))  # [up, left, phy, down, right]
-    out_dim = D * D  # up × left
-    in_dim = d * D * D  # phy × down × right
-    A_matrix = reshape(A_perm, out_dim, in_dim)
-    println("Isometry matrix shape: $(size(A_matrix))")
+    # Permute from PEPSKit [P, N, E, S, W] to IsoPEPS [physical, down, right, up, left]
+    A_perm = permutedims(A_array, (1,4,5,2,3))  # [physical, down, right, up, left]
+    out_dim = d * D * D   # physical × down × right (gate output legs)
+    in_dim = D * D        # up × left (gate input legs)
+    A_matrix = reshape(A_perm, out_dim, in_dim)  # tall matrix: (d*D², D²)
+    println("Tensor reshaped to matrix: $(size(A_matrix))")
     
-    # Verify isometry property: A*A' ≈ I (for wide matrix)
-    AAdag = A_matrix * A_matrix'
-    isometry_error = norm(AAdag - I(out_dim))
-    println("Isometry error ||A*A' - I||: $isometry_error")
+    # PEPSKit gives a general (non-isometric) PEPS tensor.
+    # QR decomposition: A = Q*R, where Q is an isometry (Q'Q = I).
+    # Q has the same column space as A, so it encodes the same physical state
+    # up to a gauge transformation R on the virtual legs (up, left).
+    # This is exact — no approximation is made.
+    F_qr = qr(A_matrix)
+    A_iso = Matrix(F_qr.Q)  # isometry: (d*D² × D²), A_iso'*A_iso = I
+    R_gauge = Matrix(F_qr.R)  # gauge: (D² × D²)
     
-    # Step 4: Complete nullspace to unitary
-    println("\n[4/4] Completing nullspace to unitary...")
-    gate_matrix = complete_to_unitary(A_matrix)
+    raw_error = norm(A_matrix' * A_matrix - I(in_dim))
+    iso_error = norm(A_iso' * A_iso - I(in_dim))
+    println("Raw tensor isometry error ||A'A - I||: $(raw_error)")
+    println("After QR: ||Q'Q - I||: $(iso_error)")
+    println("Gauge matrix R condition number: $(cond(R_gauge))")
+    println("Reconstruction error ||A - Q*R||: $(norm(A_matrix - A_iso * R_gauge))")
+    
+    # Step 4: Build full unitary gate
+    # Place isometric tensor at p_in=1 slice, fill remaining with orthogonal complement
+    println("\n[4/4] Completing to unitary gate...")
+    gate_dim = d * D * D  # gate dimension = d*D²
+    
+    # Build 6-index gate tensor and place isometry at p_in=1
+    gate_tensor = zeros(ComplexF64, d, D, D, d, D, D)
+    gate_tensor[:, :, :, 1, :, :] = reshape(A_iso, d, D, D, D, D)
+    gate_matrix = reshape(gate_tensor, gate_dim, gate_dim)
+    
+    # Find orthogonal complement for the zero columns (p_in > 1)
+    V_null = nullspace(gate_matrix')
+    zero_cols = [j for j in 1:gate_dim if all(gate_matrix[:, j] .== 0)]
+    for (i, col) in enumerate(zero_cols)
+        gate_matrix[:, col] = V_null[:, i]
+    end
     println("Unitary gate shape: $(size(gate_matrix))")
     
     # Verify unitarity
     UUdag = gate_matrix * gate_matrix'
-    unitarity_error = norm(UUdag - I(size(gate_matrix, 1)))
+    unitarity_error = norm(UUdag - I(gate_dim))
     println("Unitarity error ||U*U' - I||: $unitarity_error")
     
     # Determine nqubits from gate size
@@ -235,7 +262,8 @@ function optimize_peps_gate(; d::Int=2, D::Int=2, J::Float64=1.0, g::Float64=1.0
         :peps_tensor => A_nested,
         :peps_tensor_shape => size(A_array),
         :peps_energy => E,
-        :isometry_error => isometry_error,
+        :raw_isometry_error => raw_error,
+        :polar_isometry_error => iso_error,
         :unitarity_error => unitarity_error,
         :params => Dict{Symbol, Any}(
             :d => d,
@@ -247,6 +275,119 @@ function optimize_peps_gate(; d::Int=2, D::Int=2, J::Float64=1.0, g::Float64=1.0
             :ctmrg_tol => ctmrg_tol,
             :grad_tol => grad_tol,
             :maxiter => maxiter
+        )
+    )
+    
+    open(filename, "w") do io
+        JSON3.pretty(io, gate_data)
+    end
+    println("\nGate saved to: $filename")
+    
+    return gate_matrix, E, filename
+end
+
+"""
+    optimize_mps_gate(; d=2, D=2, J=1.0, g=1.0, row=1, save_path="data")
+
+Optimize MPS ground state on an infinite cylinder, reshape the MPS tensor into a
+PEPS-like 5-index tensor, complete to a unitary gate, and save.
+
+Instead of PEPSKit (which gives a non-isometric tensor), this uses MPSKit (VUMPS)
+on a cylinder. The MPS virtual bond dimension is D_mps = D^2, so that the virtual
+legs can be split into (up, left) and (down, right) pairs of dimension D each,
+recovering a PEPS-like tensor.
+
+The MPS tensor from VUMPS (right-canonical AR form) is already an isometry, so no
+QR approximation step is needed.
+
+# Arguments
+- `d`: Physical dimension (default: 2)
+- `D`: PEPS bond dimension (default: 2). MPS bond dimension will be D^2.
+- `J`: Coupling strength (default: 1.0)
+- `g`: Transverse field strength (default: 1.0)
+- `row`: Number of rows / cylinder circumference (default: 1)
+- `save_path`: Directory to save gate file (default: "data")
+
+# Returns
+- `gate_matrix`: The completed unitary gate
+- `E`: Ground state energy per site
+- `filename`: Path to saved gate file
+
+# Example
+```julia
+gate, E, filename = optimize_mps_gate(; D=2, J=1.0, g=2.0, row=1)
+```
+"""
+function optimize_mps_gate(; d::Int=2, D::Int=2, J::Float64=1.0, g::Float64=1.0,
+                             row::Int=1, save_path::String="data")
+    
+    D_mps = D^2  # MPS bond dim = D_peps^2
+    println("=== Optimize MPS Gate ===")
+    println("Parameters: d=$d, D_peps=$D, D_mps=$D_mps, J=$J, g=$g, row=$row")
+    
+    # Step 1: Get MPS ground state on infinite cylinder
+    println("\n[1/4] Optimizing MPS ground state on cylinder (row=$row)...")
+    result = mpskit_ground_state(d, D_mps, g, row)
+    E = result.energy
+    psi = result.psi
+    println("Ground state energy per site: $E")
+    println("Correlation length: $(result.correlation_length)")
+    
+    # Step 2: Extract MPS tensor (right-canonical form, already isometric)
+    # AR has legs: [left_virtual(D_mps), physical(d), right_virtual(D_mps)]
+    println("\n[2/4] Extracting MPS tensor (AR form)...")
+    A_map = Array{ComplexF64}(undef, D_mps, d, D_mps)
+
+    for (i, j, k) in Iterators.product(1:D_mps, 1:d, 1:D_mps)
+        A_map[i, j, k] = psi.AR.data[1][i, j, k]
+    end
+    A_map = permutedims(A_map, (2, 1, 3))
+    @show size(A_map)
+    println("MPS tensor shape (left, phys, right): $(size(A_map))")
+    
+    # Verify isometry: AR is right-canonical, i.e., sum over phys and right gives I
+    # In matrix form: reshape [D_mps, d*D_mps] -> A, then A*A' = I (wide isometry)
+    # Or equivalently: reshape [d*D_mps, D_mps] -> A^T, then A^T' * A^T = I
+    A_check = reshape(A_map, d * D_mps, D_mps)
+    @show A_check*A_check'
+    @show A_check' * A_check
+    iso_check = norm(A_check' * A_check - I(D_mps))
+    println("AR isometry check ||A*A' - I||: $iso_check")
+
+    #complete unitary
+    nullspace_A = LinearAlgebra.nullspace(A_check')
+    A_matrix = vcat(A_check, nullspace_A)
+    # Verify unitarity
+    UUdag = A_matrix * A_matrix'
+    unitarity_error = norm(UUdag - I(size(A_matrix, 1)))
+    println("Unitarity error ||U*U' - I||: $unitarity_error")
+    
+    # Save gate to file (same format as optimize_peps_gate for compatibility)
+    !isdir(save_path) && mkpath(save_path)
+    filename = joinpath(save_path, "mps_gate_J=$(J)_g=$(g)_D=$(D)_row=$(row).json")
+    gate_matrix = A_matrix
+    # Convert gate matrix to nested arrays for JSON serialization
+    gate_nested = [collect(gate_matrix[i, :]) for i in 1:size(gate_matrix, 1)]
+    # Also save original MPS tensor
+    A_nested = [collect(vec(A_map[:, :, :, i])) for i in 1:size(A_map, 3)]
+    
+    gate_data = Dict{Symbol, Any}(
+        :type => "MPSGate",  
+        :gate => gate_nested,
+        :gate_shape => size(gate_matrix),
+        :peps_tensor => A_nested,
+        :peps_tensor_shape => size(A_peps),
+        :peps_energy => E,
+        :raw_isometry_error => raw_iso_error,
+        :unitarity_error => unitarity_error,
+        :params => Dict{Symbol, Any}(
+            :d => d,
+            :D => D,
+            :D_mps => D_mps,
+            :J => J,
+            :g => g,
+            :nqubits => nqubits,
+            :row => row
         )
     )
     
@@ -277,11 +418,15 @@ function load_peps_gate(filename::String)
     end
     
     # Reconstruct gate matrix from nested arrays
+    # JSON3 serializes ComplexF64 as Dict with "re"/"im" keys
+    _to_complex(x::Number) = ComplexF64(x)
+    _to_complex(x) = ComplexF64(x["re"], x["im"])
+    
     gate_nested = data["gate"]
     gate_shape = Tuple(data["gate_shape"])
     gate_matrix = Matrix{ComplexF64}(undef, gate_shape...)
     for i in 1:gate_shape[1]
-        gate_matrix[i, :] = ComplexF64.(gate_nested[i])
+        gate_matrix[i, :] = [_to_complex(v) for v in gate_nested[i]]
     end
     
     # Extract parameters
