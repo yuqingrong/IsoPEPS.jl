@@ -959,12 +959,13 @@ gate_file = "data/peps_gate_J=1.0_g=2.0_D=2.json"
 sample_peps_gate(gate_file; row=3, conv_step=1000, 
                              samples=10000, measure_first=:Z,
                              save_results=true, save_path="data")
+
 optimize_mps_gate(; d=2, D=2, J=1.0, g=2.0,
-                             row=1, save_path="data")
-gate_file1 = "data/mps_gate_J=1.0_g=2.0_D=2_row=1.json"
+                             row=3, save_path="data")
+gate_file1 = "data/mps_gate_J=1.0_g=2.0_D=2_row=3.json"
 
 sample_peps_gate(gate_file1; row=3, conv_step=1000, 
-                             samples=10000, measure_first=:Z,
+                             samples=100000, measure_first=:Z,
                              save_results=true, save_path="data")
 
 

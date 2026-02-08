@@ -324,62 +324,62 @@ function optimize_mps_gate(; d::Int=2, D::Int=2, J::Float64=1.0, g::Float64=1.0,
     D_mps = D^2  # MPS bond dim = D_peps^2
     println("=== Optimize MPS Gate ===")
     println("Parameters: d=$d, D_peps=$D, D_mps=$D_mps, J=$J, g=$g, row=$row")
-    
-    # Step 1: Get MPS ground state on infinite cylinder
+
     println("\n[1/4] Optimizing MPS ground state on cylinder (row=$row)...")
     result = mpskit_ground_state(d, D_mps, g, row)
     E = result.energy
     psi = result.psi
-    println("Ground state energy per site: $E")
-    println("Correlation length: $(result.correlation_length)")
     
-    # Step 2: Extract MPS tensor (right-canonical form, already isometric)
-    # AR has legs: [left_virtual(D_mps), physical(d), right_virtual(D_mps)]
     println("\n[2/4] Extracting MPS tensor (AR form)...")
-    A_map = Array{ComplexF64}(undef, D_mps, d, D_mps)
-
-    for (i, j, k) in Iterators.product(1:D_mps, 1:d, 1:D_mps)
-        A_map[i, j, k] = psi.AR.data[1][i, j, k]
-    end
-    A_map = permutedims(A_map, (2, 1, 3))
-    @show size(A_map)
-    println("MPS tensor shape (left, phys, right): $(size(A_map))")
     
-    # Verify isometry: AR is right-canonical, i.e., sum over phys and right gives I
-    # In matrix form: reshape [D_mps, d*D_mps] -> A, then A*A' = I (wide isometry)
-    # Or equivalently: reshape [d*D_mps, D_mps] -> A^T, then A^T' * A^T = I
-    A_check = reshape(A_map, d * D_mps, D_mps)
-    @show A_check*A_check'
-    @show A_check' * A_check
-    iso_check = norm(A_check' * A_check - I(D_mps))
-    println("AR isometry check ||A*A' - I||: $iso_check")
+    A_map = convert(Array, psi.AR[1])
+    A_map = permutedims(A_map, (2, 3, 1))
 
-    #complete unitary
+    A_check = reshape(A_map, d*D_mps, D_mps)
+    @assert isapprox(A_check' * A_check, I(D_mps), atol=1e-5)
+   
+        
     nullspace_A = LinearAlgebra.nullspace(A_check')
-    A_matrix = vcat(A_check, nullspace_A)
-    # Verify unitarity
-    UUdag = A_matrix * A_matrix'
-    unitarity_error = norm(UUdag - I(size(A_matrix, 1)))
-    println("Unitarity error ||U*U' - I||: $unitarity_error")
+    A_matrix = hcat(A_check, nullspace_A) 
+    @show size(A_matrix)
+    A_mod = similar(A_matrix)
+    A_mod[:, 1] = A_matrix[:, 1]
+    A_mod[:, 3] = A_matrix[:, 2]
+    A_mod[:, 5] = A_matrix[:, 3]
+    A_mod[:, 7] = A_matrix[:, 4]
+    A_mod[:, 2] = A_matrix[:, 5]
+    A_mod[:, 4] = A_matrix[:, 6]
+    A_mod[:, 6] = A_matrix[:, 7]
+    A_mod[:, 8] = A_matrix[:, 8]
+    
+    # Determine nqubits from gate size
+    gate_dim = size(A_mod, 1)
+    nqubits = Int(log2(gate_dim))
+    println("Gate acts on $nqubits qubits (dimension $gate_dim)")
     
     # Save gate to file (same format as optimize_peps_gate for compatibility)
     !isdir(save_path) && mkpath(save_path)
     filename = joinpath(save_path, "mps_gate_J=$(J)_g=$(g)_D=$(D)_row=$(row).json")
-    gate_matrix = A_matrix
+    gate_matrix = A_mod
     # Convert gate matrix to nested arrays for JSON serialization
     gate_nested = [collect(gate_matrix[i, :]) for i in 1:size(gate_matrix, 1)]
-    # Also save original MPS tensor
-    A_nested = [collect(vec(A_map[:, :, :, i])) for i in 1:size(A_map, 3)]
+    # Also save original MPS tensor - A_map is 3D: (left, phys, right)
+    # Serialize along right index to match PEPS format convention
+    A_nested = [collect(vec(A_map[:, :, i])) for i in 1:size(A_map, 3)]
     
+    
+    gate_tensors = gates_to_tensors([gate_matrix], 1, 1) 
+    extracted_tensor = gate_tensors[1]  
+
+    @assert reshape(extracted_tensor, size(A_map)) == A_map
+   
     gate_data = Dict{Symbol, Any}(
         :type => "MPSGate",  
         :gate => gate_nested,
         :gate_shape => size(gate_matrix),
-        :peps_tensor => A_nested,
-        :peps_tensor_shape => size(A_peps),
-        :peps_energy => E,
-        :raw_isometry_error => raw_iso_error,
-        :unitarity_error => unitarity_error,
+        :mps_tensor => A_nested,
+        :mps_tensor_shape => size(A_map),
+        :mps_energy => E,
         :params => Dict{Symbol, Any}(
             :d => d,
             :D => D,
@@ -402,7 +402,7 @@ end
 """
     load_peps_gate(filename::String)
 
-Load a saved PEPS gate from JSON file.
+Load a saved PEPS or MPS gate from JSON file.
 
 # Arguments
 - `filename`: Path to the saved gate file
@@ -410,7 +410,7 @@ Load a saved PEPS gate from JSON file.
 # Returns
 - `gate_matrix`: The unitary gate matrix
 - `params`: Dictionary of parameters (d, D, J, g, nqubits, etc.)
-- `E`: PEPS ground state energy
+- `E`: Ground state energy (PEPS or MPS)
 """
 function load_peps_gate(filename::String)
     data = open(filename, "r") do io
@@ -433,7 +433,13 @@ function load_peps_gate(filename::String)
     params_raw = data["params"]
     params = Dict{Symbol, Any}(Symbol(k) => v for (k, v) in pairs(params_raw))
     
-    E = data["peps_energy"]
+    # Handle both PEPS and MPS gate files
+    gate_type = get(data, "type", "PEPSGate")
+    E = if gate_type == "MPSGate"
+        data["mps_energy"]
+    else
+        data["peps_energy"]
+    end
     
     return gate_matrix, params, E
 end
@@ -442,10 +448,10 @@ end
     sample_peps_gate(filename::String; row=1, conv_step=1000, samples=10000, 
                      measure_first=:Z, save_results=true, save_path="data")
 
-Load a saved PEPS gate and run quantum channel sampling.
+Load a saved PEPS or MPS gate and run quantum channel sampling.
 
 # Arguments
-- `filename`: Path to saved gate file (from `optimize_peps_gate`)
+- `filename`: Path to saved gate file (from `optimize_peps_gate` or `optimize_mps_gate`)
 - `row`: Number of rows for the quantum channel (default: 1)
 - `conv_step`: Convergence steps before sampling (default: 1000)
 - `samples`: Number of samples to collect (default: 10000)
@@ -457,7 +463,8 @@ Load a saved PEPS gate and run quantum channel sampling.
 - `rho`: Final quantum state
 - `Z_samples`: Vector of Z measurement outcomes
 - `X_samples`: Vector of X measurement outcomes
-- `energy`: Sampled energy
+- `energy_sampled`: Energy computed from measurement samples
+- `energy_exact`: Exact energy computed from gate via tensor contraction
 
 # Example
 ```julia
@@ -465,8 +472,9 @@ Load a saved PEPS gate and run quantum channel sampling.
 gate, E, gate_file = optimize_peps_gate(; D=2, J=1.0, g=2.0)
 
 # Then sample (can run multiple times with different settings)
-rho, Z, X, energy = sample_peps_gate(gate_file; samples=50000)
-rho, Z, X, energy = sample_peps_gate(gate_file; samples=100000, conv_step=5000)
+rho, Z, X, E_sampled, E_exact = sample_peps_gate(gate_file; samples=50000)
+println("Exact energy from gate: ", E_exact)
+println("Sampled energy: ", E_sampled)
 ```
 """
 function sample_peps_gate(filename::String; row::Int=1, conv_step::Int=1000, 
@@ -502,10 +510,29 @@ function sample_peps_gate(filename::String; row::Int=1, conv_step::Int=1000,
     println("Generated $(length(Z_samples)) Z samples and $(length(X_samples)) X samples")
     
     # Compute energy from samples
-    energy = compute_energy(X_samples, Z_samples, g, J, row)
-    println("Sampled energy: $energy")
-    println("PEPS energy: $E")
-    println("Energy difference: $(abs(energy - E))")
+    energy_sampled = compute_energy(X_samples, Z_samples, g, J, row)
+    
+    # Compute exact energy from gate using tensor contraction
+    println("\nComputing exact energy from gate (tensor contraction)...")
+    virtual_qubits = (nqubits - 1) ÷ 2
+    rho_exact, gap_exact, eigenvalues_exact = compute_transfer_spectrum(gates, row, nqubits)
+    
+    X_exact = real(compute_X_expectation(rho_exact, gates, row, virtual_qubits))
+    ZZ_vert_exact, ZZ_horiz_exact = compute_ZZ_expectation(rho_exact, gates, row, virtual_qubits)
+    ZZ_vert_exact = real(ZZ_vert_exact)
+    ZZ_horiz_exact = real(ZZ_horiz_exact)
+    
+    energy_exact = -g * X_exact - J * (row == 1 ? ZZ_horiz_exact : ZZ_vert_exact + ZZ_horiz_exact)
+    
+    println("\n=== Energy Comparison ===")
+    println("Reference energy (PEPS/MPS):  $E")
+    println("Exact energy (from gate):     $energy_exact")
+    println("Sampled energy:                $energy_sampled")
+    println("Gate vs Reference diff:        $(abs(energy_exact - E))")
+    println("Sampled vs Exact diff:         $(abs(energy_sampled - energy_exact))")
+    println("Spectral gap:                  $gap_exact")
+    
+    energy = energy_sampled  # Keep sampled for backward compatibility
     
     # Save results if requested
     if save_results
@@ -518,11 +545,18 @@ function sample_peps_gate(filename::String; row::Int=1, conv_step::Int=1000,
         result_data = Dict{Symbol, Any}(
             :type => "PEPSSamplingResult",
             :gate_file => filename,
-            :energy => energy,
-            :peps_energy => E,
+            :energy_sampled => energy_sampled,
+            :energy_exact => energy_exact,
+            :reference_energy => E,
+            :spectral_gap => gap_exact,
             :Z_samples => Z_nested,
             :X_samples => X_nested,
             :sample_shape => (1, length(Z_samples)),
+            :observables_exact => Dict{Symbol, Any}(
+                :X => X_exact,
+                :ZZ_vert => ZZ_vert_exact,
+                :ZZ_horiz => ZZ_horiz_exact
+            ),
             :input_args => Dict{Symbol, Any}(
                 :d => d,
                 :D => D,
@@ -543,5 +577,5 @@ function sample_peps_gate(filename::String; row::Int=1, conv_step::Int=1000,
         println("\nResults saved to: $result_filename")
     end
     
-    return rho, Z_samples, X_samples, energy
+    return rho, Z_samples, X_samples, energy_sampled, energy_exact
 end
