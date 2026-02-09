@@ -938,12 +938,13 @@ function run_energy_evolution(file1::String, file2::String; n_runs=50, conv_step
 end
 # Example usage (commented out)
 # Analyze a single result
-J=1.0;g = 0.0; row=3 ; nqubits=3; p=3; virtual_qubits=1;D=d=2
+J=1.0;g = 1.0; row=3 ; nqubits=3; p=3; virtual_qubits=1;D=d=2
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile)
-fig, _ = plot_MI(datafile; title="J=1_g=0.0_D=2_row=3")
+fig, _ = plot_MI(datafile; title="J=1_g=1.0_D=2_row=3")
+save(joinpath(data_dir, "figures/J=1_g=1.0_D=2_row=3_mutual_information.pdf"), fig)
 display(fig)
 gates, rho, gap, eigenvalues = reconstruct_gates(datafile; use_iterative=false, matrix_free=false)
 

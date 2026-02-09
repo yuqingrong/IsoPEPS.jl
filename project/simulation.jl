@@ -86,7 +86,7 @@ end
 
 simulation(;
     J=1.0,
-    g_values=[0.0],
+    g_values=[1.0],
     row=3,
     p=3,
     nqubits=3,
