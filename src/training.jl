@@ -206,9 +206,11 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
     generation_X_samples = Vector{Float64}[]
     generation_count = Ref(0)
     logged_threads = Ref(false)
+    eval_count = Ref(0)
 
-    # Objective function for CMAEvolutionStrategy (takes only x, no extra arg)
-    function objective(x)
+    # Objective function for Optimization.jl (takes x and optional params_opt)
+    function objective(x, params_opt=nothing)
+        eval_count[] += 1
         current_params .= x
 
         gates = build_unitary_gate(x, p, row, nqubits; share_params=share_params)
@@ -271,12 +273,15 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
         return real(cost)
     end
 
-    # Callback for CMAEvolutionStrategy: (opt, y, fvals, perm) -> nothing or true (to stop)
-    # Called after each generation
-    function cmaes_callback(opt, y, fvals, perm)
-        # When a new generation is complete, find the best from that generation
-        min_energy = Inf
-        if !isempty(generation_energies)
+    # Callback for Optimization.jl CMA-ES
+    # Called after each function evaluation
+    function optimization_callback(state, loss_val)
+        # Check if we've completed a generation by tracking evaluation count
+        # CMA-ES evaluates popsize individuals per generation
+        actual_popsize = isnothing(popsize) ? 4 + floor(Int, 3*log(length(params))) : popsize
+        
+        if eval_count[] % actual_popsize == 0 && !isempty(generation_energies)
+            # When a generation is complete, find the best from that generation
             min_idx = argmin(generation_energies)
             min_energy = generation_energies[min_idx]
             best_params = generation_params[min_idx]
@@ -288,22 +293,22 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
             push!(params_history, best_params)
             push!(Z_samples_history, best_Z_samples)
             push!(X_samples_history, best_X_samples)
+
+            generation_count[] += 1
+            
+            # Log every 10 generations
+            if generation_count[] % 10 == 0
+                @info "TFIM J=$J g=$g $(row)×∞ PEPS | Generation $(generation_count[]) | Min Energy: $(round(min_energy, digits=6))"
+            end
+
+            # Clear generation arrays for next generation
+            empty!(generation_energies)
+            empty!(generation_params)
+            empty!(generation_Z_samples)
+            empty!(generation_X_samples)
         end
 
-        generation_count[] += 1
-        
-        # Log every 10 generations
-        if generation_count[] % 10 == 0
-            @info "TFIM J=$J g=$g $(row)×∞ PEPS | Generation $(generation_count[]) | Min Energy: $(round(min_energy, digits=6))"
-        end
-
-        # Clear generation arrays for next generation
-        empty!(generation_energies)
-        empty!(generation_params)
-        empty!(generation_Z_samples)
-        empty!(generation_X_samples)
-
-        return nothing  # Continue optimization
+        return false  # Continue optimization
     end
 
     # Compute actual popsize
@@ -311,22 +316,38 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
 
     @info "Optimizing $(length(params)) parameters with CMA-ES (σ₀=$sigma0, popsize=$actual_popsize)"
 
-    # Use CMAEvolutionStrategy.jl directly (not through Optimization.jl wrapper)
-    # because the wrapper doesn't expose sigma and popsize parameters
-    opt_result = CMAEvolutionStrategy.minimize(
-        objective,
-        params,
-        sigma0;
-        lower = zeros(length(params)),
-        upper = fill(2π, length(params)),
-        popsize = actual_popsize,
-        maxiter = maxiter,
-        ftol = abstol,
-        verbosity = 0,
-        callback = cmaes_callback
+    # Create Optimization.jl problem with CMA-ES
+    opt_func = OptimizationFunction(objective)
+    prob = OptimizationProblem(opt_func, params, nothing;
+        lb = zeros(length(params)),
+        ub = fill(2π, length(params))
+    )
+    
+    # Solve using CMA-ES from OptimizationCMAEvolutionStrategy
+    opt_result = solve(
+        prob, 
+        CMAEvolutionStrategyOpt(),
+        abstol = abstol,
+        maxiters = maxiter,
+        callback = optimization_callback
     )
 
-    converged = true  # CMAEvolutionStrategy always returns a result
+    converged = (opt_result.retcode == :Success || opt_result.retcode == :MaxIters ||
+                 string(opt_result.retcode) == "Success" || string(opt_result.retcode) == "MaxIters")
+
+    # Process remaining generation if any
+    if !isempty(generation_energies)
+        min_idx = argmin(generation_energies)
+        min_energy = generation_energies[min_idx]
+        best_params = generation_params[min_idx]
+        best_Z_samples = generation_Z_samples[min_idx]
+        best_X_samples = generation_X_samples[min_idx]
+        
+        push!(energy_history, min_energy)
+        push!(params_history, best_params)
+        push!(Z_samples_history, best_Z_samples)
+        push!(X_samples_history, best_X_samples)
+    end
 
     # Use best parameters found across all generations
     if !isempty(energy_history)
@@ -337,8 +358,8 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
         final_X_samples = X_samples_history[min_idx]
         @info "Best energy at generation $min_idx: $final_cost"
     else
-        final_params = CMAEvolutionStrategy.xbest(opt_result)
-        final_cost = CMAEvolutionStrategy.fbest(opt_result)
+        final_params = opt_result.u
+        final_cost = opt_result.objective
         final_Z_samples = Float64[]
         final_X_samples = Float64[]
     end
@@ -374,7 +395,7 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
         # Generation tracking
         :total_generations => generation_count[],
         :early_stopped => should_stop[],
-        :note => "energy_history contains minimum energy per CMA-ES generation"
+        :note => "energy_history contains minimum energy per EMA generation"
     )
 
     return result

@@ -32,7 +32,7 @@ using ITensorInfiniteMPS
 using MPSKitModels: transverse_field_ising, InfiniteStrip, InfiniteCylinder, 
                     @mpoham, InfiniteChain, nearest_neighbours, vertices
 using PEPSKit: InfiniteSquare
-using Optimization, OptimizationCMAEvolutionStrategy
+using Optimization, OptimizationCMAEvolutionStrategy, OptimizationMetaheuristics
 using CMAEvolutionStrategy
 using Manifolds, Manopt
 using Optim
