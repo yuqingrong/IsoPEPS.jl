@@ -230,10 +230,13 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
                                           conv_step=conv_step, 
                                           samples=samples,
                                           measure_first=measure_first)
-        # Discard convergence samples from each run
-
-        Z_samples_all[run_idx] = Z_samples[conv_step:end]
-        X_samples_all[run_idx] = X_samples[conv_step:end]
+        # Z_samples includes burn-in period, X_samples does not (collected in second phase)
+        # Align to row boundary so column structure is preserved for ZZ computation
+        # Find first index > conv_step that starts a new column: (idx-1) % row == 0
+        discard = conv_step + row - 1 - (conv_step - 1) % row  # round up to next row boundary
+        start_idx = discard + 1
+        Z_samples_all[run_idx] = Z_samples[start_idx:end]
+        X_samples_all[run_idx] = X_samples[start_idx:end]
         end
 
         # Combine all samples

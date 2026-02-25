@@ -938,7 +938,7 @@ function run_energy_evolution(file1::String, file2::String; n_runs=50, conv_step
 end
 # Example usage (commented out)
 # Analyze a single result
-J=1.0;g = 1.0; row=3 ; nqubits=3; p=3; virtual_qubits=1;D=2
+J=1.0;g = 2.5; row=3 ; nqubits=3; p=3; virtual_qubits=1;D=2
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
