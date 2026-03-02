@@ -1,8 +1,41 @@
 """
 Number of parameters per layer for the improved ansatz.
-Uses 3 parameters per qubit (Rz-Ry-Rz decomposition for full SU(2) coverage).
+Uses 2 parameters per qubit (Rx-Rz).
 """
 const PARAMS_PER_QUBIT_PER_LAYER = 2
+
+# Cache for the parameter-independent CNOT entangling product (keyed by nqubits)
+const _CNOT_PRODUCT_CACHE = Dict{Int, Matrix{ComplexF64}}()
+
+"""Return (and cache) the combined CNOT entangling matrix for `nqubits`."""
+function _get_cnot_product(nqubits::Int)
+    get!(_CNOT_PRODUCT_CACHE, nqubits) do
+        dim = 1 << nqubits
+        # Nearest-neighbor
+        cnot_nn = Matrix{ComplexF64}(I, dim, dim)
+        for i in 1:nqubits-1
+            cnot_nn *= Matrix(cnot(nqubits, i+1, i))
+        end
+        # Next-nearest-neighbor
+        cnot_nnn = Matrix{ComplexF64}(I, dim, dim)
+        for i in 1:nqubits-2
+            cnot_nnn *= Matrix(cnot(nqubits, i+2, i))
+        end
+        # Skip-2
+        cnot_skip2 = Matrix{ComplexF64}(I, dim, dim)
+        if nqubits >= 4
+            for i in 1:nqubits-3
+                cnot_skip2 *= Matrix(cnot(nqubits, i+3, i))
+            end
+        end
+        # Full-range
+        cnot_full = Matrix{ComplexF64}(I, dim, dim)
+        if nqubits >= 5
+            cnot_full *= Matrix(cnot(nqubits, nqubits, 1))
+        end
+        cnot_nn * cnot_nnn * cnot_skip2 * cnot_full
+    end
+end
 
 """
     build_unitary_gate(params, p, row, nqubits; share_params=true, symmetry_breaking=0.0, noise_strength=0.0)
@@ -59,26 +92,30 @@ function build_unitary_gate(params, p, row, nqubits; share_params=true, symmetry
     # Apply symmetry-breaking Ry(ε) on qubit 1 (the measured qubit)
     # This breaks Z₂ symmetry and helps avoid unitary/unital channels
     if symmetry_breaking != 0.0
-        # Build Ry(ε) ⊗ I ⊗ I ⊗ ... (Ry only on first qubit)
-        ry_gate = Matrix(Yao.Ry(symmetry_breaking))
+        # Ry(ε) ⊗ I ⊗ … on qubit 1
+        c = cos(symmetry_breaking/2); s = sin(symmetry_breaking/2)
+        ry_gate = ComplexF64[c -s; s c]
         identity_rest = Matrix{ComplexF64}(I, 2^(nqubits-1), 2^(nqubits-1))
-        symmetry_breaker = kron(ry_gate, identity_rest)
-        
+        symmetry_breaker = kron(identity_rest, ry_gate)  # ry on qubit 1 (LSB)
+
         for i in 1:row
             A_matrix[i] = symmetry_breaker * A_matrix[i]
         end
     end
-    
-    # Apply deterministic "noise" rotations to break ALL symmetries
-    # Uses parameter values to generate consistent angles (not random!)
-    # Different for each gate (breaks translation symmetry)
+
     if noise_strength > 0.0
         for i in 1:row
-            # Use params to generate deterministic but varied angles
-            # This ensures the same params always produce the same gates
             noise_angles = [noise_strength * sin(sum(params) + j + i * nqubits) for j in 1:nqubits]
-            noise_gates = [Matrix(Yao.Ry(angle)) for angle in noise_angles]
-            noise_layer = reduce(kron, noise_gates)
+            # Build kron of Ry gates (qubit 1 = LSB → reverse kron order)
+            noise_layer = let m = ComplexF64[cos(noise_angles[1]/2) -sin(noise_angles[1]/2);
+                                              sin(noise_angles[1]/2)  cos(noise_angles[1]/2)]
+                for q in 2:nqubits
+                    cq = cos(noise_angles[q]/2); sq = sin(noise_angles[q]/2)
+                    ryq = ComplexF64[cq -sq; sq cq]
+                    m = kron(ryq, m)
+                end
+                m
+            end
             A_matrix[i] = noise_layer * A_matrix[i]
         end
     end
@@ -92,48 +129,28 @@ function build_unitary_gate(params, p, row, nqubits; share_params=true, symmetry
 end
 
 """
-Build a single layer of the parameterized gate circuit with multi-range entanglement.
+Build a single layer: raw Rx·Rz rotations ⊗ cached CNOT product.
+No Yao objects created — pure matrix arithmetic.
 """
 function _build_layer(params, r, nqubits)
-    params_per_layer = PARAMS_PER_QUBIT_PER_LAYER * nqubits
-    
-    # Full SU(2) single-qubit rotations: Rx(θ₁) * Rz(θ₂) for each qubit
-    single_qubit_gates = []  
+    # Compute Rx(θx)·Rz(θz) for each qubit as a raw 2×2 matrix
+    # Rx = [c  -is; -is  c],  Rz = [e⁻  0; 0  e⁺]
+    # Product: [c·e⁻  -is·e⁺; -is·e⁻  c·e⁺]
+    gate = Matrix{ComplexF64}(undef, 1, 1)
+    gate[1,1] = one(ComplexF64)
+
     for i in 1:nqubits
         idx = 2*nqubits*r - 2*nqubits + 2*i - 1
-        push!(single_qubit_gates, Yao.Rx(params[idx]) * Yao.Rz(params[idx+1]))
+        θx = params[idx]; θz = params[idx+1]
+        c = cos(θx/2); s = sin(θx/2)
+        em = exp(-im * θz/2); ep = exp(im * θz/2)
+        sq = ComplexF64[c*em  -im*s*ep;
+                        -im*s*em  c*ep]
+        # kron(sq, gate) puts sq on the higher qubit — Yao convention
+        gate = kron(sq, gate)
     end
-    gate = kron(single_qubit_gates...)
-    
-    dim = 2^nqubits
-    # Nearest-neighbor CNOTs: (1,2), (2,3), (3,4), (4,5), ...
-    cnot_nn = Matrix{ComplexF64}(I, dim, dim)
-    for i in 1:nqubits-1
-        cnot_nn *= Matrix(cnot(nqubits, i+1, i))  # control=i+1, target=i
-    end
-    
-    # Next-nearest-neighbor CNOTs: (1,3), (2,4), (3,5), ...
-    cnot_nnn = Matrix{ComplexF64}(I, dim, dim)
-    for i in 1:nqubits-2
-        cnot_nnn *= Matrix(cnot(nqubits, i+2, i))  # control=i+2, target=i
-    end
-    
-    # Skip-2 CNOTs: (1,4), (2,5), ... (only if nqubits >= 4)
-    cnot_skip2 = Matrix{ComplexF64}(I, dim, dim)
-    if nqubits >= 4
-        for i in 1:nqubits-3
-            cnot_skip2 *= Matrix(cnot(nqubits, i+3, i))  # control=i+3, target=i
-        end
-    end
-    
-    cnot_full = Matrix{ComplexF64}(I, dim, dim)
-   if nqubits >= 5  
-    cnot_full *= Matrix(cnot(nqubits, nqubits,1))  # 5→1 
-   end
-    
-    
-    # Combine: single-qubit gates -> NN -> NNN -> Skip-2 -> Full-range
-    return Matrix(gate) * cnot_nn * cnot_nnn * cnot_skip2 * cnot_full
+
+    return gate * _get_cnot_product(nqubits)
 end
 
 """

@@ -1,8 +1,8 @@
 using IsoPEPS
-using Optimization, OptimizationCMAEvolutionStrategy
+using Optimization
 using Random
 using CairoMakie
-using Yao, Manifolds
+using Yao
 using LinearAlgebra, OMEinsum
 """
     simulation(J::Float64, g_values::Vector{Float64}, row::Int, p::Int, nqubits::Int; 
@@ -43,7 +43,7 @@ results = simulation(1.0, g_values, 3, 2, 8; maxiter=5000, output_dir="results")
 function simulation(; J::Float64, g_values::Vector{Float64}, row::Int, p::Int, nqubits::Int, 
                     maxiter::Int, measure_first::Symbol, seed::Int, verbose::Bool,
                     output_dir::String, share_params::Bool, conv_step::Int=100, samples::Int=10000,
-                    n_runs::Int=44, abstol::Float64=0.01, sigma0::Float64=1.0, popsize::Union{Int,Nothing}=20, zz_weight::Float64=0.1)
+                    n_runs::Int=44, abstol::Float64=0.01, sigma0::Float64, popsize::Union{Int,Nothing}, zz_weight::Float64)
     
     # Create output directory if it doesn't exist
     !isdir(output_dir) && mkpath(output_dir)
@@ -86,20 +86,20 @@ end
 
 simulation(;
     J=1.0,
-    g_values=[2.5],
-    row=3,
+    g_values=[2.0],
+    row=2,
     p=3,
     nqubits=3,
-    maxiter=2000,
+    maxiter=500,
     measure_first=:Z,
     seed=123,
     verbose=true,
     output_dir=joinpath(@__DIR__, "results"),
     share_params=true,
     conv_step=1000,
-    samples=40000,
+    samples=10000,
     n_runs=1,
-    abstol=1e-10,
-    sigma0=1.0, 
-    popsize=30,
+    abstol=1e-5,
+    sigma0=1.0,
+    popsize=nothing,
     zz_weight=0.0)

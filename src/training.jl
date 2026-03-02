@@ -151,6 +151,9 @@ end
 
 Optimize a quantum circuit for the transverse-field Ising model (TFIM) using CMA-ES.
 
+Calls `CMAEvolutionStrategy.minimize` directly (bypassing the Optimization.jl wrapper
+which hardcodes σ₀=0.1 and ignores `popsize`).
+
 # Arguments
 - `params::Vector{Float64}`: Initial parameter vector
 - `J::Float64`: Ising coupling strength
@@ -163,30 +166,28 @@ Optimize a quantum circuit for the transverse-field Ising model (TFIM) using CMA
 - `measure_first::Symbol=:Z`: Which observable to measure first (:X or :Z)
 - `share_params::Bool=true`: Whether to share parameters across layers
 - `conv_step::Int=100`: Burn-in steps before sampling
-- `samples_per_run::Int=1000`: Samples per parallel chain
-- `n_parallel_runs::Int=44`: Number of parallel sampling chains
-- `maxiter::Int=5000`: Maximum CMA-ES iterations
-- `abstol::Float64=0.02`: Function tolerance (ftol) for convergence
-- `xtol::Float64=1e-6`: Parameter tolerance for convergence
-- `sigma0::Float64=1.0`: Initial step size for CMA-ES
-- `popsize::Union{Int,Nothing}=nothing`: Population size (nothing = auto)
-- `zz_weight::Float64=0.0`: Weight for ZZ correlation regularization (encourages correlations)
+- `samples::Int=10000`: Samples per sampling run
+- `n_runs::Int=44`: Number of parallel sampling runs (threaded)
+- `maxiter::Int=5000`: Maximum CMA-ES generations
+- `abstol::Float64=0.01`: Function tolerance (ftol) for CMA-ES convergence
+- `sigma0::Float64=1.0`: Initial step size (σ₀) for CMA-ES
+- `popsize::Union{Int,Nothing}=nothing`: Population size (nothing = CMA-ES default: 4+⌊3ln(n)⌋)
+- `zz_weight::Float64=0.0`: Weight for ZZ correlation regularization
+- `target_energy::Float64=-Inf`: Stop early if energy drops below this value
 
 # Returns
 - `CircuitOptimizationResult`: Optimization results with energy history and final state
 
 # Notes
-- Only the best result per CMA-ES iteration is saved (not all popsize evaluations)
-- Samples are stored as matrices: rows = chains, columns = samples
-- This preserves chain information for diagnostics and analysis
-- Use `zz_weight > 0` to penalize trivial product states
-- Use `target_energy` to stop early when energy reaches target
+- `energy_history` contains the best energy per CMA-ES generation
+- After optimization, the best parameters are resampled once to produce final Z/X samples
+- Use `zz_weight > 0` to penalize trivial product states (adds penalty when |⟨ZZ⟩_c| < 0.1)
 """
 function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int; 
     measure_first=:Z, share_params=true, conv_step=100, 
     samples=10000, maxiter=5000, abstol=0.01, n_runs=44,
     sigma0::Float64=1.0, popsize::Union{Int,Nothing}=nothing,
-    zz_weight::Float64=0.0, target_energy::Float64=-2.8478)
+    zz_weight::Float64=0.0, target_energy::Float64=-Inf)
     # Store initial parameters
     initial_params = copy(params)
     
@@ -248,23 +249,6 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
         
         # Cost = energy + penalty (penalty is for optimization only)
         cost = energy
-        
-        # Optional: ZZ correlation regularization to avoid trivial product states
-        # Penalizes when |⟨ZZ⟩_c| is too small (product state has ⟨ZZ⟩_c ≈ 0)
-        if zz_weight > 0
-            N = length(Z_samples_combined)
-            ZZ_mean = mean(Z_samples_combined[i] * Z_samples_combined[i+1] for i in 1:N-1 if i % row != 0)
-            Z_mean = mean(Z_samples_combined)
-            var_global = mean((Z_samples_combined.-Z_mean).^2)
-            # Connected correlation: ⟨ZZ⟩_c = ⟨ZZ⟩ - ⟨Z⟩²
-            # For product state: |⟨ZZ⟩_c| ≈ 0
-            # For correlated state: |⟨ZZ⟩_c| > 0
-            ZZ_connected = (ZZ_mean - Z_mean^2)/var_global
-            # Penalty: penalize weak correlations (|⟨ZZ⟩_c| < threshold)
-            # penalty > 0 when |ZZ_connected| < 0.1
-            penalty = zz_weight * max(0.0, 0.1 - abs(ZZ_connected))
-            cost = energy + penalty
-        end
 
         # Store in generation arrays (store true energy, not cost with penalty)
         push!(generation_energies, real(energy))
@@ -313,11 +297,6 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
 
         return false  # Continue optimization
     end
-
-    # Compute actual popsize
-    actual_popsize = isnothing(popsize) ? 4 + floor(Int, 3*log(length(params))) : popsize
-
-    @info "Optimizing $(length(params)) parameters with CMA-ES (σ₀=$sigma0, popsize=$actual_popsize)"
 
     # Create Optimization.jl problem with CMA-ES
     opt_func = OptimizationFunction(objective)
@@ -392,7 +371,6 @@ function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqub
         :maxiter => maxiter,
         :abstol => abstol,
         :sigma0 => sigma0,
-        :popsize => actual_popsize,
         :zz_weight => zz_weight,
         :target_energy => target_energy,
         # Generation tracking
@@ -529,95 +507,3 @@ function optimize_exact(params, J::Float64, g::Float64, p::Int, row::Int, nqubit
     return result
 end
 
-"""
-    optimize_manifold(gate, row, nqubits, manifold, J, g; maxiter=3000)
-
-Optimize gate on unitary manifold using particle swarm.
-
-# Arguments
-- `gate`: Initial gate matrix
-- `row`: Number of rows
-- `nqubits`: Number of qubits per gate
-- `manifold`: Manifold to optimize on (e.g., Stiefel)
-- `J`: Coupling strength
-- `g`: Transverse field strength
-- `maxiter`: Maximum iterations (default: 3000)
-
-# Returns
-`ManifoldOptimizationResult` with energy and gap history
-"""
-function optimize_manifold(gate, row::Int, nqubits::Int, manifold::AbstractManifold, 
-                           J::Float64, g::Float64; maxiter=3000)
-    # Store initial gate
-    initial_gate = copy(gate)
-    
-    # Compute virtual_qubits for expectation value functions
-    virtual_qubits = (nqubits - 1) ÷ 2
-    
-    energy_history = Float64[]
-    gap_history = Float64[]
-    eigenvalues_history = Vector{Float64}[]
-    X_history = Float64[]
-    ZZ_vert_history = Float64[]
-    ZZ_horiz_history = Float64[]
-    
-    function f(M, gate)
-        gates = [Matrix(gate) for _ in 1:row]
-        rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
-        
-        # Note: compute_X/ZZ_expectation expect virtual_qubits, not nqubits
-        X_cost = real(compute_X_expectation(rho, gates, row, virtual_qubits))
-        ZZ_vert, ZZ_horiz = compute_ZZ_expectation(rho, gates, row, virtual_qubits)
-        ZZ_vert = real(ZZ_vert)
-        ZZ_horiz = real(ZZ_horiz)
-        
-        energy = -g*X_cost - J*(row == 1 ? ZZ_horiz : ZZ_vert + ZZ_horiz)
-        
-        push!(X_history, X_cost)
-        push!(ZZ_vert_history, ZZ_vert)
-        push!(ZZ_horiz_history, ZZ_horiz)
-        push!(gap_history, gap)
-        push!(eigenvalues_history, eigenvalues)
-        push!(energy_history, real(energy))
-        
-        @info "Manifold opt | Iter $(length(energy_history)) | Energy: $(round(energy, digits=6)) | Gap: $(round(gap, digits=4))"
-        
-        return real(energy)
-    end
-
-    @assert is_point(manifold, Matrix(gate)) "Initial gate must be on manifold"
-
-    result = Manopt.particle_swarm(manifold, f;
-        swarm_size = 20,
-        stopping_criterion = StopAfterIteration(maxiter) | StopWhenSwarmVelocityLess(1e-6),
-        record = [:Iteration, :Cost],
-        return_state = true
-    )
-    
-    final_gate = get_solver_result(result)
-    final_energy = f(manifold, final_gate)
-    
-    # Check convergence based on velocity criterion
-    converged = true  # particle_swarm returns when velocity is low enough or maxiter
-    
-    opt_result = ManifoldOptimizationResult(
-        energy_history,
-        final_gate,
-        final_energy,
-        gap_history,
-        converged
-    )
-    
-    # Save result with all input parameters
-    input_args = Dict{Symbol, Any}(
-        # Model parameters
-        :g => g, :J => J, :row => row, :nqubits => nqubits,
-        # Optimization settings
-        :initial_gate => initial_gate,
-        :maxiter => maxiter,
-        :manifold_type => string(typeof(manifold))
-    )
-    save_result("data/manifold_g=$(g)_row=$(row).json", opt_result, input_args)
-    
-    return opt_result
-end
