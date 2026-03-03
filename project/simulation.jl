@@ -87,10 +87,10 @@ end
 simulation(;
     J=1.0,
     g_values=[2.0],
-    row=2,
+    row=3,
     p=3,
-    nqubits=3,
-    maxiter=500,
+    nqubits=5,
+    maxiter=1000,
     measure_first=:Z,
     seed=123,
     verbose=true,

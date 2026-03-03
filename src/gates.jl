@@ -62,7 +62,7 @@ with full SU(2) single-qubit rotations and brick-wall CNOT entangling layers.
   at the end of the circuit to break Z₂ symmetry and avoid unitary channels.
 - Setting `noise_strength > 0` adds random rotations to break all symmetries.
 """
-function build_unitary_gate(params, p, row, nqubits; share_params=true, symmetry_breaking::Float64=0.0, noise_strength::Float64=0.0)
+function build_unitary_gate(params, p, row, nqubits; share_params=true)
     A_matrix = Vector{Matrix{ComplexF64}}(undef, row)
     dim = 2^nqubits
     params_per_layer = PARAMS_PER_QUBIT_PER_LAYER * nqubits
@@ -86,37 +86,6 @@ function build_unitary_gate(params, p, row, nqubits; share_params=true, symmetry
             for r in 1:p
                 A_matrix[i] *= _build_layer(params_i, r, nqubits)
             end
-        end
-    end
-    
-    # Apply symmetry-breaking Ry(ε) on qubit 1 (the measured qubit)
-    # This breaks Z₂ symmetry and helps avoid unitary/unital channels
-    if symmetry_breaking != 0.0
-        # Ry(ε) ⊗ I ⊗ … on qubit 1
-        c = cos(symmetry_breaking/2); s = sin(symmetry_breaking/2)
-        ry_gate = ComplexF64[c -s; s c]
-        identity_rest = Matrix{ComplexF64}(I, 2^(nqubits-1), 2^(nqubits-1))
-        symmetry_breaker = kron(identity_rest, ry_gate)  # ry on qubit 1 (LSB)
-
-        for i in 1:row
-            A_matrix[i] = symmetry_breaker * A_matrix[i]
-        end
-    end
-
-    if noise_strength > 0.0
-        for i in 1:row
-            noise_angles = [noise_strength * sin(sum(params) + j + i * nqubits) for j in 1:nqubits]
-            # Build kron of Ry gates (qubit 1 = LSB → reverse kron order)
-            noise_layer = let m = ComplexF64[cos(noise_angles[1]/2) -sin(noise_angles[1]/2);
-                                              sin(noise_angles[1]/2)  cos(noise_angles[1]/2)]
-                for q in 2:nqubits
-                    cq = cos(noise_angles[q]/2); sq = sin(noise_angles[q]/2)
-                    ryq = ComplexF64[cq -sq; sq cq]
-                    m = kron(ryq, m)
-                end
-                m
-            end
-            A_matrix[i] = noise_layer * A_matrix[i]
         end
     end
     

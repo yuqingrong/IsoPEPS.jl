@@ -48,7 +48,11 @@ function analyze_result(filename::String; pepskit_results_file::Union{String,Not
     display(fig)
     
     # Plot expectation values (using exact contraction if parameters available)
-    fig_exp = plot_expectation_values(result; g=g, J=J, row=row, p=p, nqubits=nqubits, use_exact=use_exact, datafile=filename)
+    # Note: passing datafile=filename triggers expensive resampling with 1M samples
+    # For nqubits=5, this can take 10-30 minutes. Set datafile=nothing to skip.
+    skip_resample = (nqubits >= 5)  # Skip resampling for large systems
+    fig_exp = plot_expectation_values(result; g=g, J=J, row=row, p=p, nqubits=nqubits, use_exact=use_exact,
+                                      datafile=skip_resample ? nothing : filename)
     display(fig_exp)
     
     
@@ -936,18 +940,24 @@ function run_energy_evolution(file1::String, file2::String; n_runs=50, conv_step
     
     return fig, energies1, energies2
 end
+
+
+# ============================================================================
 # Example usage (commented out)
+# ============================================================================
+# Uncomment the block below (remove #= and =#) to run analysis examples
+
 # Analyze a single result
-J=1.0;g = 3.0; row=2 ; nqubits=3; p=3; virtual_qubits=1;D=2
+J=1.0;g = 2.0; row=3 ; nqubits=3; p=3; virtual_qubits=2;D=2
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile)
 # Reconstruct gates and analyze
 
-fig, data = plot_correlation_function(datafile; 
-                                   max_separation=40,
-                                   conv_step=1000, 
+fig, data = plot_correlation_function(datafile;
+                                   max_separation=20,
+                                   conv_step=1000,
                                    samples=3000000,
                                    save_path="project/results/figures/correlation_function.pdf")
 display(fig)
@@ -956,12 +966,12 @@ gates, rho, gap, eigenvalues = reconstruct_gates(datafile; use_iterative=false, 
 _, gap, eigenvalues, eigenvalues_raw = compute_transfer_spectrum(gates, row, nqubits)
 eigenvalues_raw
 xi = -log(abs(eigenvalues[5]/eigenvalues[1]))
-_,coefficients,_= compute_correlation_coefficients(gates, row, virtual_qubits, Matrix(Z))  
+_,coefficients,_= compute_correlation_coefficients(gates, row, virtual_qubits, Matrix(Z))
 picked_idx = findall(abs.(coefficients) .> 1e-3)
 [(i, coefficients[i]) for i in picked_idx]
 
-corr = correlation_function(gates, row, virtual_qubits, :Z, 1000; connected=true)      
-rho, Z_samples, X_samples, params, gates = resample_circuit(datafile; conv_step=1000, samples=1000000)              
+corr = correlation_function(gates, row, virtual_qubits, :Z, 1000; connected=true)
+rho, Z_samples, X_samples, params, gates = resample_circuit(datafile; conv_step=1000, samples=1000000)
 _,acf, acf_err, corr, corr_err, corr_connected, corr_connected_err = compute_acf(Z_samples; max_lag=50)
 @show corr[1:2:end]
 IsoPEPS.expect(gates, row, virtual_qubits, :X)
@@ -987,8 +997,6 @@ run_energy_evolution(datafile1, datafile2; n_runs=100, conv_step=100, samples=40
 # Visualize correlation
 visualize_correlation(datafile)
 
-
-
 # Analyze autocorrelation with fresh resampled data
 # lags, acf, ξ = analyze_acf(datafile; max_lag=10, resample=true, samples=50000)
 
@@ -1004,7 +1012,7 @@ fig = plot_training_history_comparison(data_dir; J=1.0, row=3, selected_g=[1.0, 
 display(fig)
 
 
-
+#=
 # ============================================================================
 # Batch process ACF and correlation length scaling
 # ============================================================================
@@ -1027,3 +1035,4 @@ if !isnothing(row) && !isnothing(ξ)
                           save_path="project/results/corr_scaling_g3.pdf")
     display(fig)
 end
+=#

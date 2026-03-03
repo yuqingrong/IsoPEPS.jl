@@ -942,7 +942,23 @@ function plot_expectation_values(result::CircuitOptimizationResult;
     X_samples = result.final_X_samples
     if !isnothing(datafile)
         if isfile(datafile)
-            resampled = resample_circuit(datafile; conv_step=1000, samples=1000000, measure_first=nothing)
+            # Adaptive sampling: reduce samples for large nqubits (expensive to simulate)
+            # nqubits=3: 100K samples (~fast)
+            # nqubits=5: 50K samples (~moderate, 2^5=32 dim state)
+            # nqubits=7: 20K samples (~slow, 2^7=128 dim state)
+            adaptive_samples = if !isnothing(nqubits)
+                if nqubits <= 3
+                    1000000
+                elseif nqubits == 5
+                    1000000
+                else
+                    20000
+                end
+            else
+                100000  # default
+            end
+
+            resampled = resample_circuit(datafile; conv_step=1000, samples=adaptive_samples, measure_first=nothing)
             if !isnothing(resampled)
                 _, Z_samples, X_samples, _, _ = resampled
             else
@@ -988,9 +1004,12 @@ function plot_expectation_values(result::CircuitOptimizationResult;
     X_exact = nothing; Z_exact = nothing
     ZZ_vert_exact = nothing; ZZ_horiz_exact = nothing; energy_exact = nothing
 
+    # Skip exact computation for large systems (nqubits >= 5) as it's very slow
+    # correlation_function becomes expensive for large Hilbert spaces
     can_compute_exact = !isnothing(row) && !isnothing(p) && !isnothing(nqubits) && !isempty(result.final_params)
+    skip_exact_for_large_system = !isnothing(nqubits) && nqubits >= 5
 
-    if can_compute_exact
+    if can_compute_exact && !skip_exact_for_large_system
         virtual_qubits = (nqubits - 1) ÷ 2
         gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=true)
         X_exact = mean(real(expect(gates, row, virtual_qubits, :X; position=i)) for i in 1:row)
@@ -1264,7 +1283,7 @@ function plot_correlation_function(filename::String;
     println("Mean |exact - sample| error (connected): $(round(mean_error_connected, digits=6))")
 
     fig = Figure(size=(800, 700))
-    min_val = 1e-15
+    min_val = 1e-10
 
     title_str = "Correlation Function: g=$g, row=$row, nqubits=$nqubits, ξ=$(round(correlation_length, digits=2))"
     Label(fig[0, 1], title_str, fontsize=16, font=:bold)
@@ -1299,6 +1318,7 @@ function plot_correlation_function(filename::String;
     exact_connected_abs = max.(abs.(exact_connected_vals), min_val)
     sample_connected_abs = max.(abs.(sample_connected_vals), min_val)
 
+    # Plot exact data first
     lines!(ax2, separations, exact_connected_abs, label="Exact contraction", color=:blue, linewidth=2)
     scatter!(ax2, separations, exact_connected_abs, color=:blue, markersize=8)
 
@@ -1308,6 +1328,35 @@ function plot_correlation_function(filename::String;
              label="Sampling ± std err", color=:red, markersize=8, marker=:diamond)
     errorbars!(ax2, collect(sample_seps), sample_connected_abs, err_low_conn, err_high_conn,
                color=:red, whiskerwidth=6)
+
+    # Fit connected correlation to extract correlation length
+    println("\nFitting connected correlation to A*exp(-r/ξ)...")
+    ξ_fitted = nothing
+    A_fitted = nothing
+    try
+        fit_params = fit_acf(separations, exact_connected_vals; include_zero=false)
+        ξ_fitted = fit_params.ξ
+        A_fitted = fit_params.A
+        println("Fitted correlation length ξ = $(round(ξ_fitted, digits=3))")
+        println("Fitted amplitude A = $(round(A_fitted, digits=4))")
+        println("Transfer matrix ξ = $(round(correlation_length, digits=3))")
+        println("Ratio ξ_fitted/ξ_transfer = $(round(ξ_fitted/correlation_length, digits=3))")
+
+        # Plot fitted curve ON TOP of data with high visibility
+        r_fit = range(1, max_separation, length=100)
+        fitted_curve = abs.(A_fitted .* exp.(-r_fit ./ ξ_fitted))
+        fitted_curve_plot = max.(fitted_curve, min_val)
+        lines!(ax2, r_fit, fitted_curve_plot,
+               label="Fit: A*exp(-r/$(round(ξ_fitted, digits=2)))",
+               color=:green, linewidth=3, linestyle=:dash)
+
+        # Update title with fitted ξ
+        ax2.title = "Connected Correlation (ξ_fit=$(round(ξ_fitted, digits=2)), ξ_TM=$(round(correlation_length, digits=2)))"
+    catch e
+        @warn "Fitting failed: $e"
+        println("Skipping fit overlay")
+    end
+
     axislegend(ax2, position=:rt)
 
     if !isnothing(save_path)
@@ -1330,6 +1379,8 @@ function plot_correlation_function(filename::String;
         mean_error_full = mean_error_full,
         mean_error_connected = mean_error_connected,
         correlation_length = correlation_length,
+        correlation_length_fitted = ξ_fitted,
+        fitted_amplitude = A_fitted,
         g = g, row = row, nqubits = nqubits
     )
 
