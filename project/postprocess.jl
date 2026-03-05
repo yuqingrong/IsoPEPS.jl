@@ -955,6 +955,10 @@ referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile)
 # Reconstruct gates and analyze
 
+plot_energy_error_vs_g(data_dir, [0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0]; pepskit_file=referfile, save_path="project/results/figures/energy_error_vs_g.pdf")
+plot_correlation_vs_g(data_dir, [0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0];
+save_path="project/results/figures/corr_length_vs_g.pdf")
+
 fig, data = plot_correlation_function(datafile;
                                    max_separation=20,
                                    conv_step=1000,

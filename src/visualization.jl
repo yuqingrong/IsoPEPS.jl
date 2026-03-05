@@ -1387,3 +1387,332 @@ function plot_correlation_function(filename::String;
     return fig, data
 end
 
+# ============================================================================
+# Multi-g comparison plots
+# ============================================================================
+
+"""
+    plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
+                           J=1.0, row=3, nqubits=5, p=3,
+                           pepskit_file::Union{String,Nothing}=nothing,
+                           save_path::Union{String,Nothing}=nothing)
+
+Plot energy error (exact contraction - PEPSKit reference) for different g values.
+
+# Arguments
+- `data_dir`: Directory containing result JSON files
+- `g_values`: Vector of g values to plot
+- `J`: Coupling strength (default: 1.0)
+- `row`: Number of rows (default: 3)
+- `nqubits`: Number of qubits (default: 5)
+- `p`: Circuit depth (default: 3)
+- `pepskit_file`: Path to PEPSKit reference results JSON (optional)
+- `save_path`: Path to save figure (optional)
+
+# Returns
+- `fig`: Makie Figure object
+- `data`: NamedTuple with (g_values, energies_exact, energies_ref, errors)
+
+# Example
+```julia
+g_vals = [1.0, 2.0, 3.0, 4.0]
+fig, data = plot_energy_error_vs_g("project/results", g_vals;
+                                   pepskit_file="project/results/pepskit_results_D=2.json",
+                                   save_path="energy_error_vs_g.pdf")
+```
+"""
+function plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
+                                J=1.0, row=3, nqubits=3, p=3,
+                                pepskit_file::Union{String,Nothing}=nothing,
+                                save_path::Union{String,Nothing}=nothing)
+
+    println("="^70)
+    println("Energy Error vs g Analysis")
+    println("="^70)
+
+    # Load PEPSKit reference energies if provided
+    ref_energies = Dict{Float64, Float64}()
+    if !isnothing(pepskit_file) && isfile(pepskit_file)
+        println("Loading PEPSKit reference from: $(basename(pepskit_file))")
+        ref_data = open(pepskit_file, "r") do io
+            JSON3.read(io, Dict)
+        end
+
+        # Extract reference energies for each g (parallel arrays format)
+        g_key   = haskey(ref_data, "g_values") ? "g_values" : (haskey(ref_data, :g_values) ? :g_values : nothing)
+        e_key   = haskey(ref_data, "energies")  ? "energies"  : (haskey(ref_data, :energies)  ? :energies  : nothing)
+        if !isnothing(g_key) && !isnothing(e_key)
+            g_refs = Float64.(ref_data[g_key])
+            e_refs = Float64.(ref_data[e_key])
+            for (g_ref, energy_ref) in zip(g_refs, e_refs)
+                ref_energies[g_ref] = energy_ref
+            end
+        else
+            @warn "PEPSKit JSON does not contain expected 'g_values'/'energies' arrays; skipping."
+        end
+        println("Loaded $(length(ref_energies)) reference energies")
+    else
+        println("No PEPSKit reference file provided - will only show exact energies")
+    end
+
+    # Load circuit optimization results and compute exact energies
+    energies_exact = Float64[]
+    energies_ref = Float64[]
+    errors = Float64[]
+    g_vals_found = Float64[]
+
+    for g in g_values
+        filename = joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
+
+        if !isfile(filename)
+            @warn "File not found: $(basename(filename)), skipping g=$g"
+            continue
+        end
+
+        # Load result
+        result, input_args = load_result(filename)
+
+        # Compute exact energy from optimized parameters
+        virtual_qubits = (nqubits - 1) ÷ 2
+        share_params = get(input_args, :share_params, true)
+        gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
+
+        X_exact = mean(real(expect(gates, row, virtual_qubits, :X; position=i)) for i in 1:row)
+
+        if row > 1
+            ZZ_vert_exact = mean(real(expect(gates, row, virtual_qubits, Dict(i => :Z, i+1 => :Z))) for i in 1:row-1)
+        else
+            ZZ_vert_exact = 0.0
+        end
+
+        ZZ_horiz_vals = Float64[]
+        for pos in 1:row
+            correlations = correlation_function(gates, row, virtual_qubits, :Z, 1; position=pos)
+            if haskey(correlations, 1)
+                push!(ZZ_horiz_vals, real(correlations[1]))
+            end
+        end
+        ZZ_horiz_exact = isempty(ZZ_horiz_vals) ? 0.0 : mean(ZZ_horiz_vals)
+
+        energy_exact = -g*X_exact - J*(row == 1 ? ZZ_horiz_exact : ZZ_vert_exact + ZZ_horiz_exact)
+
+        push!(g_vals_found, g)
+        push!(energies_exact, energy_exact)
+
+        # Get reference energy and compute error
+        if haskey(ref_energies, g)
+            energy_ref = ref_energies[g]
+            error = abs(energy_exact - energy_ref)
+            push!(energies_ref, energy_ref)
+            push!(errors, error)
+            println("g=$g: E_exact=$(round(energy_exact, digits=6)), E_ref=$(round(energy_ref, digits=6)), Error=$(round(error, digits=6))")
+        else
+            push!(energies_ref, NaN)
+            push!(errors, NaN)
+            println("g=$g: E_exact=$(round(energy_exact, digits=6)), No reference")
+        end
+    end
+
+    if isempty(g_vals_found)
+        error("No valid results found for any g value")
+    end
+
+    # Create figure
+    fig = Figure(size=(1000, 800))
+
+    # Plot 1: Energies comparison
+    ax1 = Axis(fig[1, 1],
+               xlabel="Transverse field g",
+               ylabel="Energy",
+               title="Ground State Energy: Exact vs Reference")
+
+    lines!(ax1, g_vals_found, energies_exact, label="Exact (optimized)",
+           color=:blue, linewidth=2)
+    scatter!(ax1, g_vals_found, energies_exact, color=:blue, markersize=12)
+
+    if !all(isnan.(energies_ref))
+        valid_mask = .!isnan.(energies_ref)
+        lines!(ax1, g_vals_found[valid_mask], energies_ref[valid_mask],
+               label="PEPSKit reference", color=:red, linewidth=2, linestyle=:dash)
+        scatter!(ax1, g_vals_found[valid_mask], energies_ref[valid_mask],
+                color=:red, markersize=12, marker=:diamond)
+    end
+
+    axislegend(ax1, position=:rb)
+
+    # Plot 2: Energy errors
+    ax2 = Axis(fig[2, 1],
+               xlabel="Transverse field g",
+               ylabel="Energy Error |E_exact - E_ref|",
+               title="Energy Error vs g",
+               yscale=log10)
+
+    if !all(isnan.(errors))
+        valid_mask = .!isnan.(errors)
+        lines!(ax2, g_vals_found[valid_mask], errors[valid_mask],
+               color=:green, linewidth=2)
+        scatter!(ax2, g_vals_found[valid_mask], errors[valid_mask],
+                color=:green, markersize=12)
+
+        # Add trend line
+        if sum(valid_mask) > 1
+            g_valid = g_vals_found[valid_mask]
+            err_valid = errors[valid_mask]
+            # Fit linear trend in log space
+            log_err = log10.(err_valid)
+            A = hcat(ones(length(g_valid)), g_valid)
+            coeffs = A \ log_err
+            g_fit = range(minimum(g_valid), maximum(g_valid), length=100)
+            err_fit = 10 .^ (coeffs[1] .+ coeffs[2] .* g_fit)
+            lines!(ax2, g_fit, err_fit, color=:gray, linewidth=1,
+                   linestyle=:dash, label="Trend")
+            axislegend(ax2, position=:lt)
+        end
+    else
+        text!(ax2, 0.5, 0.5, text="No reference data available",
+              align=(:center, :center), space=:relative)
+    end
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        println("\nFigure saved to: $save_path")
+    end
+
+    data = (
+        g_values = g_vals_found,
+        energies_exact = energies_exact,
+        energies_ref = energies_ref,
+        errors = errors
+    )
+
+    return fig, data
+end
+
+"""
+    plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
+                          J=1.0, row=3, nqubits=5, p=3,
+                          max_separation=20,
+                          connected=true,
+                          save_path::Union{String,Nothing}=nothing)
+
+Plot correlation function for different g values on the same plot.
+
+# Arguments
+- `data_dir`: Directory containing result JSON files
+- `g_values`: Vector of g values to plot
+- `J`: Coupling strength (default: 1.0)
+- `row`: Number of rows (default: 3)
+- `nqubits`: Number of qubits (default: 5)
+- `p`: Circuit depth (default: 3)
+- `max_separation`: Maximum separation to plot (default: 20)
+- `connected`: Plot connected correlation (default: true)
+- `save_path`: Path to save figure (optional)
+
+# Returns
+- `fig`: Makie Figure object
+- `data`: Dict mapping g values to correlation data
+
+# Example
+```julia
+g_vals = [1.0, 2.0, 3.0, 4.0]
+fig, data = plot_correlation_vs_g("project/results", g_vals;
+                                  max_separation=30,
+                                  save_path="correlation_vs_g.pdf")
+```
+"""
+function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
+                               J=1.0, row=3, nqubits=3, p=3,
+                               max_separation=20,
+                               connected=true,
+                               save_path::Union{String,Nothing}=nothing)
+
+    println("="^70)
+    println("Correlation Function vs g Analysis")
+    println("="^70)
+    println("Connected: $connected")
+
+    # Load results and compute correlations
+    correlation_data = Dict{Float64, NamedTuple}()
+    colors = [:blue, :red, :green, :orange, :purple, :brown, :pink, :gray]
+
+    for (idx, g) in enumerate(g_values)
+        filename = joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
+
+        if !isfile(filename)
+            @warn "File not found: $(basename(filename)), skipping g=$g"
+            continue
+        end
+
+        println("\nProcessing g=$g...")
+
+        # Load result
+        result, input_args = load_result(filename)
+
+        # Reconstruct gates
+        virtual_qubits = (nqubits - 1) ÷ 2
+        share_params = get(input_args, :share_params, true)
+        gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
+
+        # Compute correlation function
+        separations = 1:max_separation
+        corr_vals = Float64[]
+
+        for r in separations
+            corr = correlation_function(gates, row, virtual_qubits, :Z, r; connected=connected)
+            push!(corr_vals, real(corr[r]))
+        end
+
+        # Compute correlation length from transfer matrix
+        _, gap, _, _ = compute_transfer_spectrum(gates, row, nqubits)
+        ξ = 1.0 / gap
+
+        # Fit correlation to get fitted ξ
+        ξ_fitted = nothing
+        try
+            fit_params = fit_acf(collect(separations), corr_vals; include_zero=false)
+            ξ_fitted = fit_params.ξ
+            println("  ξ_transfer = $(round(ξ, digits=3)), ξ_fitted = $(round(ξ_fitted, digits=3))")
+        catch e
+            println("  ξ_transfer = $(round(ξ, digits=3)), fitting failed")
+        end
+
+        correlation_data[g] = (
+            separations = collect(separations),
+            correlations = corr_vals,
+            correlation_length = ξ,
+            correlation_length_fitted = ξ_fitted,
+            color = colors[mod1(idx, length(colors))]
+        )
+    end
+
+    if isempty(correlation_data)
+        error("No valid results found for any g value")
+    end
+
+    # Create figure
+    fig = Figure(size=(800, 600))
+
+    ax = Axis(fig[1, 1],
+              xlabel="g",
+              ylabel="Correlation Length ξ",
+              title="Correlation Length vs g (J=$J, row=$row)")
+
+    # Extract and plot correlation lengths from transfer matrix
+    g_sorted = sort(collect(keys(correlation_data)))
+    ξ_transfer = [correlation_data[g].correlation_length for g in g_sorted]
+
+    lines!(ax, g_sorted, ξ_transfer,
+           color=:blue, linewidth=2)
+    scatter!(ax, g_sorted, ξ_transfer,
+             color=:blue, markersize=12)
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        println("\nFigure saved to: $save_path")
+    end
+
+    return fig, correlation_data
+end
+

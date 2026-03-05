@@ -129,5 +129,5 @@ export plot_acf, fit_acf, fit_acf_oscillatory
 export plot_training_history, plot_variance_vs_samples, plot_expectation_values
 export plot_corr_scale
 export plot_eigenvalue_spectrum, plot_correlation_function
-
+export plot_energy_error_vs_g,plot_correlation_vs_g
 end
