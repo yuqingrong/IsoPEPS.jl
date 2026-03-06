@@ -1012,10 +1012,10 @@ function plot_expectation_values(result::CircuitOptimizationResult;
     if can_compute_exact && !skip_exact_for_large_system
         virtual_qubits = (nqubits - 1) ÷ 2
         gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=true)
-        X_exact = mean(real(expect(gates, row, virtual_qubits, :X; position=i)) for i in 1:row)
-        Z_exact = mean(real(expect(gates, row, virtual_qubits, :Z; position=i)) for i in 1:row)
+        X_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, :X; position=i)) for i in 1:row)
+        Z_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, :Z; position=i)) for i in 1:row)
         if row > 1
-            ZZ_vert_exact = mean(real(expect(gates, row, virtual_qubits, Dict(i => :Z, i+1 => :Z))) for i in 1:row-1)
+            ZZ_vert_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, Dict(i => :Z, i+1 => :Z))) for i in 1:row-1)
         end
         ZZ_horiz_vals = Float64[]
         for pos in 1:row
@@ -1395,6 +1395,7 @@ end
     plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
                            J=1.0, row=3, nqubits=5, p=3,
                            pepskit_file::Union{String,Nothing}=nothing,
+                           dmrg_file::Union{String,Nothing}=nothing,
                            save_path::Union{String,Nothing}=nothing)
 
 Plot energy error (exact contraction - PEPSKit reference) for different g values.
@@ -1407,23 +1408,26 @@ Plot energy error (exact contraction - PEPSKit reference) for different g values
 - `nqubits`: Number of qubits (default: 5)
 - `p`: Circuit depth (default: 3)
 - `pepskit_file`: Path to PEPSKit reference results JSON (optional)
+- `dmrg_file`: Path to DMRG results JSON (optional)
 - `save_path`: Path to save figure (optional)
 
 # Returns
 - `fig`: Makie Figure object
-- `data`: NamedTuple with (g_values, energies_exact, energies_ref, errors)
+- `data`: NamedTuple with (g_values, energies_exact, energies_ref, energies_dmrg, errors)
 
 # Example
 ```julia
 g_vals = [1.0, 2.0, 3.0, 4.0]
 fig, data = plot_energy_error_vs_g("project/results", g_vals;
                                    pepskit_file="project/results/pepskit_results_D=2.json",
+                                   dmrg_file="project/results/dmrg_results_100x3.json",
                                    save_path="energy_error_vs_g.pdf")
 ```
 """
 function plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
                                 J=1.0, row=3, nqubits=3, p=3,
                                 pepskit_file::Union{String,Nothing}=nothing,
+                                dmrg_file::Union{String,Nothing}=nothing,
                                 save_path::Union{String,Nothing}=nothing)
 
     println("="^70)
@@ -1455,9 +1459,35 @@ function plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
         println("No PEPSKit reference file provided - will only show exact energies")
     end
 
+    # Load DMRG energies if provided
+    dmrg_energies = Dict{Float64, Float64}()
+    if !isnothing(dmrg_file) && isfile(dmrg_file)
+        println("Loading DMRG results from: $(basename(dmrg_file))")
+        dmrg_data = open(dmrg_file, "r") do io
+            JSON3.read(io, Dict)
+        end
+
+        # Extract DMRG energies for each g
+        g_key = haskey(dmrg_data, "g_values") ? "g_values" : (haskey(dmrg_data, :g_values) ? :g_values : nothing)
+        e_key = haskey(dmrg_data, "energies_per_site") ? "energies_per_site" : (haskey(dmrg_data, :energies_per_site) ? :energies_per_site : nothing)
+        if !isnothing(g_key) && !isnothing(e_key)
+            g_dmrg = Float64.(dmrg_data[g_key])
+            e_dmrg = Float64.(dmrg_data[e_key])
+            for (g_val, energy_val) in zip(g_dmrg, e_dmrg)
+                dmrg_energies[g_val] = energy_val
+            end
+        else
+            @warn "DMRG JSON does not contain expected 'g_values'/'energies_per_site' arrays; skipping."
+        end
+        println("Loaded $(length(dmrg_energies)) DMRG energies")
+    else
+        println("No DMRG file provided")
+    end
+
     # Load circuit optimization results and compute exact energies
     energies_exact = Float64[]
     energies_ref = Float64[]
+    energies_dmrg = Float64[]
     errors = Float64[]
     g_vals_found = Float64[]
 
@@ -1477,10 +1507,10 @@ function plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
         share_params = get(input_args, :share_params, true)
         gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
 
-        X_exact = mean(real(expect(gates, row, virtual_qubits, :X; position=i)) for i in 1:row)
+        X_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, :X; position=i)) for i in 1:row)
 
         if row > 1
-            ZZ_vert_exact = mean(real(expect(gates, row, virtual_qubits, Dict(i => :Z, i+1 => :Z))) for i in 1:row-1)
+            ZZ_vert_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, Dict(i => :Z, i+1 => :Z))) for i in 1:row-1)
         else
             ZZ_vert_exact = 0.0
         end
@@ -1511,6 +1541,14 @@ function plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
             push!(errors, NaN)
             println("g=$g: E_exact=$(round(energy_exact, digits=6)), No reference")
         end
+
+        # Get DMRG energy
+        if haskey(dmrg_energies, g)
+            push!(energies_dmrg, dmrg_energies[g])
+            println("       E_dmrg=$(round(dmrg_energies[g], digits=6))")
+        else
+            push!(energies_dmrg, NaN)
+        end
     end
 
     if isempty(g_vals_found)
@@ -1538,36 +1576,44 @@ function plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
                 color=:red, markersize=12, marker=:diamond)
     end
 
+    if !all(isnan.(energies_dmrg))
+        valid_mask = .!isnan.(energies_dmrg)
+        lines!(ax1, g_vals_found[valid_mask], energies_dmrg[valid_mask],
+               label="DMRG", color=:green, linewidth=2, linestyle=:dot)
+        scatter!(ax1, g_vals_found[valid_mask], energies_dmrg[valid_mask],
+                color=:green, markersize=12, marker=:star5)
+    end
+
     axislegend(ax1, position=:rb)
 
     # Plot 2: Energy errors
     ax2 = Axis(fig[2, 1],
                xlabel="Transverse field g",
-               ylabel="Energy Error |E_exact - E_ref|",
+               ylabel="Energy Error",
                title="Energy Error vs g",
                yscale=log10)
 
+    # Error between exact and PEPSKit reference
     if !all(isnan.(errors))
         valid_mask = .!isnan.(errors)
         lines!(ax2, g_vals_found[valid_mask], errors[valid_mask],
-               color=:green, linewidth=2)
+               label="|E_exact - E_PEPSKit|", color=:red, linewidth=2)
         scatter!(ax2, g_vals_found[valid_mask], errors[valid_mask],
-                color=:green, markersize=12)
+                color=:red, markersize=12)
+    end
 
-        # Add trend line
-        if sum(valid_mask) > 1
-            g_valid = g_vals_found[valid_mask]
-            err_valid = errors[valid_mask]
-            # Fit linear trend in log space
-            log_err = log10.(err_valid)
-            A = hcat(ones(length(g_valid)), g_valid)
-            coeffs = A \ log_err
-            g_fit = range(minimum(g_valid), maximum(g_valid), length=100)
-            err_fit = 10 .^ (coeffs[1] .+ coeffs[2] .* g_fit)
-            lines!(ax2, g_fit, err_fit, color=:gray, linewidth=1,
-                   linestyle=:dash, label="Trend")
-            axislegend(ax2, position=:lt)
-        end
+    # Error between exact and DMRG
+    if !all(isnan.(energies_dmrg))
+        valid_mask = .!isnan.(energies_dmrg)
+        errors_dmrg = abs.(energies_exact[valid_mask] .- energies_dmrg[valid_mask])
+        lines!(ax2, g_vals_found[valid_mask], errors_dmrg,
+               label="|E_exact - E_DMRG|", color=:green, linewidth=2, linestyle=:dash)
+        scatter!(ax2, g_vals_found[valid_mask], errors_dmrg,
+                color=:green, markersize=12, marker=:star5)
+    end
+
+    if !all(isnan.(errors)) || !all(isnan.(energies_dmrg))
+        axislegend(ax2, position=:lt)
     else
         text!(ax2, 0.5, 0.5, text="No reference data available",
               align=(:center, :center), space=:relative)
@@ -1583,6 +1629,7 @@ function plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
         g_values = g_vals_found,
         energies_exact = energies_exact,
         energies_ref = energies_ref,
+        energies_dmrg = energies_dmrg,
         errors = errors
     )
 

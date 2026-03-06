@@ -6,10 +6,12 @@ authors = ["yuqingrong"]
 [deps]
 CMAEvolutionStrategy = "8d3b24bd-414e-49e0-94fb-163cc3a3e411"
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+ITensorMPS = "0d1a4710-d33b-49a5-8f18-73bdf49b47e2"
+ITensors = "9136182c-28ba-11e9-034c-db9fb085ebd5"
 JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
-LsqFit = "2fda8390-95c7-5789-9bda-21331edee243"
 KrylovKit = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+LsqFit = "2fda8390-95c7-5789-9bda-21331edee243"
 OMEinsum = "ebe7aa44-baf0-506c-a96f-8464559b3922"
 OMEinsumContractionOrders = "6f22d1fd-8eed-4bb7-9776-e7d684900715"
 Optim = "429524aa-4258-5aef-a3af-852621145aeb"
@@ -21,7 +23,6 @@ YaoBlocks = "418bc28f-b43b-5e0b-a6e7-61bbc1a2c1df"
 
 [weakdeps]
 ITensorInfiniteMPS = "1dc1fb26-a137-4954-ae60-1bd4106e95ad"
-ITensors = "9136182c-28ba-11e9-034c-db9fb085ebd5"
 MPSKit = "bb1c41ca-d63c-52ed-829e-0820dda26502"
 MPSKitModels = "ca635005-6f8c-4cd1-b51d-8491250ef2ab"
 Manifolds = "1cead3c2-87b3-11e9-0ccd-23c62b72b94e"
@@ -37,6 +38,7 @@ PEPSKitExt = ["PEPSKit", "TensorKit", "MPSKitModels"]
 
 [compat]
 CairoMakie = "0.15"
+ITensorMPS = "0.3.6"
 ITensors = "0.6, 0.7"
 JSON3 = "1"
 KrylovKit = "0.8, 0.9, 0.10"
