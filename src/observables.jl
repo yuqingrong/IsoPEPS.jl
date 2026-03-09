@@ -4,171 +4,6 @@
 # Functions for computing expectation values from the transfer matrix fixed point
 
 """
-    compute_single_expectation(rho, gates, row, virtual_qubits, observable; optimizer=GreedyMethod())
-
-Compute single-site expectation value ⟨O⟩ from fixed point density matrix.
-
-# Arguments
-- `rho`: Fixed point density matrix
-- `gates`: Gate matrices
-- `row`: Number of rows
-- `virtual_qubits`: Number of virtual qubits
-- `observable`: Either `:X` or `:Z` (or a 2x2 matrix)
-- `optimizer`: Contraction optimizer
-
-# Returns
-Average expectation value across all sites.
-"""
-function compute_single_expectation(rho, gates, row, virtual_qubits, observable::Union{Symbol,AbstractMatrix}; optimizer=GreedyMethod())
-    # Get the operator matrix
-    O = if observable isa Symbol
-        observable == :X ? Matrix(X) : (observable == :Z ? Matrix(Z) : error("Unknown observable: $observable"))
-    else
-        observable
-    end
-    
-    # total_qubits must match compute_transfer_spectrum: bond_dim^(2*total_legs) = 2^(2*v*(row+1))
-    total_qubits = virtual_qubits * (row + 1)
-    env_size = ntuple(i -> 2, 2*total_qubits)
-    rho = reshape(rho, env_size...)
-    R = reshape(Matrix(I, Int(sqrt(4^total_qubits)), Int(sqrt(4^total_qubits))), env_size)
-    
-    A_tensors = gates_to_tensors(gates, row, virtual_qubits)
-    AO_tensors = [ein"iabcd,ij -> jabcd"(A_tensors[i], O) for i in 1:row]
-    tensor_bra = [conj(A_tensors[i]) for i in 1:row]
-    
-    results = map(1:row) do pos
-        tensor_ket = [i == pos ? AO_tensors[i] : A_tensors[i] for i in 1:row]
-        _, list = contract_transfer_matrix(tensor_ket, tensor_bra, row; optimizer=optimizer)
-        
-        store = IndexStore()
-        index_list = [newindex!(store) for _ in 1:4*total_qubits]
-        index_rho = index_list[2*total_qubits+1:4*total_qubits] 
-        index_R = index_list[1:2*total_qubits]
-        index = [index_list, index_rho, index_R]
-        
-        size_dict = OMEinsum.get_size_dict(index, [list, rho, R])
-        code = optimize_code(DynamicEinCode(index, Int[]), size_dict, optimizer)
-        code(list, rho, R)[]
-    end
-    
-    return sum(results) / row
-end
-
-"""
-    compute_X_expectation(rho, gates, row, virtual_qubits; optimizer=GreedyMethod())
-
-Compute ⟨X⟩ expectation value from fixed point density matrix.
-Wrapper around compute_single_expectation for backward compatibility.
-"""
-function compute_X_expectation(rho, gates, row, virtual_qubits; optimizer=GreedyMethod())
-    compute_single_expectation(rho, gates, row, virtual_qubits, :X; optimizer=optimizer)
-end
-
-"""
-    compute_Z_expectation(rho, gates, row, virtual_qubits; optimizer=GreedyMethod())
-
-Compute ⟨Z⟩ expectation value from fixed point density matrix.
-"""
-function compute_Z_expectation(rho, gates, row, virtual_qubits; optimizer=GreedyMethod())
-    compute_single_expectation(rho, gates, row, virtual_qubits, :Z; optimizer=optimizer)
-end
-
-"""
-    compute_ZZ_expectation(rho, gates, row, virtual_qubits; optimizer=GreedyMethod())
-
-Compute ⟨ZZ⟩ expectation values (vertical and horizontal bonds).
-
-# Arguments
-- `rho`: Fixed point density matrix
-- `gates`: Gate matrices
-- `row`: Number of rows
-- `virtual_qubits`: Number of virtual qubits
-- `optimizer`: Contraction optimizer
-
-# Returns
-- `ZZ_vertical`: Vertical bond ⟨ZᵢZᵢ₊₁⟩
-- `ZZ_horizontal`: Horizontal bond ⟨ZᵢZᵢ₊ᵣₒw⟩
-"""
-function compute_ZZ_expectation(rho, gates, row, virtual_qubits; optimizer=GreedyMethod())
-    # total_qubits must match compute_transfer_spectrum: bond_dim^(2*total_legs) = 2^(2*v*(row+1))
-    total_qubits = virtual_qubits * (row + 1)
-    env_size = ntuple(i -> 2, 2*total_qubits)
-    rho = reshape(rho, env_size...)
-    R = reshape(Matrix(I, Int(sqrt(4^total_qubits)), Int(sqrt(4^total_qubits))), env_size)
-    
-    A_tensors = gates_to_tensors(gates, row, virtual_qubits)
-    AZ_tensors = [ein"iabcd,ij -> jabcd"(A_tensors[i], Matrix(Z)) for i in 1:row]
-    tensor_bra = [conj(A_tensors[i]) for i in 1:row]
-
-    # Vertical: Z on sites 1 and 2
-    tensor_ket_vert = [i == 1 || i == 2 ? AZ_tensors[i] : A_tensors[i] for i in 1:row]
-    # Horizontal: Z on site 1 only (correlates across transfer matrix)
-    tensor_ket_horiz = [i == 1 ? AZ_tensors[i] : A_tensors[i] for i in 1:row]
-
-    ZZ_vert = _contract_ZZ(tensor_ket_vert, A_tensors, tensor_bra, rho, R, row, total_qubits, optimizer)
-    ZZ_horiz = _contract_ZZ(tensor_ket_horiz, tensor_ket_horiz, tensor_bra, rho, R, row, total_qubits, optimizer)
-    
-    return ZZ_vert, ZZ_horiz
-end
-
-"""
-    _contract_ZZ(tensor_ket_a, tensor_ket_b, tensor_bra, rho, R, row, total_qubits, optimizer)
-
-Helper function to contract ZZ expectation value.
-"""
-function _contract_ZZ(tensor_ket_a, tensor_ket_b, tensor_bra, rho, R, row, total_qubits, optimizer)
-    _, list1 = contract_transfer_matrix(tensor_ket_a, tensor_bra, row; optimizer=optimizer)
-    _, list2 = contract_transfer_matrix(tensor_ket_b, tensor_bra, row; optimizer=optimizer)
-    
-    store = IndexStore()
-    index_list1 = [newindex!(store) for _ in 1:4*total_qubits]
-    index_list2 = [[newindex!(store) for _ in 1:2*total_qubits]..., index_list1[1:2*total_qubits]...]
-    
-    index_rho = index_list1[2*total_qubits+1:4*total_qubits]
-    index_R = index_list2[1:2*total_qubits]
-    index = [index_list1, index_list2, index_rho, index_R]
-    
-    size_dict = OMEinsum.get_size_dict(index, [list1, list2, rho, R])
-    code = optimize_code(DynamicEinCode(index, Int[]), size_dict, optimizer)
-    return code(list1, list2, rho, R)[]
-end
-
-"""
-    compute_exact_energy(params, g, J, p, row, nqubits; optimizer=GreedyMethod())
-
-Compute exact energy from parameters using tensor contraction.
-
-# Arguments
-- `params`: Parameter vector
-- `g`: Transverse field strength
-- `J`: Coupling strength
-- `p`: Number of circuit layers
-- `row`: Number of rows
-- `nqubits`: Number of qubits per gate (e.g., 3 for 8x8 gates)
-- `optimizer`: Contraction optimizer
-
-# Returns
-- `gap`: Spectral gap
-- `energy`: Ground state energy estimate
-"""
-function compute_exact_energy(params::Vector{Float64}, g::Float64, J::Float64, 
-                               p::Int, row::Int, nqubits::Int; optimizer=GreedyMethod())
-    virtual_qubits = (nqubits - 1) ÷ 2
-    gates = build_unitary_gate(params, p, row, nqubits; share_params=true)
-    rho, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
-    
-    # Note: compute_X/ZZ_expectation expect virtual_qubits, not nqubits
-    X_cost = real(compute_X_expectation(rho, gates, row, virtual_qubits; optimizer=optimizer))
-    ZZ_vert, ZZ_horiz = compute_ZZ_expectation(rho, gates, row, virtual_qubits; optimizer=optimizer)
-    ZZ_vert = real(ZZ_vert)
-    ZZ_horiz = real(ZZ_horiz)
-    
-    energy = -g*X_cost - J*(row == 1 ? ZZ_horiz : ZZ_vert + ZZ_horiz) 
-    return gap, energy
-end
-
-"""
     correlation_function(gates, row, virtual_qubits, observable, separations; 
                          position::Int=1, connected::Bool=false, optimizer=GreedyMethod())
 
@@ -394,11 +229,11 @@ Error bars from standard error across chains (each chain contributes one ACF est
 """
 function compute_acf(data::Matrix{Float64}; max_lag::Int=100, row::Int=1, n_bootstrap::Int=100, normalize::Bool=true)
     n_chains, n_samples_raw = size(data)
-    
-    # Subsample: take every row-th sample from each chain
+
+    # Subsample: take every row-th sample from each chain, averaging over all starting offsets
     # This makes lag in subsampled data = horizontal separation in PEPS
     n_samples = div(n_samples_raw, row)
-    
+
     # Limit max_lag to avoid unreliable estimates at large lags
     # The ACF estimator has significant negative bias when lag > n_samples/10
     # Standard practice in time series analysis is to limit to N/10
@@ -407,76 +242,84 @@ function compute_acf(data::Matrix{Float64}; max_lag::Int=100, row::Int=1, n_boot
         @warn "Requested max_lag=$max_lag is too large for n_samples=$n_samples (after subsampling with row=$row). Using max_lag=$max_lag_limit (n_samples/10) to avoid biased estimates."
         max_lag = max_lag_limit
     end
-    
-    acf_per_chain = zeros(n_chains, max_lag)           # Normalized ACF
-    corr_per_chain = zeros(n_chains, max_lag)          # Full correlation ⟨X_i X_{i+r}⟩
-    corr_connected_per_chain = zeros(n_chains, max_lag) # Connected correlation
-    
-    # Standard errors within each chain (from variance of products)
-    corr_stderr_per_chain = zeros(n_chains, max_lag)
-    corr_connected_stderr_per_chain = zeros(n_chains, max_lag)
-    
-    # Compute correlations for each chain independently
+
+    # We'll average over all starting offsets (1 to row) for each chain
+    # Total number of subsampled chains: n_chains * row
+    n_total_subchains = n_chains * row
+
+    acf_per_subchain = zeros(n_total_subchains, max_lag)           # Normalized ACF
+    corr_per_subchain = zeros(n_total_subchains, max_lag)          # Full correlation ⟨X_i X_{i+r}⟩
+    corr_connected_per_subchain = zeros(n_total_subchains, max_lag) # Connected correlation
+
+    # Standard errors within each subchain (from variance of products)
+    corr_stderr_per_subchain = zeros(n_total_subchains, max_lag)
+    corr_connected_stderr_per_subchain = zeros(n_total_subchains, max_lag)
+
+    # Compute correlations for each chain and each starting offset
+    subchain_idx = 1
     for i in 1:n_chains
-        # Subsample: take every row-th sample
-        chain = data[i, 1:row:end]
-        n_chain = length(chain)
-        μ_chain = mean(chain)
-        chain_centered = chain .- μ_chain
-        var_chain = mean(chain_centered.^2)
-        
-        for k in 1:max_lag
-            lag = k - 1
-            n_pairs = n_chain - lag
-            if n_pairs < 1
-                continue
+        for offset in 1:row
+            # Subsample: take every row-th sample starting from offset
+            chain = data[i, offset:row:end]
+            n_chain = length(chain)
+            μ_chain = mean(chain)
+            chain_centered = chain .- μ_chain
+            var_chain = mean(chain_centered.^2)
+
+            for k in 1:max_lag
+                lag = k - 1
+                n_pairs = n_chain - lag
+                if n_pairs < 1
+                    continue
+                end
+
+                # Full correlation: ⟨X_i X_{i+r}⟩
+                products_full = [chain[j] * chain[j + lag] for j in 1:n_pairs]
+                full_corr = mean(products_full)
+                corr_per_subchain[subchain_idx, k] = full_corr
+                # Standard error: std(products) / sqrt(n_pairs)
+                corr_stderr_per_subchain[subchain_idx, k] = std(products_full) / sqrt(n_pairs)
+
+                # Connected correlation: ⟨X_i X_{i+r}⟩ - ⟨X⟩² = ⟨(X_i - μ)(X_{i+r} - μ)⟩
+                products_connected = [chain_centered[j] * chain_centered[j + lag] for j in 1:n_pairs]
+                connected_corr = mean(products_connected)
+                corr_connected_per_subchain[subchain_idx, k] = connected_corr
+                # Standard error: std(products) / sqrt(n_pairs)
+                corr_connected_stderr_per_subchain[subchain_idx, k] = std(products_connected) / sqrt(n_pairs)
+
+                # Normalized ACF: connected / variance
+                acf_per_subchain[subchain_idx, k] = connected_corr / var_chain
             end
-            
-            # Full correlation: ⟨X_i X_{i+r}⟩
-            products_full = [chain[j] * chain[j + lag] for j in 1:n_pairs]
-            full_corr = mean(products_full)
-            corr_per_chain[i, k] = full_corr
-            # Standard error: std(products) / sqrt(n_pairs)
-            corr_stderr_per_chain[i, k] = std(products_full) / sqrt(n_pairs)
-            
-            # Connected correlation: ⟨X_i X_{i+r}⟩ - ⟨X⟩² = ⟨(X_i - μ)(X_{i+r} - μ)⟩
-            products_connected = [chain_centered[j] * chain_centered[j + lag] for j in 1:n_pairs]
-            connected_corr = mean(products_connected)
-            corr_connected_per_chain[i, k] = connected_corr
-            # Standard error: std(products) / sqrt(n_pairs)
-            corr_connected_stderr_per_chain[i, k] = std(products_connected) / sqrt(n_pairs)
-            
-            # Normalized ACF: connected / variance
-            acf_per_chain[i, k] = connected_corr / var_chain
+
+            subchain_idx += 1
         end
     end
-    
-    # Average across chains
-    acf = vec(mean(acf_per_chain, dims=1))
-    corr = vec(mean(corr_per_chain, dims=1))
-    corr_connected = vec(mean(corr_connected_per_chain, dims=1))
-    
-    # Standard error: combine within-chain and across-chain variance
-    # For single chain: use within-chain stderr (from variance of products)
-    # For multiple chains: use across-chain std / sqrt(n_chains)
-    if n_chains == 1
-        # Single chain: use within-chain standard error from product variance
-        acf_err = vec(corr_connected_stderr_per_chain[1, :] ./ var(data[1, :]))
-        corr_err = vec(corr_stderr_per_chain[1, :])
-        corr_connected_err = vec(corr_connected_stderr_per_chain[1, :])
-    else
-        # Multiple chains: use standard error across chains
-        acf_err = vec(std(acf_per_chain, dims=1) / sqrt(n_chains))
-        corr_err = vec(std(corr_per_chain, dims=1) / sqrt(n_chains))
-        corr_connected_err = vec(std(corr_connected_per_chain, dims=1) / sqrt(n_chains))
-        
-        # Also consider within-chain variance (take max for robustness)
-        within_corr_err = vec(mean(corr_stderr_per_chain, dims=1))
-        within_conn_err = vec(mean(corr_connected_stderr_per_chain, dims=1))
-        corr_err = max.(corr_err, within_corr_err)
-        corr_connected_err = max.(corr_connected_err, within_conn_err)
-    end
-    
+
+    # Average across all subchains (chains × offsets)
+    acf = vec(mean(acf_per_subchain, dims=1))
+    corr = vec(mean(corr_per_subchain, dims=1))
+    corr_connected = vec(mean(corr_connected_per_subchain, dims=1))
+
+    # SE for ACF: between-subchain std / sqrt(n), valid regardless of chain count
+    acf_err = vec(std(acf_per_subchain, dims=1) / sqrt(n_total_subchains))
+
+    # SE for corr / corr_connected: use pooled within-subchain SE.
+    #
+    # The between-subchain SE (std across n_total_subchains estimates) is only
+    # reliable when n_total_subchains is large.  In the common case of a single
+    # input chain (n_chains=1), n_total_subchains = row (typically 1–5), giving
+    # only ~2 degrees of freedom — the estimate is too noisy to decrease with
+    # more samples and will dominate a max().
+    #
+    # The pooled within-subchain SE pools all products from every subchain and
+    # uses std(products) / sqrt(total_products), which scales as 1/sqrt(samples)
+    # and is stable even for small n_total_subchains.
+    #
+    # Note: this assumes approximate independence of consecutive products within
+    # a subchain.  For a well-mixing quantum channel this is acceptable.
+    corr_err = vec(mean(corr_stderr_per_subchain, dims=1)) / sqrt(n_total_subchains)
+    corr_connected_err = vec(mean(corr_connected_stderr_per_subchain, dims=1)) / sqrt(n_total_subchains)
+
     return 0:(max_lag-1), acf, acf_err, corr, corr_err, corr_connected, corr_connected_err
 end
 

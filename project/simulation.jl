@@ -72,7 +72,7 @@ function simulation(; J::Float64, g_values::Vector{Float64}, row::Int, p::Int, n
         results[i] = result
         
         # Save result to JSON
-        filename = joinpath(output_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
+        filename = joinpath(output_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
         input_args = Dict(
             :J => J, :g => g, :row => row, :p => p, :nqubits => nqubits,
             :maxiter => maxiter, :measure_first => measure_first,
@@ -86,10 +86,30 @@ end
 
 simulation(;
     J=1.0,
-    g_values=[0.5],
+    g_values=[1.0],
     row=3,
     p=3,
-    nqubits=5,
+    nqubits=3,
+    maxiter=2000,
+    measure_first=:Z,
+    seed=123,
+    verbose=true,
+    output_dir=joinpath(@__DIR__, "results"),
+    share_params=true,
+    conv_step=1000,
+    samples=40000,
+    n_runs=1,
+    abstol=1e-5,
+    sigma0=1.0,
+    popsize=nothing,
+    zz_weight=0.0)
+
+    simulation(;
+    J=1.0,
+    g_values=[2.0],
+    row=3,
+    p=3,
+    nqubits=3,
     maxiter=500,
     measure_first=:Z,
     seed=123,
@@ -97,7 +117,47 @@ simulation(;
     output_dir=joinpath(@__DIR__, "results"),
     share_params=true,
     conv_step=1000,
-    samples=10000,
+    samples=40000,
+    n_runs=1,
+    abstol=1e-5,
+    sigma0=1.0,
+    popsize=nothing,
+    zz_weight=0.0)
+
+    simulation(;
+    J=1.0,
+    g_values=[3.0],
+    row=3,
+    p=3,
+    nqubits=3,
+    maxiter=500,
+    measure_first=:Z,
+    seed=123,
+    verbose=true,
+    output_dir=joinpath(@__DIR__, "results"),
+    share_params=true,
+    conv_step=1000,
+    samples=40000,
+    n_runs=1,
+    abstol=1e-5,
+    sigma0=1.0,
+    popsize=nothing,
+    zz_weight=0.0)
+
+    simulation(;
+    J=1.0,
+    g_values=[4.0],
+    row=3,
+    p=3,
+    nqubits=3,
+    maxiter=500,
+    measure_first=:Z,
+    seed=123,
+    verbose=true,
+    output_dir=joinpath(@__DIR__, "results"),
+    share_params=true,
+    conv_step=1000,
+    samples=40000,
     n_runs=1,
     abstol=1e-5,
     sigma0=1.0,

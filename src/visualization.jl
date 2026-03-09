@@ -93,6 +93,40 @@ function save_result(filename::String, result::ManifoldOptimizationResult, input
     end
     @info "Result saved to $filename"
 end
+"""
+    save_results(filename::String; kwargs...)
+
+Save arbitrary results to a JSON file. Accepts keyword arguments for flexibility.
+
+# Example
+```julia
+save_results("results.json"; 
+    g=2.0, row=3, 
+    energy_history=[1.0, 0.5, 0.3],
+    correlation_matrix=corr_mat
+)
+```
+"""
+function save_results(filename::String; kwargs...)
+    dir = dirname(filename)
+    !isempty(dir) && !isdir(dir) && mkpath(dir)
+    
+    open(filename, "w") do io
+        JSON3.pretty(io, Dict(kwargs))
+    end
+    @info "Results saved to $filename"
+end
+
+"""
+    load_results(filename::String) -> Dict
+
+Load results from a JSON file.
+"""
+function load_results(filename::String)
+    open(filename, "r") do io
+        JSON3.read(io, Dict)
+    end
+end
 
 """
     load_result(filename::String; result_type=:auto)
@@ -204,6 +238,10 @@ function load_result(filename::String; result_type::Symbol=:auto)
     return result, input_args
 end
 
+# ============================================================================
+# use the optimized parameters and resample
+# ============================================================================
+
 """
     resample_circuit(filename::String; conv_step=1000, samples=100000, measure_first=nothing)
 
@@ -271,41 +309,6 @@ function resample_circuit(filename::String; conv_step=100, samples=1000, measure
     println("Generated $(length(Z_samples)) Z samples and $(length(X_samples)) X samples")
     
     return rho, Z_samples, X_samples, params, gates
-end
-
-"""
-    save_results(filename::String; kwargs...)
-
-Save arbitrary results to a JSON file. Accepts keyword arguments for flexibility.
-
-# Example
-```julia
-save_results("results.json"; 
-    g=2.0, row=3, 
-    energy_history=[1.0, 0.5, 0.3],
-    correlation_matrix=corr_mat
-)
-```
-"""
-function save_results(filename::String; kwargs...)
-    dir = dirname(filename)
-    !isempty(dir) && !isdir(dir) && mkpath(dir)
-    
-    open(filename, "w") do io
-        JSON3.pretty(io, Dict(kwargs))
-    end
-    @info "Results saved to $filename"
-end
-
-"""
-    load_results(filename::String) -> Dict
-
-Load results from a JSON file.
-"""
-function load_results(filename::String)
-    open(filename, "r") do io
-        JSON3.read(io, Dict)
-    end
 end
 
 # ============================================================================
@@ -407,43 +410,52 @@ function fit_acf(lags::AbstractVector, acf::AbstractVector;
     end
 
     fit_lags = lags_vec[mask]
-    fit_acf_vals = abs.(acf_vec[mask])
+    fit_acf_vals = acf_vec[mask]
 
     if length(fit_lags) < 2
         error("Not enough valid data points for fitting (need at least 2)")
     end
 
-    model(r, p) = p[1] .* exp.(-r ./ p[2])
+    # Determine the sign of the correlation from the mean of first few points
+    sign_sample = fit_acf_vals[1:min(3, length(fit_acf_vals))]
+    correlation_sign = sign(mean(sign_sample))
+    if iszero(correlation_sign)
+        correlation_sign = 1.0
+    end
 
-    A_init = fit_acf_vals[1]
-    valid_idx = fit_acf_vals .> 1e-15
+    fit_acf_abs = abs.(fit_acf_vals)
+
+    # Log-space OLS: fit log|C(r)| = log(A) - r/ξ
+    # This weights all points equally on the log scale so the fitted line
+    # visually matches the data on log-scale plots (unlike linear-space
+    # least squares, which is dominated by large small-r values).
+    valid_idx = fit_acf_abs .> 1e-15
+    A_abs = fit_acf_abs[1]
+    ξ = fit_lags[end] / 2.0
+
     if sum(valid_idx) >= 2
-        log_acf = log.(fit_acf_vals[valid_idx])
+        log_abs    = log.(fit_acf_abs[valid_idx])
         valid_lags = fit_lags[valid_idx]
-        slope = (log_acf[end] - log_acf[1]) / (valid_lags[end] - valid_lags[1])
-        ξ_init = -1.0 / slope
-        ξ_init = clamp(ξ_init, 0.1, length(fit_lags) * 10.0)
-    else
-        ξ_init = length(fit_lags) / 2.0
+        # Design matrix: log|C| = b - r/ξ  →  [1, -r] * [b, 1/ξ]ᵀ
+        X = hcat(ones(length(valid_lags)), -valid_lags)
+        coeffs    = X \ log_abs
+        log_A_abs = coeffs[1]
+        inv_xi    = coeffs[2]
+        if inv_xi > 1e-10
+            A_abs = exp(log_A_abs)
+            ξ     = clamp(1.0 / inv_xi, 0.01, Inf)
+        else
+            # Fallback: two-point slope estimate
+            ξ     = clamp(-(valid_lags[end] - valid_lags[1]) /
+                           (log_abs[end]   - log_abs[1]),   0.01, Inf)
+            A_abs = exp(log_abs[1] + valid_lags[1] / ξ)
+        end
     end
 
-    p0 = [A_init, ξ_init]
-    lower = [0.0, 0.01]
-    upper = [Inf, Inf]
-
-    try
-        fit_result = curve_fit(model, fit_lags, fit_acf_vals, p0, lower=lower, upper=upper)
-        A, ξ = coef(fit_result)
-        λ₂ = exp(-1.0/ξ)
-        return (A=A, ξ=ξ, λ₂=λ₂, fit_lags=fit_lags,
-                model=(r) -> model(r, [A, ξ]))
-    catch e
-        @warn "Nonlinear fit failed: $e. Using initial guess."
-        A, ξ = p0
-        λ₂ = exp(-1.0/ξ)
-        return (A=A, ξ=ξ, λ₂=λ₂, fit_lags=fit_lags,
-                model=(r) -> model(r, [A, ξ]))
-    end
+    A  = correlation_sign * A_abs
+    λ₂ = exp(-1.0 / ξ)
+    return (A=A, ξ=ξ, λ₂=λ₂, fit_lags=fit_lags,
+            model=(r) -> A .* exp.(-r ./ ξ))
 end
 
 # ============================================================================
@@ -665,7 +677,7 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
             fit_curve = A .* exp.(-lags_vec ./ ξ)
             label_text = "Fit: ξ=$(round(ξ, digits=2)), λ₂=$(round(λ₂, digits=4))"
             if logscale
-                fit_curve = max.(fit_curve, min_threshold)
+                fit_curve = max.(abs.(fit_curve), min_threshold)
             end
         end
 
@@ -1177,39 +1189,6 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
 end
 
 # ============================================================================
-# plot_corr_scale
-# ============================================================================
-
-function plot_corr_scale(row::AbstractVector, corr_length::AbstractVector;
-    title::String="Correlation Length Scaling",
-    save_path::Union{String,Nothing}=nothing)
-
-    if length(row) != length(corr_length)
-        error("row and corr_length must have the same length")
-    end
-    if any(x -> x <= 0, row) || any(x -> x <= 0, corr_length)
-        error("All values must be positive for inverse scaling plot")
-    end
-
-    inv_row = 1 ./ row
-    inv_corr_length = 1 ./ corr_length
-
-    fig = Figure(size=(500, 350))
-    ax = Axis(fig[1, 1], xlabel="1/row", ylabel="1/ξ", title=title)
-
-    lines!(ax, collect(inv_row), collect(inv_corr_length), linewidth=2, color=:blue, label="Data")
-    scatter!(ax, collect(inv_row), collect(inv_corr_length), markersize=12, color=:blue)
-    axislegend(ax, position=:rb)
-
-    if !isnothing(save_path)
-        save(save_path, fig)
-        @info "Figure saved to $save_path"
-    end
-
-    return fig
-end
-
-# ============================================================================
 # plot_correlation_function
 # ============================================================================
 
@@ -1236,12 +1215,28 @@ function plot_correlation_function(filename::String;
     println("Configuration: g=$g, row=$row, nqubits=$nqubits")
 
     println("\nComputing exact correlations (transfer matrix)...")
-    exact_full = correlation_function(gates, row, virtual_qubits, :Z, 1:max_separation; connected=false)
-    exact_connected = correlation_function(gates, row, virtual_qubits, :Z, 1:max_separation; connected=true)
+    println("Averaging over all positions 1 to $row...")
 
+    # Compute correlations for each position and average
     separations = collect(1:max_separation)
-    exact_full_vals = [real(exact_full[r]) for r in separations]
-    exact_connected_vals = [real(exact_connected[r]) for r in separations]
+    exact_full_vals = zeros(Float64, max_separation)
+    exact_connected_vals = zeros(Float64, max_separation)
+
+    for pos in 1:row
+        exact_full_pos = correlation_function(gates, row, virtual_qubits, :Z, 1:max_separation;
+                                              position=pos, connected=false)
+        exact_connected_pos = correlation_function(gates, row, virtual_qubits, :Z, 1:max_separation;
+                                                   position=pos, connected=true)
+
+        for r in separations
+            exact_full_vals[r] += real(exact_full_pos[r])
+            exact_connected_vals[r] += real(exact_connected_pos[r])
+        end
+    end
+
+    # Average over positions
+    exact_full_vals ./= row
+    exact_connected_vals ./= row
 
     _, gap, _, _ = compute_transfer_spectrum(gates, row, nqubits)
     correlation_length = 1 / gap
@@ -1258,6 +1253,9 @@ function plot_correlation_function(filename::String;
     lags, acf, acf_err, corr_full, corr_err, corr_connected, corr_connected_err = compute_acf(
         reshape(Float64.(Z_vec), 1, :); max_lag=max_separation+1, row=row
     )
+
+    @show corr_err
+    @show corr_connected_err
 
     sample_full = corr_full
     sample_full_err = corr_err
@@ -1331,9 +1329,16 @@ function plot_correlation_function(filename::String;
 
     # Fit connected correlation to extract correlation length
     println("\nFitting connected correlation to A*exp(-r/ξ)...")
+    println("Data to fit:")
+    for (i, r) in enumerate(separations[1:min(5, length(separations))])
+        println("  r=$r: $(exact_connected_vals[i]) -> |val|=$(abs(exact_connected_vals[i]))")
+    end
+
     ξ_fitted = nothing
     A_fitted = nothing
     try
+        # Pass raw values to fit_acf (not absolute values)
+        # fit_acf will handle absolute values internally
         fit_params = fit_acf(separations, exact_connected_vals; include_zero=false)
         ξ_fitted = fit_params.ξ
         A_fitted = fit_params.A
@@ -1342,12 +1347,22 @@ function plot_correlation_function(filename::String;
         println("Transfer matrix ξ = $(round(correlation_length, digits=3))")
         println("Ratio ξ_fitted/ξ_transfer = $(round(ξ_fitted/correlation_length, digits=3))")
 
+        # Check fit quality
+        r_check = separations[1:min(10, length(separations))]
+        fitted_check = abs(A_fitted) .* exp.(-r_check ./ ξ_fitted)
+        data_check = abs.(exact_connected_vals[1:length(r_check)])
+        println("Fit check (first $(length(r_check)) points):")
+        for (i, r) in enumerate(r_check)
+            rel_err = abs(fitted_check[i] - data_check[i]) / data_check[i] * 100
+            println("  r=$r: data=$(data_check[i]), fit=$(fitted_check[i]), rel_err=$(round(rel_err, digits=1))%")
+        end
+
         # Plot fitted curve ON TOP of data with high visibility
         r_fit = range(1, max_separation, length=100)
-        fitted_curve = abs.(A_fitted .* exp.(-r_fit ./ ξ_fitted))
+        fitted_curve = abs(A_fitted) .* exp.(-r_fit ./ ξ_fitted)
         fitted_curve_plot = max.(fitted_curve, min_val)
         lines!(ax2, r_fit, fitted_curve_plot,
-               label="Fit: A*exp(-r/$(round(ξ_fitted, digits=2)))",
+               label="Fit: |A|*exp(-r/$(round(ξ_fitted, digits=2)))",
                color=:green, linewidth=3, linestyle=:dash)
 
         # Update title with fitted ξ
@@ -1355,6 +1370,12 @@ function plot_correlation_function(filename::String;
     catch e
         @warn "Fitting failed: $e"
         println("Skipping fit overlay")
+        println("Exception: ", e)
+        println("Stacktrace: ")
+        for (exc, bt) in Base.catch_stack()
+            showerror(stdout, exc, bt)
+            println()
+        end
     end
 
     axislegend(ax2, position=:rt)
@@ -1564,14 +1585,14 @@ function plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
                ylabel="Energy",
                title="Ground State Energy: Exact vs Reference")
 
-    lines!(ax1, g_vals_found, energies_exact, label="Exact (optimized)",
+    lines!(ax1, g_vals_found, energies_exact, label="sampling based optimization)",
            color=:blue, linewidth=2)
     scatter!(ax1, g_vals_found, energies_exact, color=:blue, markersize=12)
 
     if !all(isnan.(energies_ref))
         valid_mask = .!isnan.(energies_ref)
         lines!(ax1, g_vals_found[valid_mask], energies_ref[valid_mask],
-               label="PEPSKit reference", color=:red, linewidth=2, linestyle=:dash)
+               label="iPEPS", color=:red, linewidth=2, linestyle=:dash)
         scatter!(ax1, g_vals_found[valid_mask], energies_ref[valid_mask],
                 color=:red, markersize=12, marker=:diamond)
     end
@@ -1597,7 +1618,7 @@ function plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
     if !all(isnan.(errors))
         valid_mask = .!isnan.(errors)
         lines!(ax2, g_vals_found[valid_mask], errors[valid_mask],
-               label="|E_exact - E_PEPSKit|", color=:red, linewidth=2)
+               label="|E_optimized - E_iPEPS|", color=:red, linewidth=2)
         scatter!(ax2, g_vals_found[valid_mask], errors[valid_mask],
                 color=:red, markersize=12)
     end
@@ -1607,7 +1628,7 @@ function plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
         valid_mask = .!isnan.(energies_dmrg)
         errors_dmrg = abs.(energies_exact[valid_mask] .- energies_dmrg[valid_mask])
         lines!(ax2, g_vals_found[valid_mask], errors_dmrg,
-               label="|E_exact - E_DMRG|", color=:green, linewidth=2, linestyle=:dash)
+               label="|E_optimized - E_DMRG|", color=:green, linewidth=2, linestyle=:dash)
         scatter!(ax2, g_vals_found[valid_mask], errors_dmrg,
                 color=:green, markersize=12, marker=:star5)
     end
