@@ -40,18 +40,17 @@ function snake_order_2d_to_1d(Lx::Int, Ly::Int)
 end
 
 """
-    build_2d_tfim_hamiltonian(Lx::Int, Ly::Int, J::Float64, g::Float64; J_1d::Float64=0.0)
+    build_2d_tfim_hamiltonian(Lx::Int, Ly::Int, J::Float64, g::Float64)
 
 Build 2D Transverse Field Ising Model Hamiltonian mapped to 1D chain.
 
-H = -J Σ_{⟨i,j⟩_2D} Z_i Z_j - J_1d Σ_{⟨i,i+1⟩_1D} Z_i Z_{i+1} - g Σ_i X_i
+H = -J Σ_{⟨i,j⟩_2D} Z_i Z_j - g Σ_i X_i
 
 # Arguments
 - `Lx`: Lattice size in x direction
 - `Ly`: Lattice size in y direction
 - `J`: Ising coupling strength for 2D nearest neighbors
 - `g`: Transverse field strength
-- `J_1d`: Ising coupling strength for 1D chain nearest neighbors (default: 0.0)
 
 # Returns
 - `H`: MPO Hamiltonian
@@ -100,35 +99,144 @@ function build_2d_tfim_hamiltonian(Lx::Int, Ly::Int, J::Float64, g::Float64)
 end
 
 """
-    dmrg_ground_state_2d(Lx::Int, Ly::Int, J::Float64, g::Float64;
-                         J_1d::Float64=0.0, maxdim::Int=100, cutoff::Float64=1e-10,
-                         nsweeps::Int=10, noise::Vector{Float64}=zeros(nsweeps))
+    build_2d_heisenberg_j1j2_hamiltonian(Lx::Int, Ly::Int, J1::Float64, J2::Float64)
 
-Compute 2D TFIM ground state using DMRG.
+Build 2D Heisenberg J1-J2 Hamiltonian mapped to 1D chain.
+
+H = J1 Σ_{⟨i,j⟩} S_i · S_j + J2 Σ_{⟨⟨i,j⟩⟩} S_i · S_j
+
+where ⟨i,j⟩ are nearest neighbors and ⟨⟨i,j⟩⟩ are next-nearest neighbors (diagonals).
+
+# Arguments
+- `Lx`: Lattice size in x direction
+- `Ly`: Lattice size in y direction
+- `J1`: Nearest-neighbor coupling strength
+- `J2`: Next-nearest-neighbor (diagonal) coupling strength
+
+# Returns
+- `H`: MPO Hamiltonian
+- `sites`: Site indices
+"""
+function build_2d_heisenberg_j1j2_hamiltonian(Lx::Int, Ly::Int, J1::Float64, J2::Float64)
+    N = Lx * Ly
+    sites = siteinds("S=1/2", N)
+
+    # Get 2D to 1D mapping
+    coord_to_site = snake_order_2d_to_1d(Lx, Ly)
+
+    os = OpSum()
+
+    # J1: Nearest-neighbor Heisenberg coupling S_i · S_j
+    # Horizontal bonds
+    for j in 1:Ly
+        for i in 1:(Lx-1)
+            site1 = coord_to_site[(i, j)]
+            site2 = coord_to_site[(i+1, j)]
+            os += J1 * 0.5, "S+", site1, "S-", site2
+            os += J1 * 0.5, "S-", site1, "S+", site2
+            os += J1,       "Sz", site1, "Sz", site2
+        end
+    end
+
+    # Vertical bonds
+    for j in 1:(Ly-1)
+        for i in 1:Lx
+            site1 = coord_to_site[(i, j)]
+            site2 = coord_to_site[(i, j+1)]
+            os += J1 * 0.5, "S+", site1, "S-", site2
+            os += J1 * 0.5, "S-", site1, "S+", site2
+            os += J1,       "Sz", site1, "Sz", site2
+        end
+    end
+
+    # J2: Next-nearest-neighbor (diagonal) Heisenberg coupling
+    if J2 != 0.0
+        for j in 1:(Ly-1)
+            for i in 1:(Lx-1)
+                # Diagonal (i,j) -> (i+1,j+1)
+                site1 = coord_to_site[(i, j)]
+                site2 = coord_to_site[(i+1, j+1)]
+                os += J2 * 0.5, "S+", site1, "S-", site2
+                os += J2 * 0.5, "S-", site1, "S+", site2
+                os += J2,       "Sz", site1, "Sz", site2
+
+                # Anti-diagonal (i+1,j) -> (i,j+1)
+                site1 = coord_to_site[(i+1, j)]
+                site2 = coord_to_site[(i, j+1)]
+                os += J2 * 0.5, "S+", site1, "S-", site2
+                os += J2 * 0.5, "S-", site1, "S+", site2
+                os += J2,       "Sz", site1, "Sz", site2
+            end
+        end
+    end
+
+    H = MPO(os, sites)
+
+    return H, sites
+end
+
+"""
+    build_hamiltonian(model::String, Lx::Int, Ly::Int; kwargs...)
+
+Build a 2D Hamiltonian for the specified model.
+
+# Supported models
+- `"tfim"`: Transverse Field Ising Model. kwargs: `J` (coupling), `g` (transverse field)
+- `"heisenberg_j1j2"`: Heisenberg J1-J2 model. kwargs: `J1` (NN coupling), `J2` (NNN coupling)
+
+# Returns
+- `H`: MPO Hamiltonian
+- `sites`: Site indices
+"""
+function build_hamiltonian(model::String, Lx::Int, Ly::Int; kwargs...)
+    kw = Dict(kwargs)
+    if model == "tfim"
+        J = get(kw, :J, 1.0)
+        g = get(kw, :g, 1.0)
+        return build_2d_tfim_hamiltonian(Lx, Ly, Float64(J), Float64(g))
+    elseif model == "heisenberg_j1j2"
+        J1 = get(kw, :J1, 1.0)
+        J2 = get(kw, :J2, 0.0)
+        return build_2d_heisenberg_j1j2_hamiltonian(Lx, Ly, Float64(J1), Float64(J2))
+    else
+        error("Unknown model: \"$model\". Supported models: \"tfim\", \"heisenberg_j1j2\"")
+    end
+end
+
+"""
+    dmrg_ground_state_2d(Lx::Int, Ly::Int; model::String="tfim",
+                         maxdim::Int=100, cutoff::Float64=1e-10,
+                         nsweeps::Int=10, noise::Vector{Float64}=zeros(nsweeps),
+                         model_params...)
+
+Compute 2D ground state using DMRG for a chosen model.
 
 # Arguments
 - `Lx`, `Ly`: Lattice dimensions
-- `J`: Ising coupling for 2D lattice
-- `g`: Transverse field
-- `J_1d`: Ising coupling for 1D chain nearest neighbors (default: 0.0)
+- `model`: Model name, one of `"tfim"` or `"heisenberg_j1j2"`
 - `maxdim`: Maximum bond dimension
 - `cutoff`: Truncation cutoff
 - `nsweeps`: Number of DMRG sweeps
 - `noise`: Noise schedule for DMRG
+- `model_params...`: Model-specific parameters forwarded to `build_hamiltonian`:
+  - TFIM: `J` (coupling, default 1.0), `g` (transverse field, default 1.0)
+  - Heisenberg J1-J2: `J1` (NN coupling, default 1.0), `J2` (NNN coupling, default 0.0)
 
 # Returns
 Named tuple with:
 - `energy`: Ground state energy
+- `energy_per_site`: Energy per site
 - `psi`: Ground state MPS
 - `sites`: Site indices
 - `H`: Hamiltonian MPO
 """
-function dmrg_ground_state_2d(Lx::Int, Ly::Int, J::Float64, g::Float64;
+function dmrg_ground_state_2d(Lx::Int, Ly::Int; model::String="tfim",
                               maxdim::Int=100, cutoff::Float64=1e-10,
-                              nsweeps::Int=10, noise::Vector{Float64}=zeros(nsweeps))
+                              nsweeps::Int=10, noise::Vector{Float64}=zeros(nsweeps),
+                              model_params...)
 
-    println("Building 2D TFIM Hamiltonian (Lx=$Lx, Ly=$Ly, J=$J, g=$g")
-    H, sites = build_2d_tfim_hamiltonian(Lx, Ly, J, g)
+    println("Building 2D $model Hamiltonian (Lx=$Lx, Ly=$Ly, $(join(["$k=$v" for (k,v) in model_params], ", ")))")
+    H, sites = build_hamiltonian(model, Lx, Ly; model_params...)
 
     # Initialize random MPS
     N = Lx * Ly
@@ -150,7 +258,16 @@ function dmrg_ground_state_2d(Lx::Int, Ly::Int, J::Float64, g::Float64;
     println("Energy per site: $energy_per_site")
 
     return (energy=energy, energy_per_site=energy_per_site,
-            psi=psi, sites=sites, H=H, Lx=Lx, Ly=Ly)
+            psi=psi, sites=sites, H=H, Lx=Lx, Ly=Ly, model=model)
+end
+
+# Backward-compatible convenience method for TFIM
+function dmrg_ground_state_2d(Lx::Int, Ly::Int, J::Float64, g::Float64;
+                              maxdim::Int=100, cutoff::Float64=1e-10,
+                              nsweeps::Int=10, noise::Vector{Float64}=zeros(nsweeps))
+    return dmrg_ground_state_2d(Lx, Ly; model="tfim", J=J, g=g,
+                                maxdim=maxdim, cutoff=cutoff,
+                                nsweeps=nsweeps, noise=noise)
 end
 
 """
@@ -234,28 +351,46 @@ function compute_correlation_length_dmrg(result; max_distance::Int=60)
 end
 
 """
-    run_dmrg_scan(; Lx=4, Ly=4, J=1.0, g_values=0.0:0.5:4.0,
+    run_dmrg_scan(; model="tfim", Lx=4, Ly=4,
+                   scan_param=:g, scan_values=0.0:0.5:4.0,
                    maxdim=100, cutoff=1e-10, nsweeps=10,
-                   output_file="dmrg_results.json")
+                   output_file="dmrg_results.json", model_params...)
 
-Run DMRG for multiple g values and save results.
+Run DMRG ground state scan over a parameter range for a given model.
+
+# Arguments
+- `model`: `"tfim"` or `"heisenberg_j1j2"`
+- `scan_param`: Symbol of the parameter to scan (e.g. `:g` for TFIM, `:J2` for J1-J2)
+- `scan_values`: Range of values for the scanned parameter
+- `model_params...`: Base model parameters (the scanned param is overridden each step)
+
+# Examples
+```julia
+run_dmrg_scan(model="tfim", scan_param=:g, scan_values=0.0:0.5:4.0, J=1.0)
+run_dmrg_scan(model="heisenberg_j1j2", scan_param=:J2, scan_values=0.0:0.1:1.0, J1=1.0)
+```
 """
-function run_dmrg_scan(; Lx::Int=4, Ly::Int=4, J::Float64=1.0,
-                        g_values=0.0:0.5:4.0,
+function run_dmrg_scan(; model::String="tfim", Lx::Int=4, Ly::Int=4,
+                        scan_param::Symbol=:g, scan_values=0.0:0.5:4.0,
                         maxdim::Int=100, cutoff::Float64=1e-10,
                         nsweeps::Int=10,
-                        output_file::String="dmrg_results.json")
+                        output_file::String="dmrg_results.json",
+                        model_params...)
+
+    base_params = Dict{Symbol,Any}(model_params)
 
     results = Dict(
         "parameters" => Dict(
+            "model" => model,
             "Lx" => Lx,
             "Ly" => Ly,
-            "J" => J,
+            "scan_param" => string(scan_param),
+            "base_params" => Dict(string(k) => v for (k,v) in base_params),
             "maxdim" => maxdim,
             "cutoff" => cutoff,
             "nsweeps" => nsweeps
         ),
-        "g_values" => collect(g_values),
+        "scan_values" => collect(scan_values),
         "energies" => Union{Float64,Nothing}[],
         "energies_per_site" => Union{Float64,Nothing}[],
         "Sx_avg" => Union{Float64,Nothing}[],
@@ -266,17 +401,23 @@ function run_dmrg_scan(; Lx::Int=4, Ly::Int=4, J::Float64=1.0,
     mkpath(dirname(output_file))
 
     println("=" ^ 60)
-    println("DMRG 2D TFIM Scan")
-    println("Lx=$Lx, Ly=$Ly, J=$J, maxdim=$maxdim")
-    println("g values: ", collect(g_values))
+    println("DMRG 2D $model Scan")
+    println("Lx=$Lx, Ly=$Ly, maxdim=$maxdim")
+    println("Scanning $scan_param: ", collect(scan_values))
+    println("Base params: ", base_params)
     println("=" ^ 60)
 
-    for (i, g) in enumerate(g_values)
-        println("\n[$i/$(length(g_values))] Running g = $g ...")
+    for (i, val) in enumerate(scan_values)
+        println("\n[$i/$(length(scan_values))] Running $scan_param = $val ...")
+
+        # Merge base params with the current scan value
+        params = copy(base_params)
+        params[scan_param] = val
 
         try
-            result = dmrg_ground_state_2d(Lx, Ly, J, g;
-                                          maxdim=maxdim, cutoff=cutoff, nsweeps=nsweeps)
+            result = dmrg_ground_state_2d(Lx, Ly; model=model,
+                                          maxdim=maxdim, cutoff=cutoff, nsweeps=nsweeps,
+                                          params...)
 
             mag = compute_magnetization(result)
             corr = compute_correlation_length_dmrg(result)
@@ -466,24 +607,53 @@ function plot_correlation_decay(result; max_distance::Int=60, save_path=nothing)
     return fig
 end
 
-# Example usage
-Lx=100; Ly=3;
+
+
+# ==================== Example usage ====================
+# Choose which model to run: "tfim" or "heisenberg_j1j2"
+model_choice = "heisenberg_j1j2"  # <-- change this to switch model
+
+Lx = 50; Ly = 3;
+
+if model_choice == "tfim"
+    # --- Transverse Field Ising Model ---
+    # Scan over transverse field g with fixed J
     results = run_dmrg_scan(;
-        Lx = Lx,
-        Ly = Ly,
+        model = "tfim",
+        Lx = Lx, Ly = Ly,
+        scan_param = :g,
+        scan_values = 0.0:0.25:4.0,
         J = 1.0,
-        g_values = 0.0:0.25:4.0,
-        maxdim = 2,
-        cutoff = 1e-10,
-        nsweeps = 10,
-        output_file = joinpath(@__DIR__, "results", "dmrg_results_$Lx$Ly.json")
+        maxdim = 100, cutoff = 1e-10, nsweeps = 10,
+        output_file = joinpath(@__DIR__, "results", "dmrg_tfim_$(Lx)x$(Ly).json")
     )
 
-    fig = plot_dmrg_results(joinpath(@__DIR__, "results", "dmrg_results_$Lx$Ly.json");
-                            save_path=joinpath(@__DIR__, "results", "figures", "dmrg_results.pdf"))
-
+    # Single ground state + correlation decay
     result_corr = dmrg_ground_state_2d(Lx, Ly, 1.0, 1.5;
-                                       maxdim=2, cutoff=1e-10, nsweeps=10)
-    fig2 = plot_correlation_decay(result_corr)
-    display(fig2)
+                                       maxdim=100, cutoff=1e-10, nsweeps=10)
+    fig = plot_correlation_decay(result_corr;
+        save_path=joinpath(@__DIR__, "results", "figures", "tfim_corr_$(Lx)x$(Ly).pdf"))
+    display(fig)
+
+elseif model_choice == "heisenberg_j1j2"
+    # --- Heisenberg J1-J2 Model ---
+    # Scan over frustration J2 with fixed J1
+    results = run_dmrg_scan(;
+        model = "heisenberg_j1j2",
+        Lx = Lx, Ly = Ly,
+        scan_param = :J2,
+        scan_values = 0.0:0.5:1.0,
+        J1 = 1.0,
+        maxdim = 100, cutoff = 1e-10, nsweeps = 10,
+        output_file = joinpath(@__DIR__, "results", "dmrg_j1j2_$(Lx)x$(Ly).json")
+    )
+
+    # Single ground state at J2=0.5 + correlation decay
+    result_corr = dmrg_ground_state_2d(Lx, Ly; model="heisenberg_j1j2",
+                                       J1=1.0, J2=0.5,
+                                       maxdim=100, cutoff=1e-10, nsweeps=10)
+    fig = plot_correlation_decay(result_corr;
+        save_path=joinpath(@__DIR__, "results", "figures", "j1j2_corr_$(Lx)x$(Ly).pdf"))
+    display(fig)
+end
 

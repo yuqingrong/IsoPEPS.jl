@@ -175,3 +175,66 @@ function compute_energy(X_samples, Z_samples, g, J, row)
 
     return -g * X_mean - J * ZZ_mean
 end
+
+"""
+    compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, J2, row)
+
+Compute Heisenberg J1-J2 energy from X, Y, Z measurement samples.
+
+    S_i · S_j = (X_i X_j + Y_i Y_j + Z_i Z_j) / 4
+
+# Arguments
+- `X_samples`: Vector of X measurement outcomes
+- `Z_samples`: Vector of Z measurement outcomes
+- `Y_samples`: Vector of Y measurement outcomes
+- `J1`: Nearest-neighbor coupling
+- `J2`: Next-nearest-neighbor (diagonal) coupling
+- `row`: Number of rows
+
+# Returns
+- Energy estimate per column
+"""
+function compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, J2, row)
+    all_samples = (Z_samples, X_samples, Y_samples)
+
+    # Helper: compute vertical and horizontal correlations for one set of samples
+    function _correlations(S, row)
+        N = length(S)
+        if row == 1
+            vert = 0.0
+            horiz = mean(S[i] * S[i+1] for i in 1:N-1)
+        else
+            vert_pairs = [S[i] * S[i+1] for i in 1:N-1 if i % row != 0]
+            vert = mean(vert_pairs)
+            horiz = mean(S[i] * S[i+row] for i in 1:N-row)
+        end
+        return vert, horiz
+    end
+
+    # Sum XX + YY + ZZ for NN bonds
+    SS_vert = 0.0
+    SS_horiz = 0.0
+    for S in all_samples
+        v, h = _correlations(S, row)
+        SS_vert += v
+        SS_horiz += h
+    end
+
+    energy = J1 * (row == 1 ? SS_horiz : SS_vert + SS_horiz) / 4.0
+
+    # J2: diagonal NNN bonds
+    if J2 != 0.0 && row > 1
+        SS_diag = 0.0
+        for S in all_samples
+            N = length(S)
+            # Diagonal: (pos,col)->(pos+1,col+1)
+            diag1 = [S[i] * S[i+row+1] for i in 1:N-row-1 if i % row != 0]
+            # Anti-diagonal: (pos,col)->(pos-1,col+1)
+            diag2 = [S[i] * S[i+row-1] for i in 1:N-row+1 if (i-1) % row != 0]
+            SS_diag += mean(diag1) + mean(diag2)
+        end
+        energy += J2 * SS_diag / 4.0
+    end
+
+    return energy
+end

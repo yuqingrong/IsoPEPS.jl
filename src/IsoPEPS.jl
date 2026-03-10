@@ -99,7 +99,7 @@ function transfer_matrix_ITensor end
 export sample_quantum_channel, track_convergence_to_steady_state, estimate_correlation_length_from_sampling, estimate_correlation_length_exact
 
 # Gate Construction & Energy
-export build_unitary_gate, compute_energy
+export build_unitary_gate, compute_energy, compute_heisenberg_energy
 
 # Optimization / Training
 export CircuitOptimizationResult, ExactOptimizationResult, ManifoldOptimizationResult
@@ -115,7 +115,8 @@ export reshape_to_mps, spectrum_MPSKit, transfer_matrix_ITensor
 
 # Exact Tensor Contraction - Observables
 export compute_X_expectation, compute_Z_expectation, compute_ZZ_expectation, compute_single_expectation
-export compute_exact_energy, correlation_function, expect
+export compute_exact_energy, compute_exact_heisenberg_energy, intercolumn_correlation
+export correlation_function, expect
 
 # Reference Implementations (loaded via extensions)
 export mpskit_ground_state, mpskit_ground_state_1d, pepskit_ground_state
