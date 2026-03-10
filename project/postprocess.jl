@@ -948,7 +948,7 @@ end
 # Uncomment the block below (remove #= and =#) to run analysis examples
 
 # Analyze a single result
-J=1.0;g = 3.5; row=3 ; nqubits=3; p=3; virtual_qubits=2;D=2
+J=1.0;g = 2.5; row=3 ; nqubits=3; p=3; virtual_qubits=2;D=2
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
@@ -960,7 +960,7 @@ plot_correlation_vs_g(data_dir, [1.0,1.5,2.0,2.5,3.0,3.5,4.0];
 save_path="project/results/figures/corr_length_vs_g.pdf")
 
 fig, data = plot_correlation_function(datafile;
-                                   max_separation=20,
+                                   max_separation=40,
                                    conv_step=1000,
                                    samples=40000,
                                    save_path="project/results/figures/correlation_function.pdf")
