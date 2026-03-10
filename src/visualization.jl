@@ -1513,7 +1513,7 @@ function plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
     g_vals_found = Float64[]
 
     for g in g_values
-        filename = joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
+        filename = joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
 
         if !isfile(filename)
             @warn "File not found: $(basename(filename)), skipping g=$g"
@@ -1705,7 +1705,7 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
     colors = [:blue, :red, :green, :orange, :purple, :brown, :pink, :gray]
 
     for (idx, g) in enumerate(g_values)
-        filename = joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_nqubits=$(nqubits).json")
+        filename = joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
 
         if !isfile(filename)
             @warn "File not found: $(basename(filename)), skipping g=$g"

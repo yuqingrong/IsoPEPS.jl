@@ -19,7 +19,7 @@ function _get_cnot_product(nqubits::Int)
         # Next-nearest-neighbor
         cnot_nnn = Matrix{ComplexF64}(I, dim, dim)
         for i in 1:nqubits-2
-            cnot_nnn *= Matrix(cnot(nqubits, i+2, i))
+            cnot_nnn *= Matrix(cnot(nqubits, i, i+2))
         end
         # Skip-2
         cnot_skip2 = Matrix{ComplexF64}(I, dim, dim)
