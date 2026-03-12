@@ -1,8 +1,8 @@
 """
 Number of parameters per layer for the improved ansatz.
-Uses 2 parameters per qubit (Rx-Rz).
+Uses 3 parameters per qubit (Rx-Ry-Rz) for full SU(2) coverage.
 """
-const PARAMS_PER_QUBIT_PER_LAYER = 2
+const PARAMS_PER_QUBIT_PER_LAYER = 3
 
 # Cache for the parameter-independent CNOT entangling product (keyed by nqubits)
 const _CNOT_PRODUCT_CACHE = Dict{Int, Matrix{ComplexF64}}()
@@ -44,7 +44,7 @@ Build parameterized unitary gates for the PEPS structure using an improved ansat
 with full SU(2) single-qubit rotations and brick-wall CNOT entangling layers.
 
 # Arguments
-- `params`: Parameter vector (angles for Rx and Rz rotations)
+- `params`: Parameter vector (angles for Rx, Ry, and Rz rotations)
 - `p`: Number of layers per gate
 - `row`: Number of gates to generate
 - `nqubits`: Number of qubits per gate
@@ -56,8 +56,8 @@ with full SU(2) single-qubit rotations and brick-wall CNOT entangling layers.
 - Vector of unitary gate matrices
 
 # Notes
-- When `share_params=true`: requires `2*nqubits*p` parameters
-- When `share_params=false`: requires `2*nqubits*p*row` parameters
+- When `share_params=true`: requires `3*nqubits*p` parameters
+- When `share_params=false`: requires `3*nqubits*p*row` parameters
 - Setting `symmetry_breaking > 0` adds Ry(ε) on the first qubit (measured qubit) 
   at the end of the circuit to break Z₂ symmetry and avoid unitary channels.
 - Setting `noise_strength > 0` adds random rotations to break all symmetries.
@@ -71,18 +71,19 @@ function build_unitary_gate(params, p, row, nqubits; share_params=true)
         A_matrix[i] = Matrix(Array{ComplexF64}(I, dim, dim))
     end
     
+    ppq = PARAMS_PER_QUBIT_PER_LAYER  # 3
     if share_params
-        @assert length(params) >= 2*nqubits*p "Need at least $(2*nqubits*p) parameters for shared parameters mode"
-        shared_params = params[1:2*nqubits*p]
+        @assert length(params) >= ppq*nqubits*p "Need at least $(ppq*nqubits*p) parameters for shared parameters mode"
+        shared_params = params[1:ppq*nqubits*p]
         for i in 1:row
             for r in 1:p
                 A_matrix[i] *= _build_layer(shared_params, r, nqubits)
             end
         end
     else
-        @assert length(params) >= 2*nqubits*p*row "Need at least $(2*nqubits*p*row) parameters for independent parameters mode"
+        @assert length(params) >= ppq*nqubits*p*row "Need at least $(ppq*nqubits*p*row) parameters for independent parameters mode"
         for i in 1:row
-            params_i = params[2*nqubits*p*(i-1)+1:2*nqubits*p*i]
+            params_i = params[ppq*nqubits*p*(i-1)+1:ppq*nqubits*p*i]
             for r in 1:p
                 A_matrix[i] *= _build_layer(params_i, r, nqubits)
             end
@@ -98,23 +99,32 @@ function build_unitary_gate(params, p, row, nqubits; share_params=true)
 end
 
 """
-Build a single layer: raw Rx·Rz rotations ⊗ cached CNOT product.
+Build a single layer: raw Rx·Ry·Rz rotations ⊗ cached CNOT product.
 No Yao objects created — pure matrix arithmetic.
 """
 function _build_layer(params, r, nqubits)
-    # Compute Rx(θx)·Rz(θz) for each qubit as a raw 2×2 matrix
-    # Rx = [c  -is; -is  c],  Rz = [e⁻  0; 0  e⁺]
-    # Product: [c·e⁻  -is·e⁺; -is·e⁻  c·e⁺]
+    # Compute Rx(θx)·Ry(θy)·Rz(θz) for each qubit as a raw 2×2 matrix
+    # Full SU(2) coverage: 3 parameters per qubit per layer
+    ppq = PARAMS_PER_QUBIT_PER_LAYER  # 3
     gate = Matrix{ComplexF64}(undef, 1, 1)
     gate[1,1] = one(ComplexF64)
 
     for i in 1:nqubits
-        idx = 2*nqubits*r - 2*nqubits + 2*i - 1
-        θx = params[idx]; θz = params[idx+1]
-        c = cos(θx/2); s = sin(θx/2)
+        idx = ppq*nqubits*(r-1) + ppq*(i-1) + 1
+        θx = params[idx]; θy = params[idx+1]; θz = params[idx+2]
+        # Rx(θx)
+        cx = cos(θx/2); sx = sin(θx/2)
+        Rx = ComplexF64[cx  -im*sx;
+                        -im*sx  cx]
+        # Ry(θy)
+        cy = cos(θy/2); sy = sin(θy/2)
+        Ry = ComplexF64[cy  -sy;
+                        sy   cy]
+        # Rz(θz)
         em = exp(-im * θz/2); ep = exp(im * θz/2)
-        sq = ComplexF64[c*em  -im*s*ep;
-                        -im*s*em  c*ep]
+        Rz = ComplexF64[em  0;
+                        0   ep]
+        sq = Rx * Ry * Rz
         # kron(sq, gate) puts sq on the higher qubit — Yao convention
         gate = kron(sq, gate)
     end
@@ -216,6 +226,7 @@ function compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, J2, row)
     SS_horiz = 0.0
     for S in all_samples
         v, h = _correlations(S, row)
+        @show v, h
         SS_vert += v
         SS_horiz += h
     end

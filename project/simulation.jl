@@ -121,7 +121,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
             verbose && println("Starting $(scan_param) = $(val), warm-started from saved $(scan_param) = $(warm_val)")
         else
             Random.seed!(seed)
-            params = rand(2*nqubits*p)
+            params = rand(3*nqubits*p)
             verbose && println("Starting $(scan_param) = $(val), random initialization (seed=$seed)")
         end
 
@@ -166,17 +166,17 @@ end
  simulation(;
      model="heisenberg_j1j2",
      scan_param=:J2,
-     scan_values=[0.0],
+     scan_values=[0.5],
      J=1.0,
      row=3, p=3, nqubits=3,
-     maxiter=1000,
+     maxiter=500,
      measure_first=:Z,
      seed=123,
      verbose=true,
      output_dir=joinpath(@__DIR__, "results"),
      share_params=true,
      conv_step=100,
-     samples=10000,
+     samples=1000,
      n_runs=1,
      abstol=1e-5,
      sigma0=1.0,

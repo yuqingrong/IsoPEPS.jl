@@ -92,56 +92,41 @@ Generate initial parameters for TFIM optimization that avoid trivial product sta
   - `:random`: Random initialization (default CMA-ES behavior)
 
 # Returns
-- Parameter vector of length `2*nqubits*p`
+- Parameter vector of length `3*nqubits*p`
 """
 function initialize_tfim_params(p::Int, nqubits::Int, g::Float64; mode::Symbol=:meanfield)
-    n_params = 2 * nqubits * p
-    
+    ppq = PARAMS_PER_QUBIT_PER_LAYER  # 3
+    n_params = ppq * nqubits * p
+
     if mode == :meanfield
         # Mean-field angle: θ such that ⟨Z⟩ = -J/(g) approximately
-        # For g >> J: nearly all X, for g << J: nearly all Z
-        θ_mf = atan(1.0 / g)  # Approximate mean-field angle
-        
+        θ_mf = atan(1.0 / g)
+
         params = zeros(n_params)
         for layer in 1:p
             for q in 1:nqubits
-                idx = 2*nqubits*(layer-1) + 2*(q-1) + 1
-                # Rx rotation to tilt from |0⟩ toward mean-field direction
+                idx = ppq*nqubits*(layer-1) + ppq*(q-1) + 1
                 params[idx] = θ_mf + 0.1 * randn()  # Rx angle
-                params[idx+1] = 0.1 * randn()        # Rz angle (small)
+                params[idx+1] = 0.1 * randn()        # Ry angle (small)
+                params[idx+2] = 0.1 * randn()        # Rz angle (small)
             end
         end
         return params
-        
+
     elseif mode == :entangled
-        # GHZ/Bell state initialization:
-        # CNOT structure: cnot(control=i+1, target=i), so last qubit is always control
-        # 
-        # Layer 1 creates GHZ:
-        #   - Last qubit (control): Rx(π/2) creates superposition
-        #   - Other qubits (targets): stay in |0⟩
-        #   - CNOT cascade creates: (|000⟩ - i|111⟩)/√2
-        # 
-        # Layer 2+ preserves GHZ:
-        #   - All qubits: identity (Rx(0), Rz(0))
-        #   - CNOTs on GHZ state: |000⟩↔|000⟩, |111⟩↔|111⟩ (self-inverse)
         params = zeros(n_params)
         for layer in 1:p
             for q in 1:nqubits
-                idx = 2*nqubits*(layer-1) + 2*(q-1) + 1
+                idx = ppq*nqubits*(layer-1) + ppq*(q-1) + 1
                 if layer == 1 && q == nqubits
-                    # Layer 1, last qubit (control): create superposition
                     params[idx] = π/2      # Rx(π/2)
-                    params[idx+1] = 0.0    # Rz(0)
-                else
-                    # All other cases: identity to preserve GHZ
-                    params[idx] = 0.0      # Rx(0)
-                    params[idx+1] = 0.0    # Rz(0)
+                    params[idx+1] = 0.0    # Ry(0)
+                    params[idx+2] = 0.0    # Rz(0)
                 end
             end
         end
         return params
-        
+
     else  # :random
         return 2π * rand(n_params)
     end
