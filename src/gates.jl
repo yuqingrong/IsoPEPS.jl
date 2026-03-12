@@ -235,6 +235,5 @@ function compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, J2, row)
         end
         energy += J2 * SS_diag / 4.0
     end
-
     return energy
 end

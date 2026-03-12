@@ -11,6 +11,7 @@ using CairoMakie: Figure
         0.3,
         [0.5, 0.6],
         [0.8, 0.9],
+        Float64[],
         true
     )
     
@@ -96,7 +97,7 @@ end
     
     # With result
     result = CircuitOptimizationResult(
-        energies, [], [], 0.5, [], [], true
+        energies, [], [], 0.5, [], [], Float64[], true
     )
     fig3 = plot_training_history(result)
     @test fig3 isa Figure

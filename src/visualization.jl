@@ -26,24 +26,19 @@ save_result("data/result.json", result, input_args)
 function save_result(filename::String, result::CircuitOptimizationResult, input_args::Dict)
     dir = dirname(filename)
     !isempty(dir) && !isdir(dir) && mkpath(dir)
-    
-    # Convert matrices to nested arrays (array of arrays) for proper JSON serialization
-    # Each row (chain) becomes a separate array
-    Z_nested = [result.final_Z_samples[i, :] for i in 1:size(result.final_Z_samples, 1)]
-    X_nested = [result.final_X_samples[i, :] for i in 1:size(result.final_X_samples, 1)]
-    
+
     data = Dict{Symbol, Any}(
         :type => "CircuitOptimizationResult",
         :energy_history => result.energy_history,
         :params => result.final_params,
         :energy => result.final_cost,
         :converged => result.converged,
-        :Z_samples => Z_nested,
-        :X_samples => X_nested,
-        :sample_shape => size(result.final_Z_samples),  # Store original shape for reference
+        :Z_samples => result.final_Z_samples,
+        :X_samples => result.final_X_samples,
+        :Y_samples => result.final_Y_samples,
         :input_args => input_args
     )
-    
+
     open(filename, "w") do io
         JSON3.pretty(io, data)
     end
@@ -189,18 +184,20 @@ function load_result(filename::String; result_type::Symbol=:auto)
     if result_type == :circuit
         Z_samples_data = get(data, "Z_samples", get(data, :Z_samples, nothing))
         X_samples_data = get(data, "X_samples", get(data, :X_samples, nothing))
-        
+        Y_samples_data = get(data, "Y_samples", get(data, :Y_samples, nothing))
+
         energy_history = get_data(data, :energy_history)
         params = get_data(data, :params)
         energy = get_data(data, :energy)
         converged = get_data(data, :converged)
-        
+
         # Convert samples to vectors (flatten if matrix)
         Z_samples = samples_to_matrix(Z_samples_data, input_args)
         X_samples = samples_to_matrix(X_samples_data, input_args)
         Z_samples_vec = Z_samples isa AbstractMatrix ? vec(collect(Z_samples)) : Vector{Float64}(collect(Z_samples))
         X_samples_vec = X_samples isa AbstractMatrix ? vec(collect(X_samples)) : Vector{Float64}(collect(X_samples))
-        
+        Y_samples_vec = Y_samples_data === nothing ? Float64[] : Vector{Float64}(collect(Y_samples_data))
+
         result = CircuitOptimizationResult(
             Vector{Float64}(energy_history === nothing ? Float64[] : energy_history),
             Vector{Matrix{ComplexF64}}[],  # Gates not saved to JSON
@@ -208,6 +205,7 @@ function load_result(filename::String; result_type::Symbol=:auto)
             Float64(energy === nothing ? 0.0 : energy),
             Z_samples_vec,
             X_samples_vec,
+            Y_samples_vec,
             Bool(converged === nothing ? false : converged)
         )
     elseif result_type == :exact
@@ -1281,7 +1279,7 @@ function plot_correlation_function(filename::String;
     println("Mean |exact - sample| error (connected): $(round(mean_error_connected, digits=6))")
 
     fig = Figure(size=(800, 700))
-    min_val = 1e-10
+    min_val = 1e-15
 
     title_str = "Correlation Function: g=$g, row=$row, nqubits=$nqubits, ξ=$(round(correlation_length, digits=2))"
     Label(fig[0, 1], title_str, fontsize=16, font=:bold)
@@ -1441,7 +1439,7 @@ Plot energy error (exact contraction - PEPSKit reference) for different g values
 g_vals = [1.0, 2.0, 3.0, 4.0]
 fig, data = plot_energy_error_vs_g("project/results", g_vals;
                                    pepskit_file="project/results/pepskit_results_D=2.json",
-                                   dmrg_file="project/results/dmrg_results_100x3.json",
+                                   dmrg_file="project/results/dmrg_tfim_100x3.json",
                                    save_path="energy_error_vs_g.pdf")
 ```
 """
@@ -1489,7 +1487,7 @@ function plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
         end
 
         # Extract DMRG energies for each g
-        g_key = haskey(dmrg_data, "g_values") ? "g_values" : (haskey(dmrg_data, :g_values) ? :g_values : nothing)
+        g_key = haskey(dmrg_data, "scan_values") ? "scan_values" : (haskey(dmrg_data, :scan_values) ? :scan_values : nothing)
         e_key = haskey(dmrg_data, "energies_per_site") ? "energies_per_site" : (haskey(dmrg_data, :energies_per_site) ? :energies_per_site : nothing)
         if !isnothing(g_key) && !isnothing(e_key)
             g_dmrg = Float64.(dmrg_data[g_key])
@@ -1585,7 +1583,7 @@ function plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
                ylabel="Energy",
                title="Ground State Energy: Exact vs Reference")
 
-    lines!(ax1, g_vals_found, energies_exact, label="sampling based optimization)",
+    lines!(ax1, g_vals_found, energies_exact, label="sampling based optimization",
            color=:blue, linewidth=2)
     scatter!(ax1, g_vals_found, energies_exact, color=:blue, markersize=12)
 
@@ -1693,6 +1691,9 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
                                J=1.0, row=3, nqubits=3, p=3,
                                max_separation=20,
                                connected=true,
+                               dmrg_file::Union{String,Nothing}=nothing,
+                               pepskit_file::Union{String,Nothing}=nothing,
+                               g_c::Union{Float64,Nothing}=nothing,
                                save_path::Union{String,Nothing}=nothing)
 
     println("="^70)
@@ -1702,7 +1703,7 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
 
     # Load results and compute correlations
     correlation_data = Dict{Float64, NamedTuple}()
-    colors = [:blue, :red, :green, :orange, :purple, :brown, :pink, :gray]
+    colors = [:blue, :green, :red, :orange, :purple, :brown, :pink, :gray]
 
     for (idx, g) in enumerate(g_values)
         filename = joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
@@ -1764,16 +1765,77 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
     ax = Axis(fig[1, 1],
               xlabel="g",
               ylabel="Correlation Length ξ",
-              title="Correlation Length vs g (J=$J, row=$row)")
+              title="Correlation Length vs g (J=$J, row=$row, D=$(nqubits-1))")
 
     # Extract and plot correlation lengths from transfer matrix
     g_sorted = sort(collect(keys(correlation_data)))
     ξ_transfer = [correlation_data[g].correlation_length for g in g_sorted]
 
     lines!(ax, g_sorted, ξ_transfer,
-           color=:blue, linewidth=2)
+           color=:blue, linewidth=2, label="Sampling based optimization (transfer matrix)")
     scatter!(ax, g_sorted, ξ_transfer,
              color=:blue, markersize=12)
+
+    # Overlay DMRG correlation lengths if a file is provided
+    if dmrg_file !== nothing && isfile(dmrg_file)
+        println("\nLoading DMRG reference from: $dmrg_file")
+        dmrg_data = open(dmrg_file, "r") do io
+            JSON3.read(io)
+        end
+
+        dmrg_g = Float64.(collect(dmrg_data.scan_values))
+        dmrg_ξ = collect(dmrg_data.correlation_lengths)
+
+        # Filter out null/nothing entries and unreasonable values
+        valid = [i for i in eachindex(dmrg_g)
+                 if dmrg_ξ[i] !== nothing && isfinite(Float64(dmrg_ξ[i])) && Float64(dmrg_ξ[i]) < 1e5]
+        dmrg_g_valid = dmrg_g[valid]
+        dmrg_ξ_valid = Float64.(dmrg_ξ[valid])
+
+        lines!(ax, dmrg_g_valid, dmrg_ξ_valid,
+               color=:red, linewidth=2, linestyle=:dash, label="DMRG reference")
+        scatter!(ax, dmrg_g_valid, dmrg_ξ_valid,
+                 color=:red, markersize=8, marker=:diamond)
+
+        println("  DMRG: $(length(dmrg_g_valid)) valid g points loaded")
+    elseif dmrg_file !== nothing
+        @warn "DMRG file not found: $dmrg_file"
+    end
+
+    # Overlay PEPSKit correlation lengths if a file is provided
+    if pepskit_file !== nothing && isfile(pepskit_file)
+        println("\nLoading PEPSKit reference from: $pepskit_file")
+        peps_data = open(pepskit_file, "r") do io
+            JSON3.read(io)
+        end
+
+        peps_g = Float64.(collect(peps_data.g_values))
+        peps_ξ = collect(peps_data.correlation_lengths)
+
+        # Filter out null/nothing entries and unreasonable values
+        valid = [i for i in eachindex(peps_g)
+                 if peps_ξ[i] !== nothing && isfinite(Float64(peps_ξ[i])) && Float64(peps_ξ[i]) < 1e5]
+        peps_g_valid = peps_g[valid]
+        peps_ξ_valid = Float64.(peps_ξ[valid])
+
+        D_label = haskey(peps_data, :parameters) && haskey(peps_data.parameters, :D) ?
+            " (D=$(peps_data.parameters.D))" : ""
+        lines!(ax, peps_g_valid, peps_ξ_valid,
+               color=:green, linewidth=2, linestyle=:dashdot, label="iPEPS reference")
+        scatter!(ax, peps_g_valid, peps_ξ_valid,
+                 color=:green, markersize=8, marker=:utriangle)
+
+        println("  PEPSKit: $(length(peps_g_valid)) valid g points loaded")
+    elseif pepskit_file !== nothing
+        @warn "PEPSKit file not found: $pepskit_file"
+    end
+
+    # Mark critical point
+    if g_c !== nothing
+        vlines!(ax, [g_c], color=:black, linestyle=:dot, linewidth=1.5, label="g_c ≈ $g_c")
+    end
+
+    axislegend(ax, position=:lt)
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))

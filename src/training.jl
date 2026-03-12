@@ -23,6 +23,7 @@ struct CircuitOptimizationResult
     final_cost::Float64
     final_Z_samples::Vector{Float64}
     final_X_samples::Vector{Float64}
+    final_Y_samples::Vector{Float64}
     converged::Bool
 end
 
@@ -206,6 +207,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
     params_history = Vector{Float64}[]
     Z_samples_history = Vector{Float64}[]
     X_samples_history = Vector{Float64}[]
+    Y_samples_history = Vector{Float64}[]
     current_params = copy(params)
 
     # Track energies within each generation
@@ -213,6 +215,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
     generation_params = Vector{Float64}[]
     generation_Z_samples = Vector{Float64}[]
     generation_X_samples = Vector{Float64}[]
+    generation_Y_samples = Vector{Float64}[]
     generation_count = Ref(0)
     logged_threads = Ref(false)
     eval_count = Ref(0)
@@ -244,21 +247,32 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
                                           measure_y=need_y)
         Z_samples = result_ch[2]
         X_samples = result_ch[3]
-        # Z_samples includes burn-in period, X_samples does not (collected in second phase)
-        # Align to row boundary so column structure is preserved for ZZ computation
-        # Find first index > conv_step that starts a new column: (idx-1) % row == 0
-        discard = conv_step + row - 1 - (conv_step - 1) % row  # round up to next row boundary
-        start_idx = discard + 1
-        Z_samples_all[run_idx] = Z_samples[start_idx:end]
-        X_samples_all[run_idx] = X_samples[start_idx:end]
+        # Round conv_step up to next row boundary for column alignment
+        discard = conv_step + row - 1 - (conv_step - 1) % row  # always a multiple of row
+        # Z_samples: discard burn-in
+        z_raw = Z_samples[discard+1:end]
+        z_len = length(z_raw) - length(z_raw) % row
+        Z_samples_all[run_idx] = z_raw[1:z_len]
+        # X/Y: already converged (later phases), but discard same amount for consistency
+        # Phase transitions happen at iteration boundaries → samples start at row 1
+        # Discard must be a multiple of row to preserve column alignment
+        x_raw = length(X_samples) > discard ? X_samples[discard+1:end] : X_samples
+        x_len = length(x_raw) - length(x_raw) % row
+        X_samples_all[run_idx] = x_raw[1:x_len]
         if need_y
-            Y_samples_all[run_idx] = result_ch[4][start_idx:end]
+            Y_samp = result_ch[4]
+            y_raw = length(Y_samp) > discard ? Y_samp[discard+1:end] : Y_samp
+            y_len = length(y_raw) - length(y_raw) % row
+            Y_samples_all[run_idx] = y_raw[1:y_len]
         end
         end
 
         # Combine all samples
         Z_samples_combined = reduce(vcat, Z_samples_all)
         X_samples_combined = reduce(vcat, X_samples_all)
+
+        # Combine Y samples if needed
+        Y_samples_combined = need_y ? reduce(vcat, Y_samples_all) : Float64[]
 
         # Energy computation depends on model
         local energy
@@ -269,7 +283,6 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         elseif model == "heisenberg_j1j2"
             J1 = Float64(get(kw, :J1, 1.0))
             J2 = Float64(get(kw, :J2, 0.0))
-            Y_samples_combined = reduce(vcat, Y_samples_all)
             energy = compute_heisenberg_energy(X_samples_combined, Z_samples_combined, Y_samples_combined, J1, J2, row)
         end
 
@@ -281,6 +294,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         push!(generation_params, copy(x))
         push!(generation_Z_samples, Z_samples_combined)
         push!(generation_X_samples, X_samples_combined)
+        push!(generation_Y_samples, Y_samples_combined)
 
         # Return cost (with penalty) for optimization
         return real(cost)
@@ -300,12 +314,14 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
             best_params = generation_params[min_idx]
             best_Z_samples = generation_Z_samples[min_idx]
             best_X_samples = generation_X_samples[min_idx]
+            best_Y_samples = generation_Y_samples[min_idx]
 
             # Store the minimum energy and associated data
             push!(energy_history, min_energy)
             push!(params_history, best_params)
             push!(Z_samples_history, best_Z_samples)
             push!(X_samples_history, best_X_samples)
+            push!(Y_samples_history, best_Y_samples)
 
             generation_count[] += 1
 
@@ -319,6 +335,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
             empty!(generation_params)
             empty!(generation_Z_samples)
             empty!(generation_X_samples)
+            empty!(generation_Y_samples)
         end
 
         return false  # Continue optimization
@@ -350,11 +367,13 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         best_params = generation_params[min_idx]
         best_Z_samples = generation_Z_samples[min_idx]
         best_X_samples = generation_X_samples[min_idx]
+        best_Y_samples = generation_Y_samples[min_idx]
 
         push!(energy_history, min_energy)
         push!(params_history, best_params)
         push!(Z_samples_history, best_Z_samples)
         push!(X_samples_history, best_X_samples)
+        push!(Y_samples_history, best_Y_samples)
     end
 
     # Use best parameters found across all generations
@@ -364,12 +383,14 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         final_cost = energy_history[min_idx]
         final_Z_samples = Z_samples_history[min_idx]
         final_X_samples = X_samples_history[min_idx]
+        final_Y_samples = Y_samples_history[min_idx]
         @info "Best energy at generation $min_idx: $final_cost"
     else
         final_params = opt_result.u
         final_cost = opt_result.objective
         final_Z_samples = Float64[]
         final_X_samples = Float64[]
+        final_Y_samples = Float64[]
     end
 
     final_gates = build_unitary_gate(final_params, p, row, nqubits; share_params=share_params)
@@ -381,6 +402,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         final_cost,
         final_Z_samples,
         final_X_samples,
+        final_Y_samples,
         converged
     )
 

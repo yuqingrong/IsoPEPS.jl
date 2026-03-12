@@ -128,7 +128,7 @@ function build_2d_heisenberg_j1j2_hamiltonian(Lx::Int, Ly::Int, J1::Float64, J2:
 
     # J1: Nearest-neighbor Heisenberg coupling S_i · S_j
     # Horizontal bonds
-    for j in 1:Ly
+    for j in 1:(Ly-1)
         for i in 1:(Lx-1)
             site1 = coord_to_site[(i, j)]
             site2 = coord_to_site[(i+1, j)]
@@ -140,7 +140,7 @@ function build_2d_heisenberg_j1j2_hamiltonian(Lx::Int, Ly::Int, J1::Float64, J2:
 
     # Vertical bonds
     for j in 1:(Ly-1)
-        for i in 1:Lx
+        for i in 1:(Lx-1)
             site1 = coord_to_site[(i, j)]
             site2 = coord_to_site[(i, j+1)]
             os += J1 * 0.5, "S+", site1, "S-", site2
@@ -280,8 +280,8 @@ function compute_magnetization(result)
     sites = result.sites
     N = length(sites)
 
-    Sx_avg = sum(expect(psi, "Sx")) / N
-    Sz_avg = sum(expect(psi, "Sz")) / N
+    Sx_avg = sum(ITensorMPS.expect(psi, "Sx")) / N
+    Sz_avg = sum(ITensorMPS.expect(psi, "Sz")) / N
 
     return (Sx=Sx_avg, Sz=Sz_avg)
 end
@@ -302,7 +302,7 @@ function compute_correlation_length_dmrg(result; max_distance::Int=60)
     n_avg = N - 3 * max_dist
 
     # Compute magnetization expectation values
-    Sz_expect = expect(psi, "Sz")
+    Sz_expect = ITensorMPS.expect(psi, "Sz")
 
     # Compute full correlation matrix once
     C = correlation_matrix(psi, "Sz", "Sz")
@@ -463,7 +463,7 @@ Plot DMRG results: energy, magnetization, and correlation length vs g.
 function plot_dmrg_results(json_file::String; save_path=nothing)
     data = JSON3.read(read(json_file, String))
 
-    g_values = collect(data.g_values)
+    scan_values = collect(data.scan_values)
     energies = collect(data.energies_per_site)
     Sx_avg = collect(data.Sx_avg)
     Sz_avg = collect(data.Sz_avg)
@@ -471,29 +471,31 @@ function plot_dmrg_results(json_file::String; save_path=nothing)
 
     Lx = data.parameters.Lx
     Ly = data.parameters.Ly
+    scan_param = string(data.parameters.scan_param)
+    model = string(data.parameters.model)
 
     fig = Figure(size=(1400, 400))
 
     # Energy plot
     ax1 = Axis(fig[1, 1],
-               xlabel="g (transverse field)",
+               xlabel=scan_param,
                ylabel="Energy per site",
-               title="2D TFIM DMRG (Lx=$Lx, Ly=$Ly)")
+               title="$model DMRG (Lx=$Lx, Ly=$Ly)")
 
-    scatterlines!(ax1, g_values, energies,
+    scatterlines!(ax1, scan_values, energies,
                   color=:steelblue, marker=:circle, markersize=8,
                   linewidth=2)
 
     # Magnetization plot
     ax2 = Axis(fig[1, 2],
-               xlabel="g (transverse field)",
+               xlabel=scan_param,
                ylabel="Magnetization",
                title="Magnetization")
 
-    scatterlines!(ax2, g_values, Sx_avg,
+    scatterlines!(ax2, scan_values, Sx_avg,
                   color=:red, marker=:circle, markersize=8,
                   linewidth=2, label="⟨Sx⟩")
-    scatterlines!(ax2, g_values, abs.(Sz_avg),
+    scatterlines!(ax2, scan_values, abs.(Sz_avg),
                   color=:blue, marker=:circle, markersize=8,
                   linewidth=2, label="|⟨Sz⟩|")
 
@@ -501,16 +503,16 @@ function plot_dmrg_results(json_file::String; save_path=nothing)
 
     # Correlation length plot
     ax3 = Axis(fig[1, 3],
-               xlabel="g (transverse field)",
+               xlabel=scan_param,
                ylabel="Correlation length ξ",
                title="Correlation Length")
 
-    scatterlines!(ax3, g_values[3:end], corr_lengths[3:end],
+    scatterlines!(ax3, scan_values[3:end], corr_lengths[3:end],
                   color=:green, marker=:circle, markersize=8,
                   linewidth=2)
 
     # Add critical point line if scanning across phase transition
-    if minimum(g_values) < 3.04 < maximum(g_values)
+    if minimum(scan_values) < 3.04 < maximum(scan_values)
         vlines!(ax3, [3.04], color=:red, linestyle=:dash,
                 linewidth=1.5, label="g_c ≈ 3.04")
         axislegend(ax3, position=:lt)
@@ -613,7 +615,7 @@ end
 # Choose which model to run: "tfim" or "heisenberg_j1j2"
 model_choice = "heisenberg_j1j2"  # <-- change this to switch model
 
-Lx = 50; Ly = 3;
+Lx = 100; Ly = 3;
 
 if model_choice == "tfim"
     # --- Transverse Field Ising Model ---
@@ -624,15 +626,11 @@ if model_choice == "tfim"
         scan_param = :g,
         scan_values = 0.0:0.25:4.0,
         J = 1.0,
-        maxdim = 100, cutoff = 1e-10, nsweeps = 10,
+        maxdim = 2, cutoff = 1e-10, nsweeps = 10,
         output_file = joinpath(@__DIR__, "results", "dmrg_tfim_$(Lx)x$(Ly).json")
     )
 
-    # Single ground state + correlation decay
-    result_corr = dmrg_ground_state_2d(Lx, Ly, 1.0, 1.5;
-                                       maxdim=100, cutoff=1e-10, nsweeps=10)
-    fig = plot_correlation_decay(result_corr;
-        save_path=joinpath(@__DIR__, "results", "figures", "tfim_corr_$(Lx)x$(Ly).pdf"))
+    fig = plot_dmrg_results(joinpath(@__DIR__, "results", "dmrg_tfim_$(Lx)x$(Ly).json"); save_path=joinpath(@__DIR__, "results", "figures", "dmrg_tfim_$(Lx)x$(Ly).pdf"))
     display(fig)
 
 elseif model_choice == "heisenberg_j1j2"
@@ -642,18 +640,13 @@ elseif model_choice == "heisenberg_j1j2"
         model = "heisenberg_j1j2",
         Lx = Lx, Ly = Ly,
         scan_param = :J2,
-        scan_values = 0.0:0.5:1.0,
+        scan_values = 0.0:0.1:1.0,
         J1 = 1.0,
-        maxdim = 100, cutoff = 1e-10, nsweeps = 10,
+        maxdim = 2, cutoff = 1e-10, nsweeps = 10,
         output_file = joinpath(@__DIR__, "results", "dmrg_j1j2_$(Lx)x$(Ly).json")
     )
 
-    # Single ground state at J2=0.5 + correlation decay
-    result_corr = dmrg_ground_state_2d(Lx, Ly; model="heisenberg_j1j2",
-                                       J1=1.0, J2=0.5,
-                                       maxdim=100, cutoff=1e-10, nsweeps=10)
-    fig = plot_correlation_decay(result_corr;
-        save_path=joinpath(@__DIR__, "results", "figures", "j1j2_corr_$(Lx)x$(Ly).pdf"))
+    fig = plot_dmrg_results(joinpath(@__DIR__, "results", "dmrg_j1j2_$(Lx)x$(Ly).json"); save_path=joinpath(@__DIR__, "results", "figures", "dmrg_j1j2_$(Lx)x$(Ly).pdf"))
     display(fig)
 end
 

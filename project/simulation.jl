@@ -5,15 +5,14 @@ using CairoMakie
 using Yao
 using LinearAlgebra, OMEinsum
 """
-    simulation(J::Float64, g_values::Vector{Float64}, row::Int, p::Int, nqubits::Int; 
-               maxiter=5000, measure_first=:X, seed=12, verbose=true, 
-               output_dir="data", share_params=true)
+    simulation(; model, scan_param, scan_values, row, p, nqubits, ...)
 
-Run circuit optimization in parallel for multiple g values and save results to JSON files.
+Run circuit optimization for multiple parameter values and save results to JSON files.
 
 # Arguments
-- `J::Float64`: Horizontal coupling strength
-- `g_values::Vector{Float64}`: Vector of transverse field strengths
+- `model::String`: Model type (`"tfim"` or `"heisenberg_j1j2"`)
+- `scan_param::Symbol`: Parameter to scan over (e.g., `:g` for TFIM, `:J2` for Heisenberg)
+- `scan_values::Vector{Float64}`: Values of the scan parameter
 - `row::Int`: Number of rows in the PEPS
 - `p::Int`: Circuit depth
 - `nqubits::Int`: Number of qubits per row
@@ -23,90 +22,195 @@ Run circuit optimization in parallel for multiple g values and save results to J
 - `verbose`: Print progress information
 - `output_dir`: Directory to save results (default: "data")
 - `share_params`: Share parameters across circuit layers
-- `conv_step`: Convergence step for sampling (default: 100)
-- `samples`: Number of samples per run (default: 10000)
-- `n_runs`: Number of parallel sampling runs (default: 44)
-- `abstol`: Absolute tolerance for optimization convergence (default: 0.01)
-
-# Returns
-- Dict{Float64, CircuitOptimizationResult} with g values as keys
-
-# Side effects
-- Saves each result to `output_dir/circuit_J={J}_g={g}_row={row}.json`
+- `model_params...`: Fixed model parameters (e.g., `J=1.0` for TFIM, `J1=1.0` for Heisenberg)
 
 # Example
 ```julia
-g_values = [1.0, 2.0, 3.0, 4.0]
-results = simulation(1.0, g_values, 3, 2, 8; maxiter=5000, output_dir="results")
+# TFIM: scan g with fixed J
+simulation(model="tfim", scan_param=:g, scan_values=[1.0, 2.0, 3.0],
+           J=1.0, row=3, p=2, nqubits=3, ...)
+
+# Heisenberg J1-J2: scan J2 with fixed J1
+simulation(model="heisenberg_j1j2", scan_param=:J2, scan_values=[0.0, 0.25, 0.5],
+           J1=1.0, row=3, p=2, nqubits=3, ...)
 ```
 """
-function simulation(; J::Float64, g_values::Vector{Float64}, row::Int, p::Int, nqubits::Int, 
-                    maxiter::Int, measure_first::Symbol, seed::Int, verbose::Bool,
-                    output_dir::String, share_params::Bool, conv_step::Int=100, samples::Int=10000,
-                    n_runs::Int=44, abstol::Float64=0.01, sigma0::Float64, popsize::Union{Int,Nothing}, zz_weight::Float64)
-    
+"""
+    _find_warm_start_params(output_dir, model, scan_param, scan_value, row, p, nqubits; fixed_params...)
+
+Scan `output_dir` for existing result files matching the model/fixed params pattern,
+find the one whose scan parameter value is closest to (but not equal to) `scan_value`,
+and load its parameters.
+
+Returns `(params, source_value)` or `(nothing, nothing)` if no file is found.
+"""
+function _find_warm_start_params(output_dir, model, scan_param, scan_value, row, p, nqubits; fixed_params...)
+    !isdir(output_dir) && return nothing, nothing
+
+    # Build prefix and suffix for filename matching
+    # Filename format: circuit_{model}_{fixed_params}_{scan_param}={value}_row={row}_p={p}_nqubits={nqubits}.json
+    fixed_str = join(["$(k)=$(v)" for (k, v) in sort(collect(fixed_params), by=first)], "_")
+    prefix = isempty(fixed_str) ? "circuit_$(model)_$(scan_param)=" : "circuit_$(model)_$(fixed_str)_$(scan_param)="
+    suffix = "_row=$(row)_p=$(p)_nqubits=$(nqubits).json"
+
+    best_params = nothing
+    best_val = nothing
+    best_dist = Inf
+
+    for fname in readdir(output_dir)
+        startswith(fname, prefix) || continue
+        endswith(fname, suffix) || continue
+
+        # Extract scan parameter value from the middle
+        val_str = fname[length(prefix)+1 : end-length(suffix)]
+        val_file = tryparse(Float64, val_str)
+        val_file === nothing && continue
+        val_file == scan_value && continue  # skip the same value
+
+        dist = abs(val_file - scan_value)
+        if dist < best_dist
+            filepath = joinpath(output_dir, fname)
+            try
+                data = open(filepath, "r") do io
+                    JSON3.read(io)
+                end
+                params_val = get(data, :params, get(data, "params", nothing))
+                if params_val !== nothing && !isempty(params_val)
+                    best_params = Float64.(collect(params_val))
+                    best_val = val_file
+                    best_dist = dist
+                end
+            catch e
+                @warn "Failed to read $fname: $e"
+            end
+        end
+    end
+
+    return best_params, best_val
+end
+
+function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vector{Float64},
+                    row::Int, p::Int, nqubits::Int,
+                    maxiter::Int, measure_first::Symbol=:Z, seed::Int=123, verbose::Bool=true,
+                    output_dir::String, share_params::Bool=true, conv_step::Int=100, samples::Int=10000,
+                    n_runs::Int=44, abstol::Float64=0.01, sigma0::Float64=1.0,
+                    popsize::Union{Int,Nothing}=nothing, zz_weight::Float64=0.0,
+                    model_params...)
+
     # Create output directory if it doesn't exist
     !isdir(output_dir) && mkpath(output_dir)
-    
-    n = length(g_values)
+
+    # Separate fixed model params (everything except the scan parameter)
+    fixed_params = Dict{Symbol,Any}(model_params)
+
+    n = length(scan_values)
     results = Vector{CircuitOptimizationResult}(undef, n)
-    
-    verbose && println("Running $(n) simulations in parallel with $(Threads.nthreads()) threads...")
+
+    verbose && println("Running $(n) simulations for model=$(model), scanning $(scan_param)...")
     verbose && println("Results will be saved to: $output_dir/")
-    
+
     for i in 1:n
-        g = g_values[i]
-        verbose && println("Thread $(Threads.threadid()): Starting simulation for g = $(g)")
-        
-        Random.seed!(seed)  # Different seed for each thread
-        params = rand(2*nqubits*p)
-        result = optimize_circuit(params, J, g, p, row, nqubits; 
-                                  maxiter=maxiter, 
+        val = scan_values[i]
+
+        # Try to warm-start from the closest existing result file in output_dir
+        warm_params, warm_val = _find_warm_start_params(output_dir, model, scan_param, val, row, p, nqubits;
+                                                         fixed_params...)
+        @show warm_val
+        if warm_params !== nothing
+            params = warm_params
+            verbose && println("Starting $(scan_param) = $(val), warm-started from saved $(scan_param) = $(warm_val)")
+        else
+            Random.seed!(seed)
+            params = rand(2*nqubits*p)
+            verbose && println("Starting $(scan_param) = $(val), random initialization (seed=$seed)")
+        end
+
+        # Build model kwargs: fixed params + scan param
+        model_kw = merge(fixed_params, Dict{Symbol,Any}(scan_param => val))
+
+        result = optimize_circuit(params, p, row, nqubits;
+                                  model=model,
+                                  maxiter=maxiter,
                                   measure_first=measure_first,
                                   share_params=share_params,
                                   conv_step=conv_step,
                                   samples=samples,
                                   n_runs=n_runs,
-                                  abstol=abstol,sigma0=sigma0, popsize=popsize,zz_weight=zz_weight)
-        
+                                  abstol=abstol,
+                                  sigma0=sigma0,
+                                  popsize=popsize,
+                                  zz_weight=zz_weight,
+                                  model_kw...)
+
         results[i] = result
-        
+
         # Save result to JSON
-        filename = joinpath(output_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
-        input_args = Dict(
-            :J => J, :g => g, :row => row, :p => p, :nqubits => nqubits,
+        fixed_str = join(["$(k)=$(v)" for (k, v) in sort(collect(fixed_params), by=first)], "_")
+        name_prefix = isempty(fixed_str) ? "circuit_$(model)" : "circuit_$(model)_$(fixed_str)"
+        filename = joinpath(output_dir, "$(name_prefix)_$(scan_param)=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
+        input_args = Dict{Symbol,Any}(
+            :model => model, :scan_param => scan_param, scan_param => val,
+            :row => row, :p => p, :nqubits => nqubits,
             :maxiter => maxiter, :measure_first => measure_first,
-            :share_params => share_params, :seed => seed
+            :share_params => share_params, :seed => seed,
+            :warm_started_from => warm_val
         )
-        save_result(filename, result, input_args) 
-        
-        verbose && println("Thread $(Threads.threadid()): Completed g = $(g), energy = $(result.final_cost), saved to $(basename(filename))")
+        merge!(input_args, fixed_params)
+        save_result(filename, result, input_args)
+
+        verbose && println("Completed $(scan_param) = $(val), energy = $(result.final_cost), saved to $(basename(filename))")
     end
 end
 
+# ── Example: TFIM ──
+ simulation(;
+     model="heisenberg_j1j2",
+     scan_param=:J2,
+     scan_values=[0.0],
+     J=1.0,
+     row=3, p=3, nqubits=3,
+     maxiter=1000,
+     measure_first=:Z,
+     seed=123,
+     verbose=true,
+     output_dir=joinpath(@__DIR__, "results"),
+     share_params=true,
+     conv_step=100,
+     samples=10000,
+     n_runs=1,
+     abstol=1e-5,
+     sigma0=1.0,
+     popsize=nothing,
+     zz_weight=0.0
+ )
+
+# ── Example: Heisenberg J1-J2 ──
+# simulation(;
+#     model="heisenberg_j1j2",
+#     scan_param=:J2,
+#     scan_values=[0.0, 0.25, 0.5],
+#     J1=1.0,
+#     row=3, p=3, nqubits=3,
+#     maxiter=500,
+#     measure_first=:Z,
+#     seed=123,
+#     verbose=true,
+#     output_dir=joinpath(@__DIR__, "results_heisenberg"),
+#     share_params=true,
+#     conv_step=1000,
+#     samples=40000,
+#     n_runs=1,
+#     abstol=1e-5,
+#     sigma0=1.0,
+#     popsize=nothing,
+#     zz_weight=0.0
+# )
+
 simulation(;
+    model="tfim",
+    scan_param=:g,
+    scan_values=[0.0],
     J=1.0,
-    g_values=[2.5],
-    row=3,
-    p=3,
-    nqubits=3,
-    maxiter=800,
-    measure_first=:Z,
-    seed=123,
-    verbose=true,
-    output_dir=joinpath(@__DIR__, "results"),
-    share_params=true,
-    conv_step=1000,
-    samples=40000,
-    n_runs=1,
-    abstol=1e-5,
-    sigma0=1.0,
-    popsize=nothing,
-    zz_weight=0.0)
-
-    simulation(;
-    J=1.0,
-    g_values=[0.5],
     row=3,
     p=3,
     nqubits=3,
@@ -117,47 +221,7 @@ simulation(;
     output_dir=joinpath(@__DIR__, "results"),
     share_params=true,
     conv_step=1000,
-    samples=40000,
-    n_runs=1,
-    abstol=1e-5,
-    sigma0=1.0,
-    popsize=nothing,
-    zz_weight=0.0)
-
-    simulation(;
-    J=1.0,
-    g_values=[3.0],
-    row=3,
-    p=3,
-    nqubits=3,
-    maxiter=500,
-    measure_first=:Z,
-    seed=123,
-    verbose=true,
-    output_dir=joinpath(@__DIR__, "results"),
-    share_params=true,
-    conv_step=1000,
-    samples=40000,
-    n_runs=1,
-    abstol=1e-5,
-    sigma0=1.0,
-    popsize=nothing,
-    zz_weight=0.0)
-
-    simulation(;
-    J=1.0,
-    g_values=[4.0],
-    row=3,
-    p=3,
-    nqubits=3,
-    maxiter=500,
-    measure_first=:Z,
-    seed=123,
-    verbose=true,
-    output_dir=joinpath(@__DIR__, "results"),
-    share_params=true,
-    conv_step=1000,
-    samples=40000,
+    samples=10000,
     n_runs=1,
     abstol=1e-5,
     sigma0=1.0,
