@@ -948,12 +948,22 @@ end
 # Uncomment the block below (remove #= and =#) to run analysis examples
 
 # Analyze a single result
-J=1.0;g = 2.5; row=3 ; nqubits=3; p=3; virtual_qubits=2;D=2
+J=1.0;g = 2.0; row=3 ; nqubits=3; p=3; virtual_qubits=2;D=2
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile)
 # Reconstruct gates and analyze
+plot_magnetization_vs_g(data_dir, [0.5,1.0,1.5,2.0, 2.5,3.0,3.5,4.0];
+                                  nqubits_list=[3],
+                                  row=3, J=1.0, p=3,
+                                  save_path="project/results/figures/magnetization_vs_g.pdf")
+
+plot_energy_variance_vs_samples(datafile;
+                                  sample_sizes=[1000, 2000,3000,4000,5000,6000,7000,8000,9000,10000],
+                                  n_trials=100,
+                                  conv_step=500,
+                                  save_path="project/results/figures/energy_variance_vs_samples.pdf")
 
 plot_energy_error_vs_g(data_dir, [1.0,1.5,2.0, 2.5,3.0,3.5,4.0]; pepskit_file=referfile, dmrg_file=joinpath(data_dir,"dmrg_results_1003.json"), save_path="project/results/figures/energy_error_vs_g.pdf")
 plot_correlation_vs_g(data_dir, [1.0,1.5,2.0,2.5,3.0,3.5,4.0];

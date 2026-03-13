@@ -1188,6 +1188,127 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
     return fig
 end
 
+"""
+    plot_energy_variance_vs_samples(filename; sample_sizes, n_trials, conv_step,
+                                    row, J, g, p, nqubits, save_path)
+
+Plot energy variance vs number of samples, using exact contraction energy as the
+true mean. For each sample size, run `n_trials` independent sampling runs, compute
+the sampled energy for each, then plot variance and MSE.
+
+# Arguments
+- `filename::String`: Path to result JSON file (loads optimized parameters)
+- `sample_sizes::Vector{Int}`: Sample sizes to test (default: logspaced)
+- `n_trials::Int=30`: Number of independent trials per sample size
+- `conv_step::Int=500`: Burn-in steps for sampling
+- `save_path::Union{String,Nothing}=nothing`: Path to save figure
+
+# Returns
+- `(fig, data)` with data = (sample_sizes, variances, mses, exact_energy)
+"""
+function plot_energy_variance_vs_samples(filename::String;
+                                          sample_sizes::Vector{Int}=[100, 500, 1000, 5000, 10000, 50000],
+                                          n_trials::Int=30,
+                                          conv_step::Int=500,
+                                          save_path::Union{String,Nothing}=nothing)
+    result, input_args = load_result(filename)
+
+    row = input_args[:row]
+    nqubits = get(input_args, :nqubits, 3)
+    file_p = get(input_args, :p, 3)
+    J = get(input_args, :J, 1.0)
+    g = get(input_args, :g, 0.0)
+    share_params = get(input_args, :share_params, true)
+    virtual_qubits = (nqubits - 1) ÷ 2
+
+    gates = build_unitary_gate(result.final_params, file_p, row, nqubits; share_params=share_params)
+
+    # Exact energy from transfer matrix
+    X_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, :X; position=i)) for i in 1:row)
+    if row > 1
+        ZZ_vert_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, Dict(i => :Z, i+1 => :Z))) for i in 1:row-1)
+    else
+        ZZ_vert_exact = 0.0
+    end
+    ZZ_horiz_vals = Float64[]
+    for pos in 1:row
+        corrs = correlation_function(gates, row, virtual_qubits, :Z, 1; position=pos)
+        if haskey(corrs, 1)
+            push!(ZZ_horiz_vals, real(corrs[1]))
+        end
+    end
+    ZZ_horiz_exact = isempty(ZZ_horiz_vals) ? 0.0 : mean(ZZ_horiz_vals)
+    E_exact = -g * X_exact - J * (row == 1 ? ZZ_horiz_exact : ZZ_vert_exact + ZZ_horiz_exact)
+
+    println("Exact energy: $(round(E_exact, digits=8))")
+
+    variances = Float64[]
+    std_errors = Float64[]
+
+    for ns in sample_sizes
+        energies = Float64[]
+        for trial in 1:n_trials
+            _, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits;
+                                                              conv_step=conv_step,
+                                                              samples=ns,
+                                                              measure_first=:Z)
+            # Discard burn-in aligned to row boundary
+            discard = conv_step + row - 1 - (conv_step - 1) % row
+            z_raw = Z_samples[discard+1:end]
+            z_len = length(z_raw) - length(z_raw) % row
+            z_use = z_raw[1:z_len]
+
+            x_raw = length(X_samples) > discard ? X_samples[discard+1:end] : X_samples
+            x_len = length(x_raw) - length(x_raw) % row
+            x_use = x_raw[1:x_len]
+
+            E_samp = compute_energy(x_use, z_use, g, J, row)
+            push!(energies, E_samp)
+        end
+        # Variance of sampled energy around the exact mean
+        squared_errors = (energies .- E_exact).^2
+        v = mean(squared_errors)
+        # Standard error of the variance estimate: SE = std(squared_errors) / sqrt(n_trials)
+        se = std(squared_errors) / sqrt(n_trials)
+        push!(variances, v)
+        push!(std_errors, se)
+        println("samples=$ns: Var=$(round(v, digits=6)) ± $(round(se, digits=6)), ⟨E⟩=$(round(mean(energies), digits=6))")
+    end
+
+    fig = Figure(size=(700, 500))
+    ax = Axis(fig[1, 1],
+              xlabel="Number of samples",
+              ylabel="Var(E)",
+              title="Energy variance vs samples (g=$g, row=$row, nqubits=$nqubits)",
+              xscale=log10, yscale=log10)
+
+    errorbars!(ax, Float64.(sample_sizes), variances, std_errors, color=:gray, whiskerwidth=8)
+    scatter!(ax, Float64.(sample_sizes), variances, markersize=10, color=:blue)
+    lines!(ax, Float64.(sample_sizes), variances, color=:blue, linewidth=2)
+
+    # 1/N fit line
+    if length(sample_sizes) > 1
+        log_N = log.(sample_sizes)
+        log_var = log.(variances)
+        c = mean(log_var .+ log_N)
+        a = exp(c)
+        N_range = range(minimum(sample_sizes), maximum(sample_sizes), length=50)
+        fit_line = a ./ N_range
+        lines!(ax, collect(N_range), fit_line, linewidth=1.5, linestyle=:dash, color=:red,
+               label="1/N (a=$(round(a, digits=2)))")
+    end
+
+    axislegend(ax, position=:rt)
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        println("\nFigure saved to: $save_path")
+    end
+
+    return fig, (sample_sizes=sample_sizes, variances=variances, std_errors=std_errors, exact_energy=E_exact)
+end
+
 # ============================================================================
 # plot_correlation_function
 # ============================================================================
@@ -1653,6 +1774,110 @@ function plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
         energies_dmrg = energies_dmrg,
         errors = errors
     )
+
+    return fig, data
+end
+
+"""
+    plot_magnetization_vs_g(data_dir, g_values; nqubits_list, row, J, p, save_path)
+
+Plot ⟨X⟩ and ⟨Z⟩ vs transverse field g (two subplots), comparing different nqubits.
+
+Auto-discovers result files by trying patterns with and without `p` in the filename.
+
+# Arguments
+- `data_dir::String`: Directory containing result JSON files
+- `g_values::Vector{Float64}`: g values to plot
+- `nqubits_list::Vector{Int}`: nqubits values to compare (default `[3, 5]`)
+- `row::Int=3`: Number of rows
+- `J::Float64=1.0`: Coupling strength
+- `p::Int=3`: Preferred circuit depth
+- `save_path::Union{String,Nothing}=nothing`: Path to save figure
+
+# Returns
+- `(fig, data)` where data maps nqubits => (g_values, X_vals, Z_vals)
+"""
+function plot_magnetization_vs_g(data_dir::String, g_values::Vector{Float64};
+                                  nqubits_list::Vector{Int}=[3, 5],
+                                  row::Int=3, J::Float64=1.0, p::Int=3,
+                                  save_path::Union{String,Nothing}=nothing)
+    colors = [:blue, :red, :purple, :orange, :teal]
+    markers = [:circle, :diamond, :utriangle, :rect, :star5]
+
+    data = Dict{Int, NamedTuple{(:g_values, :X_vals, :Z_vals), Tuple{Vector{Float64}, Vector{Float64}, Vector{Float64}}}}()
+
+    fig = Figure(size=(900, 800))
+    ax_x = Axis(fig[1, 1],
+                xlabel="Transverse field g",
+                ylabel="⟨X⟩",
+                title="$(row)×∞ TFIM, J=$(J)")
+    ax_z = Axis(fig[2, 1],
+                xlabel="Transverse field g",
+                ylabel="⟨Z⟩")
+
+    for (idx, nq) in enumerate(nqubits_list)
+        D = 2^((nq - 1) ÷ 2)
+        g_found = Float64[]
+        x_found = Float64[]
+        z_found = Float64[]
+
+        for g in g_values
+            candidates = [
+                joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nq).json"),
+                joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_nqubits=$(nq).json"),
+                joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nq).json"),
+            ]
+            filename = nothing
+            for c in candidates
+                if isfile(c)
+                    filename = c
+                    break
+                end
+            end
+            if isnothing(filename)
+                @warn "No file for nqubits=$nq, g=$g"
+                continue
+            end
+
+            result, input_args = load_result(filename)
+            file_p = get(input_args, :p, p)
+            virtual_qubits = (nq - 1) ÷ 2
+            share_params = get(input_args, :share_params, true)
+            gates = build_unitary_gate(result.final_params, file_p, row, nq; share_params=share_params)
+
+            X_avg = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, :X; position=i)) for i in 1:row)
+            Z_avg = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, :Z; position=i)) for i in 1:row)
+
+            push!(g_found, g)
+            push!(x_found, X_avg)
+            push!(z_found, Z_avg)
+            println("nqubits=$nq (D=$D), g=$g: ⟨X⟩ = $(round(X_avg, digits=6)), ⟨Z⟩ = $(round(Z_avg, digits=6))")
+        end
+
+        if !isempty(g_found)
+            c = colors[mod1(idx, length(colors))]
+            m = markers[mod1(idx, length(markers))]
+            order = sortperm(g_found)
+            lbl = "nqubits=$nq (D=$D)"
+
+            lines!(ax_x, g_found[order], x_found[order], label=lbl, color=c, linewidth=2)
+            scatter!(ax_x, g_found[order], x_found[order], color=c, markersize=12, marker=m)
+
+            lines!(ax_z, g_found[order], z_found[order], label=lbl, color=c, linewidth=2)
+            scatter!(ax_z, g_found[order], z_found[order], color=c, markersize=12, marker=m)
+
+            data[nq] = (g_values=g_found[order], X_vals=x_found[order], Z_vals=z_found[order])
+        end
+    end
+
+    axislegend(ax_x, position=:lt)
+    axislegend(ax_z, position=:rt)
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        println("\nFigure saved to: $save_path")
+    end
 
     return fig, data
 end
