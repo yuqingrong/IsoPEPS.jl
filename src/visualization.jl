@@ -943,6 +943,9 @@ function plot_expectation_values(result::CircuitOptimizationResult;
                                   nqubits::Union{Int,Nothing}=nothing,
                                   J::Float64=1.0,
                                   g::Union{Real,Nothing}=nothing,
+                                  model::String="tfim",
+                                  J1::Float64=1.0,
+                                  J2::Float64=0.0,
                                   title::String="Expectation Values",
                                   save_path::Union{String,Nothing}=nothing,
                                   datafile::Union{String,Nothing}=nothing,
@@ -979,108 +982,174 @@ function plot_expectation_values(result::CircuitOptimizationResult;
         end
     end
 
-    Z_sample = isempty(Z_samples) ? nothing : mean(Z_samples)
-    X_sample = isempty(X_samples) ? nothing : mean(X_samples)
-    Z_stderr = isempty(Z_samples) ? nothing : std(Z_samples) / sqrt(length(Z_samples))
-    X_stderr = isempty(X_samples) ? nothing : std(X_samples) / sqrt(length(X_samples))
+    labels = String[]; sample_values = Float64[]; exact_values = Float64[]; sample_errors = Float64[]
+    can_compute_exact = false
 
-    ZZ_vert_sample = nothing; ZZ_horiz_sample = nothing; energy_sample = nothing
-    ZZ_vert_stderr = nothing; ZZ_horiz_stderr = nothing; energy_stderr = nothing
+    if model == "heisenberg_j1j2"
+        # --- Heisenberg J1-J2 branch: sample-based correlations only ---
+        Y_samples = result.final_Y_samples
+        N = length(Z_samples)
 
-    N = length(Z_samples)
-    if !isnothing(row) && row > 1 && N > 1
-        ZZ_vert_pairs = [Z_samples[i] * Z_samples[i+1] for i in 1:N-1 if i % row != 0]
-        ZZ_vert_sample = mean(ZZ_vert_pairs)
-        ZZ_vert_stderr = std(ZZ_vert_pairs) / sqrt(length(ZZ_vert_pairs))
-    end
-    if !isnothing(row) && N > row
-        ZZ_horiz_pairs = [Z_samples[i] * Z_samples[i+row] for i in 1:N-row]
-        ZZ_horiz_sample = mean(ZZ_horiz_pairs)
-        ZZ_horiz_stderr = std(ZZ_horiz_pairs) / sqrt(length(ZZ_horiz_pairs))
-    end
-    if !isnothing(g) && !isnothing(row) && N > 0 && !isempty(X_samples)
-        energy_sample = compute_energy(X_samples, Z_samples, g, J, row)
-        if row == 1
-            ZZ_stderr_total = isnothing(ZZ_horiz_stderr) ? 0.0 : ZZ_horiz_stderr
-        else
-            ZZ_vert_se = isnothing(ZZ_vert_stderr) ? 0.0 : ZZ_vert_stderr
-            ZZ_horiz_se = isnothing(ZZ_horiz_stderr) ? 0.0 : ZZ_horiz_stderr
-            ZZ_stderr_total = sqrt(ZZ_vert_se^2 + ZZ_horiz_se^2)
+        # Helper: compute NN correlations for a single Pauli component
+        function _nn_correlations(S, row)
+            N_s = length(S)
+            if row == 1
+                vert_val = nothing; vert_err = nothing
+                horiz_pairs = [S[i] * S[i+1] for i in 1:N_s-1]
+                horiz_val = mean(horiz_pairs)
+                horiz_err = std(horiz_pairs) / sqrt(length(horiz_pairs))
+            else
+                vert_pairs = [S[i] * S[i+1] for i in 1:N_s-1 if i % row != 0]
+                vert_val = mean(vert_pairs)
+                vert_err = std(vert_pairs) / sqrt(length(vert_pairs))
+                horiz_pairs = [S[i] * S[i+row] for i in 1:N_s-row]
+                horiz_val = mean(horiz_pairs)
+                horiz_err = std(horiz_pairs) / sqrt(length(horiz_pairs))
+            end
+            return (vert_val, vert_err, horiz_val, horiz_err)
         end
-        X_se = isnothing(X_stderr) ? 0.0 : X_stderr
-        energy_stderr = sqrt(g^2 * X_se^2 + J^2 * ZZ_stderr_total^2)
-    end
 
-    X_exact = nothing; Z_exact = nothing
-    ZZ_vert_exact = nothing; ZZ_horiz_exact = nothing; energy_exact = nothing
-
-    # Skip exact computation for large systems (nqubits >= 5) as it's very slow
-    # correlation_function becomes expensive for large Hilbert spaces
-    can_compute_exact = !isnothing(row) && !isnothing(p) && !isnothing(nqubits) && !isempty(result.final_params)
-    skip_exact_for_large_system = !isnothing(nqubits) && nqubits >= 5
-
-    if can_compute_exact && !skip_exact_for_large_system
-        virtual_qubits = (nqubits - 1) ÷ 2
-        gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=true)
-        X_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, :X; position=i)) for i in 1:row)
-        Z_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, :Z; position=i)) for i in 1:row)
-        if row > 1
-            ZZ_vert_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, Dict(i => :Z, i+1 => :Z))) for i in 1:row-1)
+        # Helper: compute NNN diagonal correlations
+        function _diag_correlations(S, row)
+            N_s = length(S)
+            diag1 = [S[i] * S[i+row+1] for i in 1:N_s-row-1 if i % row != 0]
+            diag2 = [S[i] * S[i+row-1] for i in 1:N_s-row+1 if (i-1) % row != 0]
+            all_diag = vcat(diag1, diag2)
+            return (mean(all_diag), std(all_diag) / sqrt(length(all_diag)))
         end
-        ZZ_horiz_vals = Float64[]
-        for pos in 1:row
-            correlations = correlation_function(gates, row, virtual_qubits, :Z, 1; position=pos)
-            if haskey(correlations, 1)
-                push!(ZZ_horiz_vals, real(correlations[1]))
+
+        # Energy
+        energy_sample = compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, J2, row)
+        push!(labels, "E"); push!(sample_values, energy_sample)
+        push!(exact_values, NaN); push!(sample_errors, 0.0)
+
+        # Per-component NN correlations
+        for (name, S) in [("XX", X_samples), ("YY", Y_samples), ("ZZ", Z_samples)]
+            vv, ve, hv, he = _nn_correlations(S, row)
+            if !isnothing(vv)
+                push!(labels, "⟨$(name)⟩ᵥ"); push!(sample_values, vv)
+                push!(exact_values, NaN); push!(sample_errors, ve)
+            end
+            push!(labels, "⟨$(name)⟩ₕ"); push!(sample_values, hv)
+            push!(exact_values, NaN); push!(sample_errors, he)
+        end
+
+        # NNN diagonal correlations (only when J2 ≠ 0 and row > 1)
+        if J2 != 0.0 && !isnothing(row) && row > 1
+            for (name, S) in [("XX", X_samples), ("YY", Y_samples), ("ZZ", Z_samples)]
+                dv, de = _diag_correlations(S, row)
+                push!(labels, "⟨$(name)⟩_d"); push!(sample_values, dv)
+                push!(exact_values, NaN); push!(sample_errors, de)
             end
         end
-        if !isempty(ZZ_horiz_vals)
-            ZZ_horiz_exact = mean(ZZ_horiz_vals)
+
+        plot_title = title
+        if !isnothing(row) && !isnothing(nqubits)
+            j2_str = J2 != 0.0 ? ", J2=$J2" : ""
+            plot_title = "Heisenberg Correlations: row=$row, J1=$J1$(j2_str), nqubits=$nqubits"
         end
-        if !isnothing(g) && !isnothing(ZZ_horiz_exact) && (row == 1 || !isnothing(ZZ_vert_exact))
-            energy_exact = -g*X_exact - J*(row == 1 ? ZZ_horiz_exact : ZZ_vert_exact + ZZ_horiz_exact)
+
+    else
+        # --- TFIM branch (original logic) ---
+        Z_sample = isempty(Z_samples) ? nothing : mean(Z_samples)
+        X_sample = isempty(X_samples) ? nothing : mean(X_samples)
+        Z_stderr = isempty(Z_samples) ? nothing : std(Z_samples) / sqrt(length(Z_samples))
+        X_stderr = isempty(X_samples) ? nothing : std(X_samples) / sqrt(length(X_samples))
+
+        ZZ_vert_sample = nothing; ZZ_horiz_sample = nothing; energy_sample = nothing
+        ZZ_vert_stderr = nothing; ZZ_horiz_stderr = nothing; energy_stderr = nothing
+
+        N = length(Z_samples)
+        if !isnothing(row) && row > 1 && N > 1
+            ZZ_vert_pairs = [Z_samples[i] * Z_samples[i+1] for i in 1:N-1 if i % row != 0]
+            ZZ_vert_sample = mean(ZZ_vert_pairs)
+            ZZ_vert_stderr = std(ZZ_vert_pairs) / sqrt(length(ZZ_vert_pairs))
         end
-    end
+        if !isnothing(row) && N > row
+            ZZ_horiz_pairs = [Z_samples[i] * Z_samples[i+row] for i in 1:N-row]
+            ZZ_horiz_sample = mean(ZZ_horiz_pairs)
+            ZZ_horiz_stderr = std(ZZ_horiz_pairs) / sqrt(length(ZZ_horiz_pairs))
+        end
+        if !isnothing(g) && !isnothing(row) && N > 0 && !isempty(X_samples)
+            energy_sample = compute_energy(X_samples, Z_samples, g, J, row)
+            if row == 1
+                ZZ_stderr_total = isnothing(ZZ_horiz_stderr) ? 0.0 : ZZ_horiz_stderr
+            else
+                ZZ_vert_se = isnothing(ZZ_vert_stderr) ? 0.0 : ZZ_vert_stderr
+                ZZ_horiz_se = isnothing(ZZ_horiz_stderr) ? 0.0 : ZZ_horiz_stderr
+                ZZ_stderr_total = sqrt(ZZ_vert_se^2 + ZZ_horiz_se^2)
+            end
+            X_se = isnothing(X_stderr) ? 0.0 : X_stderr
+            energy_stderr = sqrt(g^2 * X_se^2 + J^2 * ZZ_stderr_total^2)
+        end
 
-    plot_title = title
-    if !isnothing(g) && !isnothing(row) && !isnothing(nqubits)
-        plot_title = "Expectation Values: row=$row, g=$g, nqubits=$nqubits"
-    elseif !isnothing(g) && !isnothing(row)
-        plot_title = "Expectation Values: row=$row, g=$g"
-    end
+        X_exact = nothing; Z_exact = nothing
+        ZZ_vert_exact = nothing; ZZ_horiz_exact = nothing; energy_exact = nothing
 
-    labels = String[]; sample_values = Float64[]; exact_values = Float64[]; sample_errors = Float64[]
+        can_compute_exact = !isnothing(row) && !isnothing(p) && !isnothing(nqubits) && !isempty(result.final_params)
+        skip_exact_for_large_system = !isnothing(nqubits) && nqubits >= 5
 
-    if !isnothing(energy_sample)
-        push!(labels, "E")
-        push!(sample_values, energy_sample)
-        push!(exact_values, isnothing(energy_exact) ? NaN : energy_exact)
-        push!(sample_errors, isnothing(energy_stderr) ? 0.0 : energy_stderr)
-    end
-    if !isnothing(X_sample) || !isnothing(X_exact)
-        push!(labels, "⟨X⟩")
-        push!(sample_values, isnothing(X_sample) ? NaN : X_sample)
-        push!(exact_values, isnothing(X_exact) ? NaN : X_exact)
-        push!(sample_errors, isnothing(X_stderr) ? 0.0 : X_stderr)
-    end
-    if !isnothing(Z_sample) || !isnothing(Z_exact)
-        push!(labels, "⟨Z⟩")
-        push!(sample_values, isnothing(Z_sample) ? NaN : Z_sample)
-        push!(exact_values, isnothing(Z_exact) ? NaN : Z_exact)
-        push!(sample_errors, isnothing(Z_stderr) ? 0.0 : Z_stderr)
-    end
-    if !isnothing(ZZ_vert_sample) || !isnothing(ZZ_vert_exact)
-        push!(labels, "⟨ZZ⟩ᵥ")
-        push!(sample_values, isnothing(ZZ_vert_sample) ? NaN : ZZ_vert_sample)
-        push!(exact_values, isnothing(ZZ_vert_exact) ? NaN : ZZ_vert_exact)
-        push!(sample_errors, isnothing(ZZ_vert_stderr) ? 0.0 : ZZ_vert_stderr)
-    end
-    if !isnothing(ZZ_horiz_sample) || !isnothing(ZZ_horiz_exact)
-        push!(labels, "⟨ZZ⟩ₕ")
-        push!(sample_values, isnothing(ZZ_horiz_sample) ? NaN : ZZ_horiz_sample)
-        push!(exact_values, isnothing(ZZ_horiz_exact) ? NaN : ZZ_horiz_exact)
-        push!(sample_errors, isnothing(ZZ_horiz_stderr) ? 0.0 : ZZ_horiz_stderr)
-    end
+        if can_compute_exact && !skip_exact_for_large_system
+            virtual_qubits = (nqubits - 1) ÷ 2
+            gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=true)
+            X_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, :X; position=i)) for i in 1:row)
+            Z_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, :Z; position=i)) for i in 1:row)
+            if row > 1
+                ZZ_vert_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, Dict(i => :Z, i+1 => :Z))) for i in 1:row-1)
+            end
+            ZZ_horiz_vals = Float64[]
+            for pos in 1:row
+                correlations = correlation_function(gates, row, virtual_qubits, :Z, 1; position=pos)
+                if haskey(correlations, 1)
+                    push!(ZZ_horiz_vals, real(correlations[1]))
+                end
+            end
+            if !isempty(ZZ_horiz_vals)
+                ZZ_horiz_exact = mean(ZZ_horiz_vals)
+            end
+            if !isnothing(g) && !isnothing(ZZ_horiz_exact) && (row == 1 || !isnothing(ZZ_vert_exact))
+                energy_exact = -g*X_exact - J*(row == 1 ? ZZ_horiz_exact : ZZ_vert_exact + ZZ_horiz_exact)
+            end
+        end
+
+        plot_title = title
+        if !isnothing(g) && !isnothing(row) && !isnothing(nqubits)
+            plot_title = "Expectation Values: row=$row, g=$g, nqubits=$nqubits"
+        elseif !isnothing(g) && !isnothing(row)
+            plot_title = "Expectation Values: row=$row, g=$g"
+        end
+
+        if !isnothing(energy_sample)
+            push!(labels, "E")
+            push!(sample_values, energy_sample)
+            push!(exact_values, isnothing(energy_exact) ? NaN : energy_exact)
+            push!(sample_errors, isnothing(energy_stderr) ? 0.0 : energy_stderr)
+        end
+        if !isnothing(X_sample) || !isnothing(X_exact)
+            push!(labels, "⟨X⟩")
+            push!(sample_values, isnothing(X_sample) ? NaN : X_sample)
+            push!(exact_values, isnothing(X_exact) ? NaN : X_exact)
+            push!(sample_errors, isnothing(X_stderr) ? 0.0 : X_stderr)
+        end
+        if !isnothing(Z_sample) || !isnothing(Z_exact)
+            push!(labels, "⟨Z⟩")
+            push!(sample_values, isnothing(Z_sample) ? NaN : Z_sample)
+            push!(exact_values, isnothing(Z_exact) ? NaN : Z_exact)
+            push!(sample_errors, isnothing(Z_stderr) ? 0.0 : Z_stderr)
+        end
+        if !isnothing(ZZ_vert_sample) || !isnothing(ZZ_vert_exact)
+            push!(labels, "⟨ZZ⟩ᵥ")
+            push!(sample_values, isnothing(ZZ_vert_sample) ? NaN : ZZ_vert_sample)
+            push!(exact_values, isnothing(ZZ_vert_exact) ? NaN : ZZ_vert_exact)
+            push!(sample_errors, isnothing(ZZ_vert_stderr) ? 0.0 : ZZ_vert_stderr)
+        end
+        if !isnothing(ZZ_horiz_sample) || !isnothing(ZZ_horiz_exact)
+            push!(labels, "⟨ZZ⟩ₕ")
+            push!(sample_values, isnothing(ZZ_horiz_sample) ? NaN : ZZ_horiz_sample)
+            push!(exact_values, isnothing(ZZ_horiz_exact) ? NaN : ZZ_horiz_exact)
+            push!(sample_errors, isnothing(ZZ_horiz_stderr) ? 0.0 : ZZ_horiz_stderr)
+        end
+    end  # model branch
 
     if isempty(labels)
         @warn "No expectation values to plot"

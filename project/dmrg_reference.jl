@@ -12,7 +12,7 @@ Returns a dictionary mapping (i,j) -> site_index.
 # Example for 3x3 lattice:
 ```
 1 → 2 → 3
-    ↓
+        ↓
 6 ← 5 ← 4
 ↓
 7 → 8 → 9
@@ -615,7 +615,7 @@ end
 # Choose which model to run: "tfim" or "heisenberg_j1j2"
 model_choice = "heisenberg_j1j2"  # <-- change this to switch model
 
-Lx = 100; Ly = 3;
+Lx = 100; Ly = 3;D=16
 
 if model_choice == "tfim"
     # --- Transverse Field Ising Model ---
@@ -626,11 +626,11 @@ if model_choice == "tfim"
         scan_param = :g,
         scan_values = 0.0:0.25:4.0,
         J = 1.0,
-        maxdim = 2, cutoff = 1e-10, nsweeps = 10,
-        output_file = joinpath(@__DIR__, "results", "dmrg_tfim_$(Lx)x$(Ly).json")
+        maxdim = D, cutoff = 1e-10, nsweeps = 10,
+        output_file = joinpath(@__DIR__, "results", "dmrg_tfim_$(Lx)x$(Ly)_D=$(D).json")
     )
 
-    fig = plot_dmrg_results(joinpath(@__DIR__, "results", "dmrg_tfim_$(Lx)x$(Ly).json"); save_path=joinpath(@__DIR__, "results", "figures", "dmrg_tfim_$(Lx)x$(Ly).pdf"))
+    fig = plot_dmrg_results(joinpath(@__DIR__, "results", "dmrg_tfim_$(Lx)x$(Ly)_D=$(D).json"); save_path=joinpath(@__DIR__, "results", "figures", "dmrg_tfim_$(Lx)x$(Ly)_D=$(D).pdf"))
     display(fig)
 
 elseif model_choice == "heisenberg_j1j2"
@@ -640,13 +640,13 @@ elseif model_choice == "heisenberg_j1j2"
         model = "heisenberg_j1j2",
         Lx = Lx, Ly = Ly,
         scan_param = :J2,
-        scan_values = 0.0:0.1:1.0,
+        scan_values = 0.0:0.5:1.0,
         J1 = 1.0,
-        maxdim = 2, cutoff = 1e-10, nsweeps = 10,
-        output_file = joinpath(@__DIR__, "results", "dmrg_j1j2_$(Lx)x$(Ly).json")
+        maxdim = D, cutoff = 1e-10, nsweeps = 10,
+        output_file = joinpath(@__DIR__, "results", "dmrg_j1j2_$(Lx)x$(Ly)_D=$(D).json")
     )
 
-    fig = plot_dmrg_results(joinpath(@__DIR__, "results", "dmrg_j1j2_$(Lx)x$(Ly).json"); save_path=joinpath(@__DIR__, "results", "figures", "dmrg_j1j2_$(Lx)x$(Ly).pdf"))
+    fig = plot_dmrg_results(joinpath(@__DIR__, "results", "dmrg_j1j2_$(Lx)x$(Ly)_D=$(D).json"); save_path=joinpath(@__DIR__, "results", "figures", "dmrg_j1j2_$(Lx)x$(Ly)_D=$(D).pdf"))
     display(fig)
 end
 

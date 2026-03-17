@@ -99,7 +99,7 @@ function transfer_matrix_ITensor end
 export sample_quantum_channel, track_convergence_to_steady_state, estimate_correlation_length_from_sampling, estimate_correlation_length_exact
 
 # Gate Construction & Energy
-export build_unitary_gate, compute_energy, compute_heisenberg_energy
+export build_unitary_gate, build_unitary_gate_2x2, compute_energy, compute_heisenberg_energy
 
 # Optimization / Training
 export CircuitOptimizationResult, ExactOptimizationResult, ManifoldOptimizationResult
@@ -107,6 +107,7 @@ export optimize_circuit, optimize_exact, optimize_manifold, initialize_tfim_para
 
 # Exact Tensor Contraction - Transfer Matrix
 export compute_transfer_spectrum, compute_single_transfer
+export get_combined_transfer_matrix, compute_transfer_spectrum_2x2
 export contract_transfer_matrix, gates_to_tensors, get_transfer_matrix, get_physical_channel
 export build_transfer_code, build_physical_channel_code, apply_transfer_matvec
 export get_transfer_matrix_with_operator, compute_correlation_coefficients
@@ -115,7 +116,7 @@ export reshape_to_mps, spectrum_MPSKit, transfer_matrix_ITensor
 
 # Exact Tensor Contraction - Observables
 export compute_X_expectation, compute_Z_expectation, compute_ZZ_expectation, compute_single_expectation
-export compute_exact_energy, compute_exact_heisenberg_energy, intercolumn_correlation
+export compute_exact_energy, compute_exact_heisenberg_energy, compute_exact_heisenberg_energy_2x2, intercolumn_correlation
 export correlation_function, expect
 
 # Reference Implementations (loaded via extensions)

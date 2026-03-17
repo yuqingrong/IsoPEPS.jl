@@ -28,6 +28,9 @@ function analyze_result(filename::String; pepskit_results_file::Union{String,Not
     p = get(input_args, :p, nothing)
     nqubits = get(input_args, :nqubits, nothing)
     share_params = get(input_args, :share_params, true)
+    model = get(input_args, :model, "tfim")
+    J1 = Float64(get(input_args, :J1, 1.0))
+    J2 = Float64(get(input_args, :J2, 0.0))
     
     if !isnothing(g)
         println("\nModel parameters:")
@@ -52,6 +55,7 @@ function analyze_result(filename::String; pepskit_results_file::Union{String,Not
     # For nqubits=5, this can take 10-30 minutes. Set datafile=nothing to skip.
     skip_resample = (nqubits >= 5)  # Skip resampling for large systems
     fig_exp = plot_expectation_values(result; g=g, J=J, row=row, p=p, nqubits=nqubits, use_exact=use_exact,
+                                      model=model, J1=J1, J2=J2,
                                       datafile=skip_resample ? nothing : filename)
     display(fig_exp)
     
@@ -948,9 +952,9 @@ end
 # Uncomment the block below (remove #= and =#) to run analysis examples
 
 # Analyze a single result
-J=1.0;g = 1.0; row=3 ; nqubits=3; p=3; virtual_qubits=2;D=2
+J=1.0;g = 1.0; row=4 ; nqubits=3; p=3; virtual_qubits=2;D=2
 data_dir = joinpath(@__DIR__, "results")
-datafile = joinpath(data_dir, "circuit_J=1.0_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
+datafile = joinpath(data_dir, "circuit_heisenberg_j1j2_J1=1.0_J2=0.0_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile)
 # Reconstruct gates and analyze

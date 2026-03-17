@@ -433,8 +433,63 @@ function _build_transfer_contraction_code(A_tensors, row, total_qubits; optimize
 end
 
 """Internal helper to apply transfer matrix to vector"""
-_apply_transfer_to_vector(code, tensor_ket, tensor_bra, v_tensor, total_qubits) = 
+_apply_transfer_to_vector(code, tensor_ket, tensor_bra, v_tensor, total_qubits) =
     apply_transfer_matvec(code, tensor_ket, tensor_bra, v_tensor, total_qubits)
+
+# =============================================================================
+# 2×2 Unit Cell: Combined Transfer Matrix
+# =============================================================================
+
+"""
+    get_combined_transfer_matrix(gates_odd, gates_even, row, virtual_qubits)
+
+Build the combined transfer matrix T_combined = T_odd * T_even for a 2-column unit cell.
+
+# Returns
+- `(T_combined, T_odd, T_even)`: The product and individual transfer matrices
+"""
+function get_combined_transfer_matrix(gates_odd, gates_even, row, virtual_qubits)
+    T_odd  = get_transfer_matrix(gates_odd, row, virtual_qubits)
+    T_even = get_transfer_matrix(gates_even, row, virtual_qubits)
+    return T_odd * T_even, T_odd, T_even
+end
+
+"""
+    compute_transfer_spectrum_2x2(gates_odd, gates_even, row, nqubits; num_eigenvalues=2)
+
+Compute the transfer matrix spectrum for a 2-column unit cell.
+
+The combined transfer matrix is T = T_odd * T_even. Its eigenvalues give the
+correlation length of the 2-column periodic structure.
+
+# Returns
+- `rho`: Fixed point density matrix
+- `gap`: Spectral gap = -log|λ₂/λ₁|
+- `eigenvalues`: Sorted eigenvalue magnitudes
+- `eigenvalues_raw`: Raw complex eigenvalues
+"""
+function compute_transfer_spectrum_2x2(gates_odd, gates_even, row, nqubits;
+                                        num_eigenvalues=2)
+    virtual_qubits = (nqubits - 1) ÷ 2
+    T_combined, _, _ = get_combined_transfer_matrix(gates_odd, gates_even, row, virtual_qubits)
+
+    eig_result = eigen(T_combined)
+    sorted_idx = sortperm(abs.(eig_result.values), rev=true)
+    eigenvalues_raw = eig_result.values[sorted_idx]
+    eigenvalues = abs.(eigenvalues_raw)
+
+    gap = length(eigenvalues) > 1 ? -log(eigenvalues[2] / eigenvalues[1]) : Inf
+
+    bond_dim = 2^virtual_qubits
+    total_legs = row + 1
+    matrix_size = bond_dim^(2 * total_legs)
+    fixed_point = reshape(eig_result.vectors[:, sorted_idx[1]],
+                          Int(sqrt(matrix_size)), Int(sqrt(matrix_size)))
+    rho = fixed_point ./ tr(fixed_point)
+
+    n = min(num_eigenvalues, length(eigenvalues))
+    return rho, gap, eigenvalues[1:n], eigenvalues_raw[1:n]
+end
 
 
 # =============================================================================

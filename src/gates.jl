@@ -99,6 +99,53 @@ function build_unitary_gate(params, p, row, nqubits; share_params=true)
 end
 
 """
+    build_unitary_gate_2x2(params, p, row, nqubits)
+
+Build a 2×2 unit cell of unitary gates (A, B, C, D) and tile vertically for `row` rows.
+
+The 4 gates tile the lattice as:
+    odd columns:  [A, B, A, B, ...]  (rows 1, 2, 3, 4, ...)
+    even columns: [C, D, C, D, ...]
+
+# Arguments
+- `params`: Parameter vector of length `4 * 3 * nqubits * p`
+- `p`: Number of layers per gate
+- `row`: Number of rows
+- `nqubits`: Number of qubits per gate
+
+# Returns
+- `(gates_odd, gates_even)`: Tuple of two `Vector{Matrix{ComplexF64}}`, each of length `row`
+"""
+function build_unitary_gate_2x2(params, p, row, nqubits)
+    ppq = PARAMS_PER_QUBIT_PER_LAYER  # 3
+    chunk = ppq * nqubits * p
+    @assert length(params) >= 4 * chunk "Need at least $(4*chunk) parameters for 2×2 unit cell"
+
+    dim = 2^nqubits
+    function _build_gate(par)
+        G = Matrix{ComplexF64}(I, dim, dim)
+        for r in 1:p
+            G *= _build_layer(par, r, nqubits)
+        end
+        @assert G * G' ≈ I atol=1e-5 "Gate is not unitary"
+        return G
+    end
+
+    # Build the 4 unit-cell gates: A, B, C, D
+    A = _build_gate(params[1:chunk])
+    B = _build_gate(params[chunk+1:2*chunk])
+    C = _build_gate(params[2*chunk+1:3*chunk])
+    D = _build_gate(params[3*chunk+1:4*chunk])
+
+    # Tile vertically: odd cols = [A,B,A,B,...], even cols = [C,D,C,D,...]
+    ab = [A, B]
+    cd = [C, D]
+    gates_odd  = Matrix{ComplexF64}[ab[mod1(i, 2)] for i in 1:row]
+    gates_even = Matrix{ComplexF64}[cd[mod1(i, 2)] for i in 1:row]
+    return gates_odd, gates_even
+end
+
+"""
 Build a single layer: raw Rx·Ry·Rz rotations ⊗ cached CNOT product.
 No Yao objects created — pure matrix arithmetic.
 """
@@ -226,7 +273,6 @@ function compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, J2, row)
     SS_horiz = 0.0
     for S in all_samples
         v, h = _correlations(S, row)
-        @show v, h
         SS_vert += v
         SS_horiz += h
     end

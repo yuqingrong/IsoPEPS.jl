@@ -51,7 +51,7 @@ function _find_warm_start_params(output_dir, model, scan_param, scan_value, row,
     # Filename format: circuit_{model}_{fixed_params}_{scan_param}={value}_row={row}_p={p}_nqubits={nqubits}.json
     fixed_str = join(["$(k)=$(v)" for (k, v) in sort(collect(fixed_params), by=first)], "_")
     prefix = isempty(fixed_str) ? "circuit_$(model)_$(scan_param)=" : "circuit_$(model)_$(fixed_str)_$(scan_param)="
-    suffix = "_row=$(row)_p=$(p)_nqubits=$(nqubits).json"
+    suffix = "_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json" # TODO: not always true
 
     best_params = nothing
     best_val = nothing
@@ -95,6 +95,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
                     output_dir::String, share_params::Bool=true, conv_step::Int=100, samples::Int=10000,
                     n_runs::Int=44, abstol::Float64=0.01, sigma0::Float64=1.0,
                     popsize::Union{Int,Nothing}=nothing, zz_weight::Float64=0.0,
+                    unit_cell::Symbol=:single,
                     model_params...)
 
     # Create output directory if it doesn't exist
@@ -121,7 +122,8 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
             verbose && println("Starting $(scan_param) = $(val), warm-started from saved $(scan_param) = $(warm_val)")
         else
             Random.seed!(seed)
-            params = rand(3*nqubits*p)
+            n_params = unit_cell == :two_by_two ? 4 * 3 * nqubits * p : 3 * nqubits * p
+            params = rand(n_params)
             verbose && println("Starting $(scan_param) = $(val), random initialization (seed=$seed)")
         end
 
@@ -140,6 +142,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
                                   sigma0=sigma0,
                                   popsize=popsize,
                                   zz_weight=zz_weight,
+                                  unit_cell=unit_cell,
                                   model_kw...)
 
         results[i] = result
@@ -147,7 +150,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
         # Save result to JSON
         fixed_str = join(["$(k)=$(v)" for (k, v) in sort(collect(fixed_params), by=first)], "_")
         name_prefix = isempty(fixed_str) ? "circuit_$(model)" : "circuit_$(model)_$(fixed_str)"
-        filename = joinpath(output_dir, "$(name_prefix)_$(scan_param)=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
+        filename = joinpath(output_dir, "$(name_prefix)_$(scan_param)=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json")
         input_args = Dict{Symbol,Any}(
             :model => model, :scan_param => scan_param, scan_param => val,
             :row => row, :p => p, :nqubits => nqubits,
@@ -166,22 +169,23 @@ end
  simulation(;
      model="heisenberg_j1j2",
      scan_param=:J2,
-     scan_values=[0.5],
-     J=1.0,
-     row=3, p=3, nqubits=3,
-     maxiter=500,
+     scan_values=[1.0],
+     J1=1.0,
+     row=4, p=3, nqubits=3,
+     maxiter=1000,
      measure_first=:Z,
      seed=123,
      verbose=true,
      output_dir=joinpath(@__DIR__, "results"),
      share_params=true,
      conv_step=100,
-     samples=1000,
+     samples=10000,
      n_runs=1,
      abstol=1e-5,
      sigma0=1.0,
      popsize=nothing,
-     zz_weight=0.0
+     zz_weight=0.0,
+     unit_cell=:two_by_two
  )
 
 # ── Example: Heisenberg J1-J2 ──
@@ -211,8 +215,8 @@ simulation(;
     scan_param=:g,
     scan_values=[0.0],
     J=1.0,
-    row=3,
-    p=3,
+    row=4,
+    p=4,
     nqubits=3,
     maxiter=500,
     measure_first=:Z,
@@ -220,7 +224,7 @@ simulation(;
     verbose=true,
     output_dir=joinpath(@__DIR__, "results"),
     share_params=true,
-    conv_step=1000,
+    conv_step=100,
     samples=10000,
     n_runs=1,
     abstol=1e-5,

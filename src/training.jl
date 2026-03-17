@@ -46,7 +46,7 @@ Result from exact tensor contraction optimization (optimize_exact).
 """
 struct ExactOptimizationResult
     energy_history::Vector{Float64}
-    gates::Vector{Matrix{ComplexF64}}
+    gates::Any
     params::Vector{Float64}
     energy::Float64
     gap::Float64
@@ -169,6 +169,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
     samples=10000, maxiter=5000, abstol=0.01, n_runs=44,
     sigma0::Float64=1.0, popsize::Union{Int,Nothing}=nothing,
     zz_weight::Float64=0.0, target_energy::Float64=-Inf,
+    unit_cell::Symbol=:single,
     model_kwargs...)
 
     kw = Dict{Symbol,Any}(model_kwargs)
@@ -210,7 +211,14 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         eval_count[] += 1
         current_params .= x
 
-        gates = build_unitary_gate(x, p, row, nqubits; share_params=share_params)
+        # Build gates based on unit cell type
+        local gates, gates_odd, gates_even
+        if unit_cell == :two_by_two && model == "heisenberg_j1j2"
+            gates_odd, gates_even = build_unitary_gate_2x2(x, p, row, nqubits)
+            gates = gates_odd  # for final_gates compatibility
+        else
+            gates = build_unitary_gate(x, p, row, nqubits; share_params=share_params)
+        end
 
         # Run circuit with samples
         need_y = (model == "heisenberg_j1j2")
@@ -225,30 +233,34 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         end
 
         Threads.@threads for run_idx in 1:n_runs
-        result_ch = sample_quantum_channel(gates, row, nqubits;
-                                          conv_step=conv_step,
-                                          samples=samples,
-                                          measure_first=measure_first,
-                                          measure_y=need_y)
+        if unit_cell == :two_by_two && model == "heisenberg_j1j2"
+            result_ch = sample_quantum_channel(gates_odd, gates_even, row, nqubits;
+                                              conv_step=conv_step,
+                                              samples=samples,
+                                              measure_first=measure_first,
+                                              measure_y=need_y)
+        else
+            result_ch = sample_quantum_channel(gates, row, nqubits;
+                                              conv_step=conv_step,
+                                              samples=samples,
+                                              measure_first=measure_first,
+                                              measure_y=need_y)
+        end
         Z_samples = result_ch[2]
         X_samples = result_ch[3]
         # Round conv_step up to next row boundary for column alignment
-        discard = conv_step + row - 1 - (conv_step - 1) % row  # always a multiple of row
+        discard1 = conv_step + row - 1 - (conv_step - 1) % row  # always a multiple of row
         # Z_samples: discard burn-in
-        z_raw = Z_samples[discard+1:end]
+        z_raw = Z_samples[discard1+1:end]
         z_len = length(z_raw) - length(z_raw) % row
-        Z_samples_all[run_idx] = z_raw[1:z_len]
+        Z_samples_all[run_idx] = Z_samples[2*conv_step+1:end-4]
         # X/Y: already converged (later phases), but discard same amount for consistency
         # Phase transitions happen at iteration boundaries → samples start at row 1
         # Discard must be a multiple of row to preserve column alignment
-        x_raw = length(X_samples) > discard ? X_samples[discard+1:end] : X_samples
-        x_len = length(x_raw) - length(x_raw) % row
-        X_samples_all[run_idx] = x_raw[1:x_len]
+        X_samples_all[run_idx] = X_samples[conv_step+1:end-4]
         if need_y
-            Y_samp = result_ch[4]
-            y_raw = length(Y_samp) > discard ? Y_samp[discard+1:end] : Y_samp
-            y_len = length(y_raw) - length(y_raw) % row
-            Y_samples_all[run_idx] = y_raw[1:y_len]
+            Y_samples = result_ch[4]
+            Y_samples_all[run_idx] = Y_samples[conv_step+1:end-4]
         end
         end
 
@@ -378,7 +390,11 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         final_Y_samples = Float64[]
     end
 
-    final_gates = build_unitary_gate(final_params, p, row, nqubits; share_params=share_params)
+    if unit_cell == :two_by_two && model == "heisenberg_j1j2"
+        final_gates = build_unitary_gate_2x2(final_params, p, row, nqubits)
+    else
+        final_gates = build_unitary_gate(final_params, p, row, nqubits; share_params=share_params)
+    end
 
     result = CircuitOptimizationResult(
         energy_history,
@@ -451,6 +467,7 @@ Optimize circuit parameters using exact tensor contraction (no sampling noise).
 """
 function optimize_exact(params, p::Int, row::Int, nqubits::Int;
                         model::String="tfim", maxiter=5000, abstol=1e-6,
+                        unit_cell::Symbol=:single,
                         model_kwargs...)
     kw = Dict{Symbol,Any}(model_kwargs)
 
@@ -491,26 +508,33 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
         current_params .= x
         push!(params_history, copy(x))
 
-        gates = build_unitary_gate(x, p, row, nqubits)
-        _, gap, eigenvalues = compute_transfer_spectrum(gates, row, nqubits)
+        local energy, X_cost, ZZ_vert, ZZ_horiz, gap, eigenvalues
 
-        local energy, X_cost, ZZ_vert, ZZ_horiz
-
-        if model == "tfim"
-            J = Float64(get(kw, :J, 1.0))
-            g = Float64(get(kw, :g, 1.0))
-            X_cost = real(compute_X_expectation(nothing, gates, row, virtual_qubits))
-            ZZ_vert, ZZ_horiz = compute_ZZ_expectation(nothing, gates, row, virtual_qubits)
-            ZZ_vert = real(ZZ_vert)
-            ZZ_horiz = real(ZZ_horiz)
-            energy = -g * X_cost - J * (row == 1 ? ZZ_horiz : ZZ_vert + ZZ_horiz)
-        elseif model == "heisenberg_j1j2"
+        if unit_cell == :two_by_two && model == "heisenberg_j1j2"
+            gates_odd, gates_even = build_unitary_gate_2x2(x, p, row, nqubits)
+            _, gap, eigenvalues, _ = compute_transfer_spectrum_2x2(gates_odd, gates_even, row, nqubits)
             J1 = Float64(get(kw, :J1, 1.0))
             J2 = Float64(get(kw, :J2, 0.0))
-            energy = compute_exact_heisenberg_energy(gates, row, virtual_qubits, J1, J2)
-            X_cost = 0.0
-            ZZ_vert = 0.0
-            ZZ_horiz = 0.0
+            energy = compute_exact_heisenberg_energy_2x2(gates_odd, gates_even, row, virtual_qubits, J1, J2)
+            X_cost = 0.0; ZZ_vert = 0.0; ZZ_horiz = 0.0
+        else
+            gates = build_unitary_gate(x, p, row, nqubits)
+            _, gap, eigenvalues, _ = compute_transfer_spectrum(gates, row, nqubits)
+
+            if model == "tfim"
+                J = Float64(get(kw, :J, 1.0))
+                g = Float64(get(kw, :g, 1.0))
+                X_cost = real(compute_X_expectation(nothing, gates, row, virtual_qubits))
+                ZZ_vert, ZZ_horiz = compute_ZZ_expectation(nothing, gates, row, virtual_qubits)
+                ZZ_vert = real(ZZ_vert)
+                ZZ_horiz = real(ZZ_horiz)
+                energy = -g * X_cost - J * (row == 1 ? ZZ_horiz : ZZ_vert + ZZ_horiz)
+            elseif model == "heisenberg_j1j2"
+                J1 = Float64(get(kw, :J1, 1.0))
+                J2 = Float64(get(kw, :J2, 0.0))
+                energy = compute_exact_heisenberg_energy(gates, row, virtual_qubits, J1, J2)
+                X_cost = 0.0; ZZ_vert = 0.0; ZZ_horiz = 0.0
+            end
         end
 
         push!(X_history, X_cost)
@@ -553,7 +577,11 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
     final_X = X_history[best_idx]
     final_ZZ_vert = ZZ_vert_history[best_idx]
     final_ZZ_horiz = ZZ_horiz_history[best_idx]
-    final_gates = build_unitary_gate(final_params, p, row, nqubits)
+    if unit_cell == :two_by_two && model == "heisenberg_j1j2"
+        final_gates = build_unitary_gate_2x2(final_params, p, row, nqubits)
+    else
+        final_gates = build_unitary_gate(final_params, p, row, nqubits)
+    end
 
     @info "Best energy at iteration $best_idx: $final_cost"
 

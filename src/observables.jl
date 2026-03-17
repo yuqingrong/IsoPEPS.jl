@@ -548,3 +548,131 @@ function compute_exact_heisenberg_energy(gates, row, virtual_qubits, J1::Float64
 
     return energy
 end
+
+# =============================================================================
+# Heisenberg J1-J2 Energy for 2×2 Unit Cell (exact tensor contraction)
+# =============================================================================
+
+"""
+    compute_exact_heisenberg_energy_2x2(gates_odd, gates_even, row, virtual_qubits, J1, J2;
+                                         optimizer=GreedyMethod())
+
+Compute Heisenberg J1-J2 energy per column for a 2-column unit cell.
+
+Odd columns use `gates_odd`, even columns use `gates_even`.
+The combined transfer matrix is T = T_odd * T_even with fixed points l, r.
+
+Energy contributions:
+- Within-period bonds (odd→even column)
+- Cross-period bonds (even→next odd column, using dominant eigenvalue λ)
+
+Returns energy per column (total / 2).
+"""
+function compute_exact_heisenberg_energy_2x2(gates_odd, gates_even, row, virtual_qubits,
+                                              J1::Float64, J2::Float64;
+                                              optimizer=GreedyMethod())
+    σx = Matrix{ComplexF64}(Matrix(X))
+    σy = ComplexF64[0 -im; im 0]
+    σz = Matrix{ComplexF64}(Matrix(Z))
+    paulis = [σx, σy, σz]
+
+    # Build individual and combined transfer matrices
+    T_odd  = get_transfer_matrix(gates_odd, row, virtual_qubits)
+    T_even = get_transfer_matrix(gates_even, row, virtual_qubits)
+    T_combined = T_odd * T_even
+
+    # Fixed points of T_combined
+    eig_r = eigen(T_combined)
+    idx_r = sortperm(abs.(eig_r.values), rev=true)
+    r_vec = eig_r.vectors[:, idx_r[1]]
+    λ = eig_r.values[idx_r[1]]
+
+    eig_l = eigen(T_combined')
+    idx_l = sortperm(abs.(eig_l.values), rev=true)
+    l_vec = eig_l.vectors[:, idx_l[1]]
+    nf = dot(l_vec, r_vec)
+
+    # Precompute E_O for each (pauli, position) for both gate sets
+    E_O_odd  = Dict{Tuple{Matrix{ComplexF64},Int}, Matrix{ComplexF64}}()
+    E_O_even = Dict{Tuple{Matrix{ComplexF64},Int}, Matrix{ComplexF64}}()
+    for σ in paulis, pos in 1:row
+        E_O_odd[(σ, pos)]  = get_transfer_matrix_with_operator(
+            gates_odd, row, virtual_qubits, σ; position=pos, optimizer=optimizer)
+        E_O_even[(σ, pos)] = get_transfer_matrix_with_operator(
+            gates_even, row, virtual_qubits, σ; position=pos, optimizer=optimizer)
+    end
+
+    # Precompute intermediate vectors for cross-period bonds
+    r_mid = T_even * r_vec   # T_even · r
+    l_mid = T_odd' * l_vec   # T_odd† · l
+
+    energy = 0.0
+
+    # =====================================================================
+    # J1: Vertical bonds (within column, periodic)
+    # =====================================================================
+    if row > 1
+        for col_type in (:odd, :even)
+            gates_col = col_type == :odd ? gates_odd : gates_even
+            T_next = col_type == :odd ? T_even : T_odd
+            for i in 1:row
+                j = i % row + 1
+                for σ in paulis
+                    E_OO = get_transfer_matrix_with_operator(
+                        gates_col, row, virtual_qubits, Dict(i => σ, j => σ);
+                        optimizer=optimizer)
+                    if col_type == :odd
+                        # l† · E_OO_odd · T_even · r / nf
+                        val = dot(l_vec, E_OO * T_even * r_vec) / nf
+                    else
+                        # l† · T_odd · E_OO_even · r / nf
+                        val = dot(l_vec, T_odd * E_OO * r_vec) / nf
+                    end
+                    energy += J1 * real(val) / 4.0
+                end
+            end
+        end
+    end
+
+    # =====================================================================
+    # J1: Horizontal bonds (same position, adjacent columns)
+    # =====================================================================
+    for σ in paulis, pos in 1:row
+        # Within-period: odd→even (same period)
+        # l† · E_O_odd(σ,pos) · E_O_even(σ,pos) · r / nf
+        val_wp = dot(l_vec, E_O_odd[(σ, pos)] * E_O_even[(σ, pos)] * r_vec) / nf
+        energy += J1 * real(val_wp) / 4.0
+
+        # Cross-period: even→next odd
+        # l_mid† · E_O_even(σ,pos) · E_O_odd(σ,pos) · r_mid / (λ · nf)
+        val_cp = dot(l_mid, E_O_even[(σ, pos)] * E_O_odd[(σ, pos)] * r_mid) / (λ * nf)
+        energy += J1 * real(val_cp) / 4.0
+    end
+
+    # =====================================================================
+    # J2: Diagonal NNN bonds
+    # =====================================================================
+    if J2 != 0.0
+        for i in 1:row
+            j_up   = i % row + 1
+            j_down = (i - 2 + row) % row + 1
+
+            for σ in paulis
+                # Within-period: odd(i)→even(i±1)
+                for j in (j_up, j_down)
+                    val = dot(l_vec, E_O_odd[(σ, i)] * E_O_even[(σ, j)] * r_vec) / nf
+                    energy += J2 * real(val) / 4.0
+                end
+
+                # Cross-period: even(i)→next odd(i±1)
+                for j in (j_up, j_down)
+                    val = dot(l_mid, E_O_even[(σ, i)] * E_O_odd[(σ, j)] * r_mid) / (λ * nf)
+                    energy += J2 * real(val) / 4.0
+                end
+            end
+        end
+    end
+
+    # Energy per column = total / 2 (2-column unit cell)
+    return energy / 2.0
+end
