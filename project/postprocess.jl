@@ -954,12 +954,16 @@ end
 # Analyze a single result
 J=1.0;g = 1.0; row=4 ; nqubits=3; p=3; virtual_qubits=2;D=2
 data_dir = joinpath(@__DIR__, "results")
-datafile = joinpath(data_dir, "circuit_heisenberg_j1j2_J1=1.0_J2=0.0_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json")
+datafile = joinpath(data_dir, "circuit_heisenberg_j1j2_J1=1.0_J2=1.0_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile)
 # Reconstruct gates and analyze
-
-plot_energy_error_vs_g(data_dir, [0.5,1.0,1.5,2.0, 2.5,3.0,3.5,4.0]; pepskit_file=referfile, dmrg_file=joinpath(data_dir,"dmrg_tfim_100x3.json"), save_path="project/results/figures/energy_error_vs_g.pdf")
+plot_energy_error_vs_g("project/results", [0.0, 0.3,
+   0.5, 1.0];                            
+      model="heisenberg_j1j2",                                              
+      J1=1.0, row=4, p=3, nqubits=3,                        
+      dmrg_file="project/results/dmrg_j1j2_100x4.json",save_path="project/results/figures/heisenberg_energy_vs_j2.pdf")
+plot_energy_error_vs_g(data_dir, [0.0,0.3,0.5,1.0]; pepskit_file=referfile, dmrg_file=joinpath(data_dir,"dmrg_tfim_100x4_D=2.json"), save_path="project/results/figures/energy_error_vs_g.pdf")
 plot_correlation_vs_g(data_dir, [0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0];dmrg_file=joinpath(data_dir,"dmrg_tfim_100x3.json"),pepskit_file=referfile, g_c=3.04,
 save_path="project/results/figures/corr_length_vs_g.pdf")
 

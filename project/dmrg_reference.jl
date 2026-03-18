@@ -615,7 +615,7 @@ end
 # Choose which model to run: "tfim" or "heisenberg_j1j2"
 model_choice = "heisenberg_j1j2"  # <-- change this to switch model
 
-Lx = 100; Ly = 3;D=16
+Lx = 100; Ly = 4;D=2
 
 if model_choice == "tfim"
     # --- Transverse Field Ising Model ---
@@ -640,7 +640,7 @@ elseif model_choice == "heisenberg_j1j2"
         model = "heisenberg_j1j2",
         Lx = Lx, Ly = Ly,
         scan_param = :J2,
-        scan_values = 0.0:0.5:1.0,
+        scan_values = 0.0:0.1:1.0,
         J1 = 1.0,
         maxdim = D, cutoff = 1e-10, nsweeps = 10,
         output_file = joinpath(@__DIR__, "results", "dmrg_j1j2_$(Lx)x$(Ly)_D=$(D).json")

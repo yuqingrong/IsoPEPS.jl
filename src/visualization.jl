@@ -264,7 +264,7 @@ Extract final parameters from a saved result and re-run the circuit to generate 
 rho, Z_samples, X_samples, params, gates = resample_circuit("results/circuit_J=1.0_g=2.0_row=6.json"; samples=50000)
 ```
 """
-function resample_circuit(filename::String; conv_step=100, samples=1000, measure_first=nothing)
+function resample_circuit(filename::String; conv_step=100, samples=1000000, measure_first=nothing, measure_y=false)
     result, input_args = load_result(filename)
     
     if !(result isa CircuitOptimizationResult)
@@ -294,19 +294,43 @@ function resample_circuit(filename::String; conv_step=100, samples=1000, measure
     println("Measure first: $measure_first")
     println("Conv steps: $conv_step, Samples: $samples")
     
+    # Detect unit cell type: 2x2 if param count matches 4*3*nqubits*p
+    model = get(input_args, :model, "tfim")
+    is_two_by_two = (model == "heisenberg_j1j2") && (length(params) == 4 * 3 * nqubits * p)
+
     # Reconstruct gates from parameters
-    gates = build_unitary_gate(params, p, row, nqubits; share_params=share_params)
-    
+    if is_two_by_two
+        gates_odd, gates_even = build_unitary_gate_2x2(params, p, row, nqubits)
+        println("Unit cell: 2x2 (gates_odd + gates_even)")
+    else
+        gates = build_unitary_gate(params, p, row, nqubits; share_params=share_params)
+    end
+
     # Run the quantum channel to generate new samples
     println("\nGenerating new samples...")
-    rho, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits; 
-                                                        conv_step=conv_step, 
-                                                        samples=samples,
-                                                        measure_first=measure_first)
-    
-    println("Generated $(length(Z_samples)) Z samples and $(length(X_samples)) X samples")
-    
-    return rho, Z_samples, X_samples, params, gates
+    if is_two_by_two
+        channel_result = sample_quantum_channel(gates_odd, gates_even, row, nqubits;
+                                                conv_step=conv_step,
+                                                samples=samples,
+                                                measure_first=measure_first,
+                                                measure_y=measure_y)
+    else
+        channel_result = sample_quantum_channel(gates, row, nqubits;
+                                                conv_step=conv_step,
+                                                samples=samples,
+                                                measure_first=measure_first,
+                                                measure_y=measure_y)
+    end
+
+    if measure_y
+        rho, Z_samples, X_samples, Y_samples = channel_result
+        println("Generated $(length(Z_samples)) Z, $(length(X_samples)) X, $(length(Y_samples)) Y samples")
+        return rho, Z_samples, X_samples, Y_samples, params, (is_two_by_two ? (gates_odd, gates_even) : gates)
+    else
+        rho, Z_samples, X_samples = channel_result
+        println("Generated $(length(Z_samples)) Z samples and $(length(X_samples)) X samples")
+        return rho, Z_samples, X_samples, params, (is_two_by_two ? (gates_odd, gates_even) : gates)
+    end
 end
 
 # ============================================================================
@@ -953,12 +977,11 @@ function plot_expectation_values(result::CircuitOptimizationResult;
 
     Z_samples = result.final_Z_samples
     X_samples = result.final_X_samples
+    Y_samples = hasproperty(result, :final_Y_samples) ? result.final_Y_samples : Float64[]
+    need_y = (model == "heisenberg_j1j2")
     if !isnothing(datafile)
         if isfile(datafile)
             # Adaptive sampling: reduce samples for large nqubits (expensive to simulate)
-            # nqubits=3: 100K samples (~fast)
-            # nqubits=5: 50K samples (~moderate, 2^5=32 dim state)
-            # nqubits=7: 20K samples (~slow, 2^7=128 dim state)
             adaptive_samples = if !isnothing(nqubits)
                 if nqubits <= 3
                     1000000
@@ -971,9 +994,19 @@ function plot_expectation_values(result::CircuitOptimizationResult;
                 100000  # default
             end
 
-            resampled = resample_circuit(datafile; conv_step=1000, samples=adaptive_samples, measure_first=nothing)
+            resampled = resample_circuit(datafile; conv_step=100, samples=adaptive_samples,
+                                         measure_first=nothing, measure_y=need_y)
             if !isnothing(resampled)
-                _, Z_samples, X_samples, _, _ = resampled
+                if need_y
+                    _, Z_samples, X_samples, Y_samples, _, _ = resampled
+                    Z_samples = Z_samples[100*2+1:end-4] #TODO: conv_step
+                    X_samples = X_samples[100+1:end-4]
+                    Y_samples = Y_samples[100+1:end-4]
+                else
+                    _, Z_samples, X_samples, _, _ = resampled
+                    Z_samples = Z_samples[100*2+1:end-4]
+                    X_samples = X_samples[100+1:end-4]
+                end
             else
                 @warn "Resampling failed for $datafile; using samples in result"
             end
@@ -987,7 +1020,6 @@ function plot_expectation_values(result::CircuitOptimizationResult;
 
     if model == "heisenberg_j1j2"
         # --- Heisenberg J1-J2 branch: sample-based correlations only ---
-        Y_samples = result.final_Y_samples
         N = length(Z_samples)
 
         # Helper: compute NN correlations for a single Pauli component
@@ -1009,13 +1041,16 @@ function plot_expectation_values(result::CircuitOptimizationResult;
             return (vert_val, vert_err, horiz_val, horiz_err)
         end
 
-        # Helper: compute NNN diagonal correlations
+        # Helper: compute NNN diagonal and anti-diagonal correlations separately
         function _diag_correlations(S, row)
             N_s = length(S)
+            # Diagonal ↘: (pos, col) -> (pos+1, col+1)
             diag1 = [S[i] * S[i+row+1] for i in 1:N_s-row-1 if i % row != 0]
+            # Anti-diagonal ↗: (pos, col) -> (pos-1, col+1)
             diag2 = [S[i] * S[i+row-1] for i in 1:N_s-row+1 if (i-1) % row != 0]
-            all_diag = vcat(diag1, diag2)
-            return (mean(all_diag), std(all_diag) / sqrt(length(all_diag)))
+            d1_val = mean(diag1); d1_err = std(diag1) / sqrt(length(diag1))
+            d2_val = mean(diag2); d2_err = std(diag2) / sqrt(length(diag2))
+            return (d1_val, d1_err, d2_val, d2_err)
         end
 
         # Energy
@@ -1037,9 +1072,11 @@ function plot_expectation_values(result::CircuitOptimizationResult;
         # NNN diagonal correlations (only when J2 ≠ 0 and row > 1)
         if J2 != 0.0 && !isnothing(row) && row > 1
             for (name, S) in [("XX", X_samples), ("YY", Y_samples), ("ZZ", Z_samples)]
-                dv, de = _diag_correlations(S, row)
-                push!(labels, "⟨$(name)⟩_d"); push!(sample_values, dv)
-                push!(exact_values, NaN); push!(sample_errors, de)
+                d1v, d1e, d2v, d2e = _diag_correlations(S, row)
+                push!(labels, "⟨$(name)⟩↘"); push!(sample_values, d1v)
+                push!(exact_values, NaN); push!(sample_errors, d1e)
+                push!(labels, "⟨$(name)⟩↗"); push!(sample_values, d2v)
+                push!(exact_values, NaN); push!(sample_errors, d2e)
             end
         end
 
@@ -1480,46 +1517,58 @@ end
 # ============================================================================
 
 """
-    plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
-                           J=1.0, row=3, nqubits=5, p=3,
-                           pepskit_file::Union{String,Nothing}=nothing,
-                           dmrg_file::Union{String,Nothing}=nothing,
-                           save_path::Union{String,Nothing}=nothing)
+    plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
+                           model="tfim", J=1.0, J1=1.0, row=3, nqubits=5, p=3,
+                           conv_step=100, samples=1000,
+                           pepskit_file=nothing, dmrg_file=nothing, save_path=nothing)
 
-Plot energy error (exact contraction - PEPSKit reference) for different g values.
+Plot energy error for different scan parameter values. Supports TFIM (scan over g)
+and Heisenberg J1-J2 (scan over J2).
 
 # Arguments
 - `data_dir`: Directory containing result JSON files
-- `g_values`: Vector of g values to plot
-- `J`: Coupling strength (default: 1.0)
+- `scan_values`: Vector of scan parameter values (g for TFIM, J2 for Heisenberg)
+- `model`: Model type, `"tfim"` (default) or `"heisenberg_j1j2"`
+- `J`: Coupling strength for TFIM (default: 1.0)
+- `J1`: J1 coupling for Heisenberg (default: 1.0)
 - `row`: Number of rows (default: 3)
 - `nqubits`: Number of qubits (default: 5)
 - `p`: Circuit depth (default: 3)
+- `conv_step`: Convergence steps for resampling (default: 100)
+- `samples`: Number of samples for resampling (default: 1000)
 - `pepskit_file`: Path to PEPSKit reference results JSON (optional)
 - `dmrg_file`: Path to DMRG results JSON (optional)
 - `save_path`: Path to save figure (optional)
 
 # Returns
 - `fig`: Makie Figure object
-- `data`: NamedTuple with (g_values, energies_exact, energies_ref, energies_dmrg, errors)
+- `data`: NamedTuple with (scan_values, energies_exact, energies_ref, energies_dmrg, errors)
 
 # Example
 ```julia
-g_vals = [1.0, 2.0, 3.0, 4.0]
-fig, data = plot_energy_error_vs_g("project/results", g_vals;
-                                   pepskit_file="project/results/pepskit_results_D=2.json",
-                                   dmrg_file="project/results/dmrg_tfim_100x3.json",
-                                   save_path="energy_error_vs_g.pdf")
+# TFIM
+fig, data = plot_energy_error_vs_g("project/results", [1.0, 2.0, 3.0, 4.0];
+                                   dmrg_file="project/results/dmrg_tfim_100x3.json")
+
+# Heisenberg J1-J2
+fig, data = plot_energy_error_vs_g("project/results", [0.0, 0.1, 0.2, 0.5];
+                                   model="heisenberg_j1j2", J1=1.0, row=4, p=3, nqubits=3,
+                                   dmrg_file="project/results/dmrg_j1j2_100x4.json")
 ```
 """
-function plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
-                                J=1.0, row=3, nqubits=3, p=3,
+function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
+                                model::String="tfim",
+                                J=1.0, J1::Float64=1.0, row=3, nqubits=3, p=3,
+                                conv_step::Int=100, samples::Int=1000000,
                                 pepskit_file::Union{String,Nothing}=nothing,
                                 dmrg_file::Union{String,Nothing}=nothing,
                                 save_path::Union{String,Nothing}=nothing)
 
+    is_heisenberg = model == "heisenberg_j1j2"
+    scan_label = is_heisenberg ? "J2" : "g"
+
     println("="^70)
-    println("Energy Error vs g Analysis")
+    println("Energy Error vs $scan_label Analysis (model=$model)")
     println("="^70)
 
     # Load PEPSKit reference energies if provided
@@ -1579,11 +1628,31 @@ function plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
     errors = Float64[]
     g_vals_found = Float64[]
 
-    for g in g_values
-        filename = joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
+    for val in scan_values
+        # Build filename based on model
+        if is_heisenberg
+            candidates = [
+                joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json"),
+                joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
+                joinpath(data_dir, "circuit_heisenberg_j1j2_J=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
+            ]
+            filename = ""
+            for c in candidates
+                if isfile(c)
+                    filename = c
+                    break
+                end
+            end
+            if isempty(filename)
+                @warn "No file found for J2=$val, tried $(length(candidates)) patterns, skipping"
+                continue
+            end
+        else
+            filename = joinpath(data_dir, "circuit_J=$(J)_g=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
+        end
 
         if !isfile(filename)
-            @warn "File not found: $(basename(filename)), skipping g=$g"
+            @warn "File not found: $(basename(filename)), skipping $scan_label=$val"
             continue
         end
 
@@ -1593,64 +1662,85 @@ function plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
         # Compute exact energy from optimized parameters
         virtual_qubits = (nqubits - 1) ÷ 2
         share_params = get(input_args, :share_params, true)
-        gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
 
-        X_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, :X; position=i)) for i in 1:row)
-
-        if row > 1
-            ZZ_vert_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, Dict(i => :Z, i+1 => :Z))) for i in 1:row-1)
-        else
-            ZZ_vert_exact = 0.0
-        end
-
-        ZZ_horiz_vals = Float64[]
-        for pos in 1:row
-            correlations = correlation_function(gates, row, virtual_qubits, :Z, 1; position=pos)
-            if haskey(correlations, 1)
-                push!(ZZ_horiz_vals, real(correlations[1]))
+        if is_heisenberg
+            # Use resample-based energy for Heisenberg
+            resample_result = resample_circuit(filename; conv_step=conv_step, samples=samples, measure_y=true)
+            if isnothing(resample_result)
+                @warn "Resampling failed for $scan_label=$val, skipping"
+                continue
             end
+            _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
+            Z_samples = Z_samples[100*2+1:end-4] #TODO: conv_step
+            X_samples = X_samples[100+1:end-4]
+            Y_samples = Y_samples[100+1:end-4]
+            energy_exact = compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, val, row)
+        else
+            g = val
+            gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
+
+            X_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, :X; position=i)) for i in 1:row)
+
+            if row > 1
+                ZZ_vert_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, Dict(i => :Z, i+1 => :Z))) for i in 1:row-1)
+            else
+                ZZ_vert_exact = 0.0
+            end
+
+            ZZ_horiz_vals = Float64[]
+            for pos in 1:row
+                correlations = correlation_function(gates, row, virtual_qubits, :Z, 1; position=pos)
+                if haskey(correlations, 1)
+                    push!(ZZ_horiz_vals, real(correlations[1]))
+                end
+            end
+            ZZ_horiz_exact = isempty(ZZ_horiz_vals) ? 0.0 : mean(ZZ_horiz_vals)
+
+            energy_exact = -g*X_exact - J*(row == 1 ? ZZ_horiz_exact : ZZ_vert_exact + ZZ_horiz_exact)
         end
-        ZZ_horiz_exact = isempty(ZZ_horiz_vals) ? 0.0 : mean(ZZ_horiz_vals)
 
-        energy_exact = -g*X_exact - J*(row == 1 ? ZZ_horiz_exact : ZZ_vert_exact + ZZ_horiz_exact)
-
-        push!(g_vals_found, g)
+        push!(g_vals_found, val)
         push!(energies_exact, energy_exact)
 
         # Get reference energy and compute error
-        if haskey(ref_energies, g)
-            energy_ref = ref_energies[g]
+        if haskey(ref_energies, val)
+            energy_ref = ref_energies[val]
             error = abs(energy_exact - energy_ref)
             push!(energies_ref, energy_ref)
             push!(errors, error)
-            println("g=$g: E_exact=$(round(energy_exact, digits=6)), E_ref=$(round(energy_ref, digits=6)), Error=$(round(error, digits=6))")
+            println("$scan_label=$val: E_exact=$(round(energy_exact, digits=6)), E_ref=$(round(energy_ref, digits=6)), Error=$(round(error, digits=6))")
         else
             push!(energies_ref, NaN)
             push!(errors, NaN)
-            println("g=$g: E_exact=$(round(energy_exact, digits=6)), No reference")
+            println("$scan_label=$val: E_exact=$(round(energy_exact, digits=6)), No reference")
         end
 
         # Get DMRG energy
-        if haskey(dmrg_energies, g)
-            push!(energies_dmrg, dmrg_energies[g])
-            println("       E_dmrg=$(round(dmrg_energies[g], digits=6))")
+        if haskey(dmrg_energies, val)
+            push!(energies_dmrg, dmrg_energies[val])
+            println("       E_dmrg=$(round(dmrg_energies[val], digits=6))")
         else
             push!(energies_dmrg, NaN)
         end
     end
 
     if isempty(g_vals_found)
-        error("No valid results found for any g value")
+        error("No valid results found for any $scan_label value")
     end
+
+    # Axis labels and titles based on model
+    xlabel_str = is_heisenberg ? "J2 / J1" : "Transverse field g"
+    title_energy = is_heisenberg ? "Heisenberg J1-J2: Energy vs J2 (row=$row, p=$p)" : "Ground State Energy: Exact vs Reference"
+    title_error = is_heisenberg ? "Energy Error vs J2" : "Energy Error vs g"
 
     # Create figure
     fig = Figure(size=(1000, 800))
 
     # Plot 1: Energies comparison
     ax1 = Axis(fig[1, 1],
-               xlabel="Transverse field g",
+               xlabel=xlabel_str,
                ylabel="Energy",
-               title="Ground State Energy: Exact vs Reference")
+               title=title_energy)
 
     lines!(ax1, g_vals_found, energies_exact, label="sampling based optimization",
            color=:blue, linewidth=2)
@@ -1676,9 +1766,9 @@ function plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
 
     # Plot 2: Energy errors
     ax2 = Axis(fig[2, 1],
-               xlabel="Transverse field g",
+               xlabel=xlabel_str,
                ylabel="Energy Error",
-               title="Energy Error vs g",
+               title=title_error,
                yscale=log10)
 
     # Error between exact and PEPSKit reference
@@ -1714,7 +1804,7 @@ function plot_energy_error_vs_g(data_dir::String, g_values::Vector{Float64};
     end
 
     data = (
-        g_values = g_vals_found,
+        scan_values = g_vals_found,
         energies_exact = energies_exact,
         energies_ref = energies_ref,
         energies_dmrg = energies_dmrg,
