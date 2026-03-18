@@ -296,7 +296,7 @@ function resample_circuit(filename::String; conv_step=100, samples=1000000, meas
     
     # Detect unit cell type: 2x2 if param count matches 4*3*nqubits*p
     model = get(input_args, :model, "tfim")
-    is_two_by_two = (model == "heisenberg_j1j2") && (length(params) == 4 * 3 * nqubits * p)
+    is_two_by_two = (model == "heisenberg_j1j2") && (length(params) == 4 * PARAMS_PER_QUBIT_PER_LAYER * nqubits * p)
 
     # Reconstruct gates from parameters
     if is_two_by_two

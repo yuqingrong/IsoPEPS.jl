@@ -122,7 +122,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
             verbose && println("Starting $(scan_param) = $(val), warm-started from saved $(scan_param) = $(warm_val)")
         else
             Random.seed!(seed)
-            n_params = unit_cell == :two_by_two ? 4 * 3 * nqubits * p : 3 * nqubits * p
+            n_params = unit_cell == :two_by_two ? 4 * 2* nqubits * p : PARAMS_PER_QUBIT_PER_LAYER * nqubits * p
             params = rand(n_params)
             verbose && println("Starting $(scan_param) = $(val), random initialization (seed=$seed)")
         end
@@ -169,7 +169,7 @@ end
  simulation(;
      model="heisenberg_j1j2",
      scan_param=:J2,
-     scan_values=[0.2],
+     scan_values=[0.0],
      J1=1.0,
      row=4, p=3, nqubits=3,
      maxiter=500,
@@ -188,27 +188,6 @@ end
      unit_cell=:two_by_two
  )
 
- simulation(;
-     model="heisenberg_j1j2",
-     scan_param=:J2,
-     scan_values=[0.5],
-     J1=1.0,
-     row=4, p=3, nqubits=3,
-     maxiter=500,
-     measure_first=:Z,
-     seed=123,
-     verbose=true,
-     output_dir=joinpath(@__DIR__, "results"),
-     share_params=true,
-     conv_step=100,
-     samples=10000,
-     n_runs=1,
-     abstol=1e-5,
-     sigma0=1.0,
-     popsize=nothing,
-     zz_weight=0.0,
-     unit_cell=:two_by_two
- )
 # ── Example: Heisenberg J1-J2 ──
 # simulation(;
 #     model="heisenberg_j1j2",
