@@ -5,35 +5,26 @@ Uses 2 parameters per qubit (Rx-Rz).
 const PARAMS_PER_QUBIT_PER_LAYER = 2
 
 # Cache for the parameter-independent CNOT entangling product (keyed by nqubits)
-const _CNOT_PRODUCT_CACHE = Dict{Int, Matrix{ComplexF64}}()
+const _CNOT_PRODUCT_CACHE = Dict{Tuple{Int,Int}, Matrix{ComplexF64}}()
 
-"""Return (and cache) the combined CNOT entangling matrix for `nqubits`."""
-function _get_cnot_product(nqubits::Int)
-    get!(_CNOT_PRODUCT_CACHE, nqubits) do
+"""Return (and cache) the combined CNOT entangling matrix for `nqubits` with stride-based layers up to `max_stride`."""
+function _get_cnot_product(nqubits::Int; max_stride::Int=nqubits-1)
+    max_stride = clamp(max_stride, 1, nqubits-1)
+    get!(_CNOT_PRODUCT_CACHE, (nqubits, max_stride)) do
         dim = 1 << nqubits
-        # Nearest-neighbor
-        cnot_nn = Matrix{ComplexF64}(I, dim, dim)
-        for i in 1:nqubits-1
-            cnot_nn *= Matrix(cnot(nqubits, i+1, i))
-        end
-        # Next-nearest-neighbor
-        cnot_nnn = Matrix{ComplexF64}(I, dim, dim)
-        for i in 1:nqubits-2
-            cnot_nnn *= Matrix(cnot(nqubits, i, i+2))
-        end
-        # Skip-2
-        cnot_skip2 = Matrix{ComplexF64}(I, dim, dim)
-        if nqubits >= 4
-            for i in 1:nqubits-3
-                cnot_skip2 *= Matrix(cnot(nqubits, i+3, i))
+        result = Matrix{ComplexF64}(I, dim, dim)
+        for s in 1:max_stride
+            layer = Matrix{ComplexF64}(I, dim, dim)
+            if s == nqubits - 1
+                layer *= Matrix(cnot(nqubits, 1, nqubits))
+            else
+                for i in 1:nqubits-s
+                    layer *= Matrix(cnot(nqubits, i+s, i))
+                end
             end
+            result *= layer
         end
-        # Full-range
-        cnot_full = Matrix{ComplexF64}(I, dim, dim)
-        if nqubits >= 5
-            cnot_full *= Matrix(cnot(nqubits, nqubits, 1))
-        end
-        cnot_nn * cnot_nnn * cnot_skip2 * cnot_full
+        result
     end
 end
 
@@ -62,7 +53,7 @@ with full SU(2) single-qubit rotations and brick-wall CNOT entangling layers.
   at the end of the circuit to break Z₂ symmetry and avoid unitary channels.
 - Setting `noise_strength > 0` adds random rotations to break all symmetries.
 """
-function build_unitary_gate(params, p, row, nqubits; share_params=true)
+function build_unitary_gate(params, p, row, nqubits; share_params=true, max_stride::Int=nqubits-1)
     A_matrix = Vector{Matrix{ComplexF64}}(undef, row)
     dim = 2^nqubits
     params_per_layer = PARAMS_PER_QUBIT_PER_LAYER * nqubits
@@ -77,7 +68,7 @@ function build_unitary_gate(params, p, row, nqubits; share_params=true)
         shared_params = params[1:ppq*nqubits*p]
         for i in 1:row
             for r in 1:p
-                A_matrix[i] *= _build_layer(shared_params, r, nqubits)
+                A_matrix[i] *= _build_layer(shared_params, r, nqubits; max_stride=max_stride)
             end
         end
     else
@@ -85,7 +76,7 @@ function build_unitary_gate(params, p, row, nqubits; share_params=true)
         for i in 1:row
             params_i = params[ppq*nqubits*p*(i-1)+1:ppq*nqubits*p*i]
             for r in 1:p
-                A_matrix[i] *= _build_layer(params_i, r, nqubits)
+                A_matrix[i] *= _build_layer(params_i, r, nqubits; max_stride=max_stride)
             end
         end
     end
@@ -116,7 +107,7 @@ The 4 gates tile the lattice as:
 # Returns
 - `(gates_odd, gates_even)`: Tuple of two `Vector{Matrix{ComplexF64}}`, each of length `row`
 """
-function build_unitary_gate_2x2(params, p, row, nqubits)
+function build_unitary_gate_2x2(params, p, row, nqubits; max_stride::Int=nqubits-1)
     ppq = PARAMS_PER_QUBIT_PER_LAYER  # 2
     chunk = ppq * nqubits * p
     @assert length(params) >= 4 * chunk "Need at least $(4*chunk) parameters for 2×2 unit cell"
@@ -125,7 +116,7 @@ function build_unitary_gate_2x2(params, p, row, nqubits)
     function _build_gate(par)
         G = Matrix{ComplexF64}(I, dim, dim)
         for r in 1:p
-            G *= _build_layer(par, r, nqubits)
+            G *= _build_layer(par, r, nqubits; max_stride=max_stride)
         end
         @assert G * G' ≈ I atol=1e-5 "Gate is not unitary"
         return G
@@ -149,7 +140,7 @@ end
 Build a single layer: raw Rx·Rz rotations ⊗ cached CNOT product.
 No Yao objects created — pure matrix arithmetic.
 """
-function _build_layer(params, r, nqubits)
+function _build_layer(params, r, nqubits; max_stride::Int=nqubits-1)
     # Compute Rx(θx)·Rz(θz) for each qubit as a raw 2×2 matrix
     # 2 parameters per qubit per layer
     ppq = PARAMS_PER_QUBIT_PER_LAYER  # 2
@@ -172,5 +163,5 @@ function _build_layer(params, r, nqubits)
         gate = kron(sq, gate)
     end
 
-    return gate * _get_cnot_product(nqubits)
+    return gate * _get_cnot_product(nqubits; max_stride=max_stride)
 end
