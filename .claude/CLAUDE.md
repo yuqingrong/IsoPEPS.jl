@@ -19,7 +19,6 @@ Julia package for isometric Projected Entangled Pair States (IsoPEPS) - a tensor
 - `src/gates.jl` - Quantum gate implementations
 - `src/observables.jl` - Observable measurements and expectation values
 - `src/quantum_channels.jl` - Quantum channel operations
-- `src/reference.jl` - Reference implementations
 - `src/training.jl` - Training and optimization routines
 - `src/transfer_matrix.jl` - Transfer matrix methods
 - `src/visualization.jl` - Plotting and visualization utilities

@@ -182,9 +182,6 @@ end
      samples=10000,
      n_runs=1,
      abstol=1e-5,
-     sigma0=1.0,
-     popsize=nothing,
-     zz_weight=0.0,
      unit_cell=:two_by_two
  )
 

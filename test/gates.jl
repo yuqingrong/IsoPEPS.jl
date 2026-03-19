@@ -21,7 +21,7 @@ using Random
     end
 end
 
-@testset "compute_energy" begin
+@testset "compute_tfim_energy" begin
     Random.seed!(2345)
     for row in 3:6
         a = rand()
@@ -30,7 +30,7 @@ end
         Z_samples = b * ones(100)
         g = 1.0
         J = 1.0
-        energy = compute_energy(X_samples, Z_samples, g, J, row)
+        energy = compute_tfim_energy(X_samples, Z_samples, g, J, row)
         @test energy ≈ -a - 2 * b^2 atol = 1e-5
     end
 end

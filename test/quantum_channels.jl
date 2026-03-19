@@ -21,6 +21,6 @@ using Random
     X_exact = compute_X_expectation(rho_exact, gates, row, virtual_qubits)
     @test mean(X_samples) ≈ X_exact atol = 1e-1
 
-    energy = compute_energy(X_samples, Z_samples, g, J, row)
+    energy = compute_tfim_energy(X_samples, Z_samples, g, J, row)
     @test energy isa Float64
 end

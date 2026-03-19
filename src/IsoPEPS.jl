@@ -13,7 +13,7 @@ A Julia package for Isometric Projected Entangled Pair States (IsoPEPS) algorith
 # Main Functions
 - `sample_quantum_channel`: Sample observables from quantum channel
 - `build_unitary_gate`: Build parameterized unitary gates
-- `compute_energy`: Compute TFIM energy from samples
+- `compute_tfim_energy`: Compute TFIM energy from samples
 - `optimize_circuit`: Optimize circuit parameters
 - `compute_transfer_spectrum`: Compute transfer matrix spectrum
 - `mpskit_ground_state`: Reference ground state from MPSKit (requires `using MPSKit, TensorKit, MPSKitModels`)
@@ -64,10 +64,17 @@ end
 # =============================================================================
 include("quantum_channels.jl")
 include("gates.jl")
+include("transfer_matrix.jl")
+include("observables_exact.jl")
+include("observables_sampling.jl")
+
+# Model type hierarchy (must come after gates/observables, before training)
+include("models/abstract.jl")
+include("models/tfim.jl")
+include("models/heisenberg_j1j2.jl")
+
 include("training.jl")
 include("visualization.jl")
-include("transfer_matrix.jl")
-include("observables.jl")
 
 # =============================================================================
 # Function stubs for extensions (methods added by package extensions)
@@ -91,6 +98,15 @@ function pepskit_ground_state end
 # --- ITensors extension ---
 function transfer_matrix_ITensor end
 
+# --- ITensors + ITensorMPS DMRG extension ---
+function snake_order_2d_to_1d end
+function build_2d_tfim_hamiltonian end
+function build_2d_heisenberg_j1j2_hamiltonian end
+function build_hamiltonian end
+function dmrg_ground_state_2d end
+function compute_magnetization end
+function compute_correlation_length_dmrg end
+
 # =============================================================================
 # Exports
 # =============================================================================
@@ -98,8 +114,16 @@ function transfer_matrix_ITensor end
 # Quantum Channel Simulation
 export sample_quantum_channel, track_convergence_to_steady_state, estimate_correlation_length_from_sampling, estimate_correlation_length_exact
 
-# Gate Construction & Energy
-export build_unitary_gate, build_unitary_gate_2x2, compute_energy, compute_heisenberg_energy
+# Model Types
+export AbstractModel, TFIM, HeisenbergJ1J2
+export model_name, needs_y_measurement, default_unit_cell, model_label
+export compute_energy_from_samples, compute_exact_energy_from_gates
+
+# Gate Construction
+export build_unitary_gate, build_unitary_gate_2x2
+
+# Sampling-Based Observables
+export compute_tfim_energy, compute_heisenberg_energy, compute_acf
 
 # Optimization / Training
 export CircuitOptimizationResult, ExactOptimizationResult, ManifoldOptimizationResult
@@ -114,7 +138,7 @@ export get_transfer_matrix_with_operator, compute_correlation_coefficients
 export compute_theoretical_correlation_decay, compute_theoretical_lambda_eff
 export reshape_to_mps, spectrum_MPSKit, transfer_matrix_ITensor
 
-# Exact Tensor Contraction - Observables
+# Exact Observables (Transfer Matrix)
 export compute_X_expectation, compute_Z_expectation, compute_ZZ_expectation, compute_single_expectation
 export compute_exact_energy, compute_exact_heisenberg_energy, compute_exact_heisenberg_energy_2x2, intercolumn_correlation
 export correlation_function, expect
@@ -122,9 +146,14 @@ export correlation_function, expect
 # Reference Implementations (loaded via extensions)
 export mpskit_ground_state, mpskit_ground_state_1d, pepskit_ground_state
 
+# DMRG Reference (loaded via ITensors + ITensorMPS extension)
+export dmrg_ground_state_2d, build_hamiltonian
+export build_2d_tfim_hamiltonian, build_2d_heisenberg_j1j2_hamiltonian
+export compute_magnetization, compute_correlation_length_dmrg
+
 # Data I/O
 export save_result, load_result, save_results, load_results, resample_circuit
-export reconstruct_gates, compute_acf
+export reconstruct_gates
 
 # Visualization (loaded via CairoMakie extension)
 export plot_acf, fit_acf, fit_acf_oscillatory

@@ -78,57 +78,17 @@ struct ManifoldOptimizationResult
 end
 
 """
-    initialize_tfim_params(p, nqubits, g; mode=:meanfield)
+    _construct_model(model_str, kwargs) → AbstractModel
 
-Generate initial parameters for TFIM optimization that avoid trivial product states.
-
-# Arguments
-- `p`: Circuit depth
-- `nqubits`: Number of qubits per gate
-- `g`: Transverse field strength
-- `mode`: Initialization mode
-  - `:meanfield`: Parameters tuned to approximate mean-field state
-  - `:entangled`: Parameters that create significant entanglement
-  - `:random`: Random initialization (default CMA-ES behavior)
-
-# Returns
-- Parameter vector of length `3*nqubits*p`
+Construct a model type from a string name and keyword arguments.
 """
-function initialize_tfim_params(p::Int, nqubits::Int, g::Float64; mode::Symbol=:meanfield)
-    ppq = PARAMS_PER_QUBIT_PER_LAYER  # 3
-    n_params = ppq * nqubits * p
-
-    if mode == :meanfield
-        # Mean-field angle: θ such that ⟨Z⟩ = -J/(g) approximately
-        θ_mf = atan(1.0 / g)
-
-        params = zeros(n_params)
-        for layer in 1:p
-            for q in 1:nqubits
-                idx = ppq*nqubits*(layer-1) + ppq*(q-1) + 1
-                params[idx] = θ_mf + 0.1 * randn()  # Rx angle
-                params[idx+1] = 0.1 * randn()        # Ry angle (small)
-                params[idx+2] = 0.1 * randn()        # Rz angle (small)
-            end
-        end
-        return params
-
-    elseif mode == :entangled
-        params = zeros(n_params)
-        for layer in 1:p
-            for q in 1:nqubits
-                idx = ppq*nqubits*(layer-1) + ppq*(q-1) + 1
-                if layer == 1 && q == nqubits
-                    params[idx] = π/2      # Rx(π/2)
-                    params[idx+1] = 0.0    # Ry(0)
-                    params[idx+2] = 0.0    # Rz(0)
-                end
-            end
-        end
-        return params
-
-    else  # :random
-        return 2π * rand(n_params)
+function _construct_model(model_str::String, kw::Dict{Symbol,Any})
+    if model_str == "tfim"
+        TFIM(J=Float64(get(kw, :J, 1.0)), g=Float64(get(kw, :g, 1.0)))
+    elseif model_str == "heisenberg_j1j2"
+        HeisenbergJ1J2(J1=Float64(get(kw, :J1, 1.0)), J2=Float64(get(kw, :J2, 0.0)))
+    else
+        error("Unknown model: \"$model_str\". Supported: \"tfim\", \"heisenberg_j1j2\"")
     end
 end
 
@@ -144,7 +104,7 @@ Optimize a quantum circuit using sampling-based CMA-ES.
 - `nqubits::Int`: Number of qubits
 
 # Keyword Arguments
-- `model`: `"tfim"` or `"heisenberg_j1j2"`
+- `model`: `"tfim"` or `"heisenberg_j1j2"` (string) or an `AbstractModel` instance
 - `measure_first::Symbol=:Z`: Which observable to measure first (:X or :Z)
 - `share_params::Bool=true`: Whether to share parameters across layers
 - `conv_step::Int=100`: Burn-in steps before sampling
@@ -164,7 +124,7 @@ Optimize a quantum circuit using sampling-based CMA-ES.
 - `CircuitOptimizationResult`: Optimization results with energy history and final state
 """
 function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
-    model::String="tfim",
+    model::Union{String,AbstractModel}="tfim",
     measure_first=:Z, share_params=true, conv_step=100,
     samples=10000, maxiter=5000, abstol=0.01, n_runs=44,
     sigma0::Float64=1.0, popsize::Union{Int,Nothing}=nothing,
@@ -174,14 +134,10 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
 
     kw = Dict{Symbol,Any}(model_kwargs)
 
-    # Build model label for logging
-    model_label = if model == "tfim"
-        "TFIM J=$(get(kw, :J, 1.0)) g=$(get(kw, :g, 1.0))"
-    elseif model == "heisenberg_j1j2"
-        "Heisenberg J1=$(get(kw, :J1, 1.0)) J2=$(get(kw, :J2, 0.0))"
-    else
-        error("Unknown model: \"$model\". Supported: \"tfim\", \"heisenberg_j1j2\"")
-    end
+    # Construct model type if string was passed
+    m = model isa AbstractModel ? model : _construct_model(model, kw)
+    mlabel = model_label(m)
+    model_str = model_name(m)
 
     # Store initial parameters
     initial_params = copy(params)
@@ -213,7 +169,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
 
         # Build gates based on unit cell type
         local gates, gates_odd, gates_even
-        if unit_cell == :two_by_two && model == "heisenberg_j1j2"
+        if unit_cell == :two_by_two && model_str == "heisenberg_j1j2"
             gates_odd, gates_even = build_unitary_gate_2x2(x, p, row, nqubits)
             gates = gates_odd  # for final_gates compatibility
         else
@@ -221,7 +177,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         end
 
         # Run circuit with samples
-        need_y = (model == "heisenberg_j1j2")
+        need_y = needs_y_measurement(m)
         Z_samples_all = Vector{Vector{Float64}}(undef, n_runs)
         X_samples_all = Vector{Vector{Float64}}(undef, n_runs)
         Y_samples_all = need_y ? Vector{Vector{Float64}}(undef, n_runs) : nothing
@@ -233,7 +189,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         end
 
         Threads.@threads for run_idx in 1:n_runs
-        if unit_cell == :two_by_two && model == "heisenberg_j1j2"
+        if unit_cell == :two_by_two && model_str == "heisenberg_j1j2"
             result_ch = sample_quantum_channel(gates_odd, gates_even, row, nqubits;
                                               conv_step=conv_step,
                                               samples=samples,
@@ -271,17 +227,9 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         # Combine Y samples if needed
         Y_samples_combined = need_y ? reduce(vcat, Y_samples_all) : Float64[]
 
-        # Energy computation depends on model
+        # Energy computation via model dispatch
         local energy
-        if model == "tfim"
-            J = Float64(get(kw, :J, 1.0))
-            g = Float64(get(kw, :g, 1.0))
-            energy = compute_energy(X_samples_combined, Z_samples_combined, g, J, row)
-        elseif model == "heisenberg_j1j2"
-            J1 = Float64(get(kw, :J1, 1.0))
-            J2 = Float64(get(kw, :J2, 0.0))
-            energy = compute_heisenberg_energy(X_samples_combined, Z_samples_combined, Y_samples_combined, J1, J2, row)
-        end
+        energy = compute_energy_from_samples(m, X_samples_combined, Z_samples_combined, Y_samples_combined, row)
 
         # Cost = energy + penalty (penalty is for optimization only)
         cost = energy
@@ -324,7 +272,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
 
             # Log every 10 generations
             if generation_count[] % 10 == 0
-                @info "$model_label $(row)×∞ PEPS | Generation $(generation_count[]) | Min Energy: $(round(min_energy, digits=6))"
+                @info "$mlabel $(row)×∞ PEPS | Generation $(generation_count[]) | Min Energy: $(round(min_energy, digits=6))"
             end
 
             # Clear generation arrays for next generation
@@ -390,7 +338,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         final_Y_samples = Float64[]
     end
 
-    if unit_cell == :two_by_two && model == "heisenberg_j1j2"
+    if unit_cell == :two_by_two && model_str == "heisenberg_j1j2"
         final_gates = build_unitary_gate_2x2(final_params, p, row, nqubits)
     else
         final_gates = build_unitary_gate(final_params, p, row, nqubits; share_params=share_params)
@@ -409,7 +357,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
 
     # Save result with all input parameters
     input_args = Dict{Symbol, Any}(
-        :model => model,
+        :model => model_str,
         :row => row, :p => p, :nqubits => nqubits,
         :initial_params => initial_params,
         :measure_first => String(measure_first),
@@ -427,20 +375,6 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
     merge!(input_args, Dict{Symbol,Any}(model_kwargs))
 
     return result
-end
-
-# Backward-compatible TFIM convenience method
-function optimize_circuit(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int;
-    measure_first=:Z, share_params=true, conv_step=100,
-    samples=10000, maxiter=5000, abstol=0.01, n_runs=44,
-    sigma0::Float64=1.0, popsize::Union{Int,Nothing}=nothing,
-    zz_weight::Float64=0.0, target_energy::Float64=-Inf)
-    return optimize_circuit(params, p, row, nqubits;
-        model="tfim", J=J, g=g,
-        measure_first=measure_first, share_params=share_params,
-        conv_step=conv_step, samples=samples, maxiter=maxiter,
-        abstol=abstol, n_runs=n_runs, sigma0=sigma0, popsize=popsize,
-        zz_weight=zz_weight, target_energy=target_energy)
 end
 
 """
@@ -466,10 +400,15 @@ Optimize circuit parameters using exact tensor contraction (no sampling noise).
 `ExactOptimizationResult` with energy history, spectral properties, and expectation values
 """
 function optimize_exact(params, p::Int, row::Int, nqubits::Int;
-                        model::String="tfim", maxiter=5000, abstol=1e-6,
+                        model::Union{String,AbstractModel}="tfim", maxiter=5000, abstol=1e-6,
                         unit_cell::Symbol=:single,
                         model_kwargs...)
     kw = Dict{Symbol,Any}(model_kwargs)
+
+    # Construct model type if string was passed
+    m = model isa AbstractModel ? model : _construct_model(model isa String ? model : string(model), kw)
+    mlabel = model_label(m)
+    model_str = model_name(m)
 
     # Store initial parameters
     initial_params = copy(params)
@@ -488,15 +427,6 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
     iter_count = Ref(0)
     converged = false
 
-    # Build model label for logging
-    model_label = if model == "tfim"
-        "TFIM J=$(get(kw, :J, 1.0)) g=$(get(kw, :g, 1.0))"
-    elseif model == "heisenberg_j1j2"
-        "Heisenberg J1=$(get(kw, :J1, 1.0)) J2=$(get(kw, :J2, 0.0))"
-    else
-        error("Unknown model: \"$model\". Supported: \"tfim\", \"heisenberg_j1j2\"")
-    end
-
     function objective(x, _)
         iter_count[] += 1
 
@@ -510,31 +440,16 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
 
         local energy, X_cost, ZZ_vert, ZZ_horiz, gap, eigenvalues
 
-        if unit_cell == :two_by_two && model == "heisenberg_j1j2"
+        if unit_cell == :two_by_two && model_str == "heisenberg_j1j2"
             gates_odd, gates_even = build_unitary_gate_2x2(x, p, row, nqubits)
             _, gap, eigenvalues, _ = compute_transfer_spectrum_2x2(gates_odd, gates_even, row, nqubits)
-            J1 = Float64(get(kw, :J1, 1.0))
-            J2 = Float64(get(kw, :J2, 0.0))
-            energy = compute_exact_heisenberg_energy_2x2(gates_odd, gates_even, row, virtual_qubits, J1, J2)
-            X_cost = 0.0; ZZ_vert = 0.0; ZZ_horiz = 0.0
+            energy, X_cost, ZZ_vert, ZZ_horiz = compute_exact_energy_from_gates(
+                m, gates_odd, row, virtual_qubits; unit_cell=unit_cell, gates_even=gates_even)
         else
             gates = build_unitary_gate(x, p, row, nqubits)
             _, gap, eigenvalues, _ = compute_transfer_spectrum(gates, row, nqubits)
-
-            if model == "tfim"
-                J = Float64(get(kw, :J, 1.0))
-                g = Float64(get(kw, :g, 1.0))
-                X_cost = real(compute_X_expectation(nothing, gates, row, virtual_qubits))
-                ZZ_vert, ZZ_horiz = compute_ZZ_expectation(nothing, gates, row, virtual_qubits)
-                ZZ_vert = real(ZZ_vert)
-                ZZ_horiz = real(ZZ_horiz)
-                energy = -g * X_cost - J * (row == 1 ? ZZ_horiz : ZZ_vert + ZZ_horiz)
-            elseif model == "heisenberg_j1j2"
-                J1 = Float64(get(kw, :J1, 1.0))
-                J2 = Float64(get(kw, :J2, 0.0))
-                energy = compute_exact_heisenberg_energy(gates, row, virtual_qubits, J1, J2)
-                X_cost = 0.0; ZZ_vert = 0.0; ZZ_horiz = 0.0
-            end
+            energy, X_cost, ZZ_vert, ZZ_horiz = compute_exact_energy_from_gates(
+                m, gates, row, virtual_qubits; unit_cell=unit_cell)
         end
 
         push!(X_history, X_cost)
@@ -544,12 +459,12 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
         push!(eigenvalues_history, eigenvalues)
         push!(energy_history, real(energy))
 
-        @info "$model_label $(row)×∞ PEPS (exact) | Iter $(length(energy_history)) | Energy: $(round(energy, digits=6)) | Gap: $(round(gap, digits=4))"
+        @info "$mlabel $(row)×∞ PEPS (exact) | Iter $(length(energy_history)) | Energy: $(round(energy, digits=6)) | Gap: $(round(gap, digits=4))"
 
         return real(energy)
     end
 
-    @info "Optimizing $(length(params)) parameters with CMA-ES (exact contraction, model=$model)"
+    @info "Optimizing $(length(params)) parameters with CMA-ES (exact contraction, model=$model_str)"
 
     f = OptimizationFunction(objective)
     prob = Optimization.OptimizationProblem(f, params,
@@ -577,7 +492,7 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
     final_X = X_history[best_idx]
     final_ZZ_vert = ZZ_vert_history[best_idx]
     final_ZZ_horiz = ZZ_horiz_history[best_idx]
-    if unit_cell == :two_by_two && model == "heisenberg_j1j2"
+    if unit_cell == :two_by_two && model_str == "heisenberg_j1j2"
         final_gates = build_unitary_gate_2x2(final_params, p, row, nqubits)
     else
         final_gates = build_unitary_gate(final_params, p, row, nqubits)
@@ -600,7 +515,7 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
 
     # Save result with all input parameters
     input_args = Dict{Symbol, Any}(
-        :model => model,
+        :model => model_str,
         :row => row, :p => p, :nqubits => nqubits,
         :initial_params => initial_params,
         :maxiter => maxiter,
@@ -609,7 +524,7 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
         :total_iterations => length(energy_history)
     )
     merge!(input_args, Dict{Symbol,Any}(model_kwargs))
-    save_result("data/exact_$(model)_row=$(row).json", result, input_args)
+    save_result("data/exact_$(model_str)_row=$(row).json", result, input_args)
 
     return result
 end

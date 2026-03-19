@@ -1,0 +1,14 @@
+[deps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+IsoPEPS = "ba2a9c53-054a-4f79-8e7e-3842f08de153"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+OMEinsum = "ebe7aa44-baf0-506c-a96f-8464559b3922"
+Optimization = "7f7a1694-90dd-40f0-9382-eb1efda571ba"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
+Yao = "5872b779-8223-5990-8dd0-5abbb0748c8c"
+
+[sources]
+IsoPEPS = {path = ".."}

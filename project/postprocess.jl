@@ -206,7 +206,7 @@ function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=t
         # Make sure samples have same length
         min_len = min(length(X_samples_new), length(Z_samples_new))
         try
-            energy = compute_energy(X_samples_new[1:min_len], Z_samples_new[1:min_len], 
+            energy = compute_tfim_energy(X_samples_new[1:min_len], Z_samples_new[1:min_len],
                                    input_args[:g], input_args[:J], input_args[:row])
             println("\n=== Energy from Resampled Data ===")
             println("Energy: $energy")
@@ -228,7 +228,7 @@ function analyze_acf(filename::String,row::Int; max_lag=100,basis=:Z, resample=t
         X_vec = vec(result.final_X_samples)
         min_len = min(length(X_vec), length(Z_vec))
         try
-            energy_computed = compute_energy(X_vec[1:min_len], Z_vec[1:min_len], 
+            energy_computed = compute_tfim_energy(X_vec[1:min_len], Z_vec[1:min_len],
                                             input_args[:g], input_args[:J], input_args[:row])
             println("\n=== Energy from Saved Samples ===")
             println("Energy (recomputed): $energy_computed")
@@ -896,7 +896,7 @@ function run_energy_evolution(file1::String, file2::String; n_runs=50, conv_step
             # Z_samples includes burn-in period, X_samples does not (collected in second phase)
             Z_valid = Z_samples[conv_step+1:end]
             X_valid = X_samples  # Already post burn-in
-            energies[run_idx] = compute_energy(X_valid, Z_valid, g, J, row)
+            energies[run_idx] = compute_tfim_energy(X_valid, Z_valid, g, J, row)
         end
         
         return energies, g, J, row

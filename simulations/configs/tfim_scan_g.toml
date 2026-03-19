@@ -1,0 +1,24 @@
+[model]
+type = "TFIM"
+J = 1.0
+
+[scan]
+parameter = "g"
+values = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
+
+[circuit]
+row = 3
+p = 3
+nqubits = 3
+unit_cell = "single"
+share_params = true
+
+[optimization]
+maxiter = 500
+abstol = 1e-5
+sigma0 = 1.0
+n_runs = 44
+samples = 10000
+conv_step = 100
+measure_first = "Z"
+seed = 123

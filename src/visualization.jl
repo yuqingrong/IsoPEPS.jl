@@ -295,8 +295,9 @@ function resample_circuit(filename::String; conv_step=100, samples=1000000, meas
     println("Conv steps: $conv_step, Samples: $samples")
     
     # Detect unit cell type: 2x2 if param count matches 4*3*nqubits*p
-    model = get(input_args, :model, "tfim")
-    is_two_by_two = (model == "heisenberg_j1j2") && (length(params) == 4 * PARAMS_PER_QUBIT_PER_LAYER * nqubits * p)
+    model_str = get(input_args, :model, "tfim")
+    m = _construct_model(model_str, Dict{Symbol,Any}(k => v for (k,v) in input_args if k in (:J, :g, :J1, :J2)))
+    is_two_by_two = (model_str == "heisenberg_j1j2") && (length(params) == 4 * PARAMS_PER_QUBIT_PER_LAYER * nqubits * p)
 
     # Reconstruct gates from parameters
     if is_two_by_two
@@ -978,7 +979,8 @@ function plot_expectation_values(result::CircuitOptimizationResult;
     Z_samples = result.final_Z_samples
     X_samples = result.final_X_samples
     Y_samples = hasproperty(result, :final_Y_samples) ? result.final_Y_samples : Float64[]
-    need_y = (model == "heisenberg_j1j2")
+    m = _construct_model(model, Dict{Symbol,Any}(:J => J, :g => something(g, 1.0), :J1 => J1, :J2 => J2))
+    need_y = needs_y_measurement(m)
     if !isnothing(datafile)
         if isfile(datafile)
             # Adaptive sampling: reduce samples for large nqubits (expensive to simulate)
@@ -1018,8 +1020,7 @@ function plot_expectation_values(result::CircuitOptimizationResult;
     labels = String[]; sample_values = Float64[]; exact_values = Float64[]; sample_errors = Float64[]
     can_compute_exact = false
 
-    if model == "heisenberg_j1j2"
-        # --- Heisenberg J1-J2 branch: sample-based correlations only ---
+    if m isa HeisenbergJ1J2
         N = length(Z_samples)
 
         # Helper: compute NN correlations for a single Pauli component
@@ -1108,7 +1109,7 @@ function plot_expectation_values(result::CircuitOptimizationResult;
             ZZ_horiz_stderr = std(ZZ_horiz_pairs) / sqrt(length(ZZ_horiz_pairs))
         end
         if !isnothing(g) && !isnothing(row) && N > 0 && !isempty(X_samples)
-            energy_sample = compute_energy(X_samples, Z_samples, g, J, row)
+            energy_sample = compute_tfim_energy(X_samples, Z_samples, g, J, row)
             if row == 1
                 ZZ_stderr_total = isnothing(ZZ_horiz_stderr) ? 0.0 : ZZ_horiz_stderr
             else
@@ -1564,7 +1565,8 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
                                 dmrg_file::Union{String,Nothing}=nothing,
                                 save_path::Union{String,Nothing}=nothing)
 
-    is_heisenberg = model == "heisenberg_j1j2"
+    m = _construct_model(model, Dict{Symbol,Any}(:J => Float64(J), :g => 1.0, :J1 => J1, :J2 => 0.0))
+    is_heisenberg = m isa HeisenbergJ1J2
     scan_label = is_heisenberg ? "J2" : "g"
 
     println("="^70)
