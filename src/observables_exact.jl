@@ -1,284 +1,511 @@
 # =============================================================================
 # Exact Observable Expectation Values (Transfer Matrix Contraction)
 # =============================================================================
-# Functions for computing expectation values from the transfer matrix fixed point
+# Unified API for computing expectation values, correlations, and energies
+# using the TransferOperator (N-column unit cell) with backward-compatible
+# wrappers for the legacy 1×1 and 2×2 interfaces.
+
+# =============================================================================
+# Section 1: Internal Helpers (private)
+# =============================================================================
+
+"""Convert a symbol (`:X`, `:Y`, `:Z`) or matrix to `Matrix{ComplexF64}`."""
+_resolve_op(obs::Symbol) = if obs == :X
+    Matrix{ComplexF64}(Matrix(X))
+elseif obs == :Y
+    ComplexF64[0 -im; im 0]
+elseif obs == :Z
+    Matrix{ComplexF64}(Matrix(Z))
+else
+    error("Unknown observable: $obs")
+end
+_resolve_op(obs::AbstractMatrix) = Matrix{ComplexF64}(obs)
 
 """
-    correlation_function(gates, row, virtual_qubits, observable, separations;
-                         position::Int=1, connected::Bool=false, optimizer=GreedyMethod())
+    _fixed_points(T) → (l_vec, r_vec, nf, λ)
 
-Compute two-point correlation function ⟨O_i O_{i+r}⟩ using transfer matrix formalism.
-
-The correlation is computed as:
-    ⟨O_i O_{i+r}⟩ = l† · E_O · E^(r-1) · E_O · r / (l† · r)
-
-where E is the transfer matrix, E_O has observable O inserted, and l, r are
-the left and right fixed points.
-
-# Arguments
-- `gates`: Vector of gate matrices
-- `row`: Number of rows
-- `virtual_qubits`: Number of virtual qubits per bond
-- `observable`: Observable operator, either `:X`, `:Z`, or a 2×2 matrix
-- `separations`: Separations to compute (Int, range, or vector)
-- `position`: Row position (1 to row) where to insert the observable (default: 1)
-- `connected`: If true, return connected correlation ⟨O_i O_{i+r}⟩ - ⟨O⟩² (default: false)
-- `optimizer`: Contraction optimizer (default: GreedyMethod())
-
-# Returns
-- `correlations`: Dictionary mapping separation r => correlation value
-
-# Example
-```julia
-gates = build_unitary_gate(params, p, row, nqubits)
-# Compute ⟨Z_i Z_{i+r}⟩ for r = 1 to 10
-corr = correlation_function(gates, row, virtual_qubits, :Z, 1:10)
-# Connected correlation
-corr_c = correlation_function(gates, row, virtual_qubits, :Z, 1:10; connected=true)
-```
+Dominant left/right eigenvectors of `T` with biorthogonal norm `nf = l†r`
+and dominant eigenvalue `λ`.
 """
-function correlation_function(gates, row, virtual_qubits, observable::Union{Symbol,AbstractMatrix},
-                              separations; position::Int=1, connected::Bool=false,
-                              optimizer=GreedyMethod())
-    # Get the operator matrix
-    O = if observable isa Symbol
-        observable == :X ? Matrix(X) : (observable == :Z ? Matrix(Z) : error("Unknown observable: $observable"))
-    else
-        observable
-    end
+function _fixed_points(T::AbstractMatrix)
+    eig_r = eigen(T)
+    idx_r = sortperm(abs.(eig_r.values), rev=true)
+    r_vec = eig_r.vectors[:, idx_r[1]]
+    λ     = eig_r.values[idx_r[1]]
 
-    # Handle single separation
-    seps = separations isa Integer ? [separations] : collect(separations)
-    if isempty(seps)
-        return Dict{Int, ComplexF64}()
-    end
+    eig_l = eigen(T')
+    idx_l = sortperm(abs.(eig_l.values), rev=true)
+    l_vec = eig_l.vectors[:, idx_l[1]]
 
-    # Get transfer matrix and E_O
-    E = get_transfer_matrix(gates, row, virtual_qubits)
-    E_O = get_transfer_matrix_with_operator(gates, row, virtual_qubits, O; position=position, optimizer=optimizer)
-
-    # Compute right fixed point: E * r = λ * r
-    # Using eigen(E') to get right eigenvectors of E
-    eig_right = eigen(E)
-    sorted_idx_r = sortperm(abs.(eig_right.values), rev=true)
-    r_vec = eig_right.vectors[:, sorted_idx_r[1]]  # Dominant right eigenvector
-
-    # Compute left fixed point: l† * E = λ * l†
-    # Equivalently: E' * l = λ* * l, so l is right eigenvector of E'
-    eig_left = eigen(E')
-    sorted_idx_l = sortperm(abs.(eig_left.values), rev=true)
-    l_vec = eig_left.vectors[:, sorted_idx_l[1]]  # Dominant left eigenvector
-
-    # Biorthogonal normalization factor
-    norm_factor = dot(l_vec, r_vec)
-
-    # Efficient computation for multiple separations
-    # Sort separations to iterate in order
-    sorted_seps = sort(seps)
-    max_sep = maximum(sorted_seps)
-
-    # Initialize: current = E_O * r (right boundary with second operator applied)
-    current = E_O * r_vec
-
-    # l† * E_O for left boundary with first operator
-    l_E_O = E_O' * l_vec
-
-    # Compute correlations iteratively
-    correlations = Dict{Int, ComplexF64}()
-    prev_sep = 1
-
-    for sep in sorted_seps
-        # Apply E^(sep - prev_sep) times to advance from previous separation
-        for _ in 1:(sep - prev_sep)
-            current = E * current
-        end
-        prev_sep = sep
-
-        # Compute correlation: l† · E_O · E^(r-1) · E_O · r = (E_O' * l)† · current
-        corr_value = dot(l_E_O, current) / norm_factor
-        correlations[sep] = corr_value
-    end
-
-    # Subtract ⟨O⟩² for connected correlation
-    if connected
-        # Compute ⟨O⟩ = l† · E_O · r / (l† · r)  (separation r=0)
-        O_expectation = dot(l_vec, E_O * r_vec) / norm_factor
-        O_squared = O_expectation^2
-
-        for sep in keys(correlations)
-            correlations[sep] -= O_squared
-        end
-    end
-
-    return correlations
+    nf = dot(l_vec, r_vec)
+    return l_vec, r_vec, nf, λ
 end
 
+"""Per-column transfer matrices (transposed convention, consistent with `get_transfer_matrix`)."""
+_column_transfer_matrices(op::TransferOperator) =
+    [get_transfer_matrix(g, op.row, op.virtual_qubits) for g in op.columns]
+
+"""
+    _precompute_shifted_vectors(T_cols, l_vec, r_vec)
+
+Return `(l_pre, r_suf)` where
+  `l_pre[c] = (T₁⋯T_{c-1})† l`  and  `r_suf[c] = T_{c+1}⋯T_N r`.
+"""
+function _precompute_shifted_vectors(T_cols, l_vec, r_vec)
+    N = length(T_cols)
+    l_pre = Vector{Vector{ComplexF64}}(undef, N)
+    r_suf = Vector{Vector{ComplexF64}}(undef, N)
+
+    l_pre[1] = l_vec
+    for c in 2:N
+        l_pre[c] = T_cols[c-1]' * l_pre[c-1]
+    end
+
+    r_suf[N] = r_vec
+    for c in (N-1):-1:1
+        r_suf[c] = T_cols[c+1] * r_suf[c+1]
+    end
+
+    return l_pre, r_suf
+end
+
+# =============================================================================
+# Section 2: Core expect API
+# =============================================================================
+
+"""
+    expect(op::TransferOperator, obs; col=1, position=1, optimizer=GreedyMethod())
+
+Single-site expectation ⟨O_{col,pos}⟩ for an N-column unit cell.
+
+`obs` can be `:X`, `:Y`, `:Z`, or a 2×2 matrix.
+"""
+function expect(op::TransferOperator, obs;
+                col::Int=1, position::Int=1, optimizer=GreedyMethod())
+    O = _resolve_op(obs)
+    T_combined = reduce(*, _column_transfer_matrices(op))
+    l_vec, r_vec, nf, _ = _fixed_points(T_combined)
+    T̃ = get_transfer_matrix_with_operator(op, Dict((col, position) => O);
+                                          optimizer=optimizer)
+    return dot(l_vec, T̃ * r_vec) / nf
+end
+
+"""
+    expect(op::TransferOperator, sites::Dict{Tuple{Int,Int}}; optimizer=GreedyMethod())
+
+Multi-site expectation ⟨O₁ O₂ ⋯⟩ at arbitrary `(col, position)` sites
+within one period.
+"""
+function expect(op::TransferOperator, sites::Dict{Tuple{Int,Int},<:Any};
+                optimizer=GreedyMethod())
+    ops = Dict{Tuple{Int,Int}, Matrix{ComplexF64}}(
+        k => _resolve_op(v) for (k, v) in sites)
+    T_combined = reduce(*, _column_transfer_matrices(op))
+    l_vec, r_vec, nf, _ = _fixed_points(T_combined)
+    T̃ = get_transfer_matrix_with_operator(op, ops; optimizer=optimizer)
+    return dot(l_vec, T̃ * r_vec) / nf
+end
+
+# --- Backward-compat wrappers (1×1 UC) ---
 
 """
     expect(gates, row, virtual_qubits, observable; position=1, optimizer=GreedyMethod())
-    expect(gates, row, virtual_qubits, operators::Dict; optimizer=GreedyMethod())
 
-Compute expectation value ⟨O⟩ or ⟨O₁ O₂ ...⟩ using transfer matrix formalism.
-
-The expectation is computed as:
-    ⟨O⟩ = l† · E_O · r / (l† · r)
-
-where E_O is the transfer matrix with observable(s) inserted, and l, r are
-the left and right fixed points.
-
-# Arguments
-- `gates`: Vector of gate matrices
-- `row`: Number of rows
-- `virtual_qubits`: Number of virtual qubits per bond
-- `observable`: Observable operator, either `:X`, `:Z`, or a 2×2 matrix (single operator case)
-- `operators`: Dict mapping position (1 to row) => operator (multiple operators case)
-- `position`: Row position (1 to row) where to insert the observable (default: 1)
-- `optimizer`: Contraction optimizer (default: GreedyMethod())
-
-# Returns
-- `expectation`: Complex expectation value
-
-# Example
-```julia
-gates = build_unitary_gate(params, p, row, nqubits)
-# Single operator
-Z_expect = expect(gates, row, virtual_qubits, :Z)
-X_expect = expect(gates, row, virtual_qubits, :X; position=2)
-# Two operators at positions 1 and 2 (vertical ZZ within column)
-ZZ_vert = expect(gates, row, virtual_qubits, Dict(1 => :Z, 2 => :Z))
-# All Z operators
-Z_all = expect(gates, row, virtual_qubits, Dict(i => :Z for i in 1:row))
-```
+Single-operator expectation for a 1×1 unit cell (legacy interface).
 """
 function expect(gates, row, virtual_qubits, observable::Union{Symbol,AbstractMatrix};
                 position::Int=1, optimizer=GreedyMethod())
-    # Single operator case - convert to Dict and call the multi-operator version
-    operators = Dict(position => observable)
-    return expect(gates, row, virtual_qubits, operators; optimizer=optimizer)
+    return expect(gates, row, virtual_qubits,
+                  Dict(position => observable); optimizer=optimizer)
 end
 
-function expect(gates, row, virtual_qubits, operators::Dict{Int,<:Union{Symbol,AbstractMatrix}};
+"""
+    expect(gates, row, virtual_qubits, operators::Dict{Int}; optimizer=GreedyMethod())
+
+Multi-operator expectation within a single column (legacy interface).
+"""
+function expect(gates, row, virtual_qubits,
+                operators::Dict{Int,<:Union{Symbol,AbstractMatrix}};
                 optimizer=GreedyMethod())
-    # Convert symbols to matrices
-    op_matrices = Dict{Int, Matrix{ComplexF64}}()
-    for (pos, op) in operators
-        O = if op isa Symbol
-            op == :X ? Matrix(X) : (op == :Z ? Matrix(Z) : error("Unknown observable: $op"))
-        else
-            Matrix{ComplexF64}(op)
+    sites = Dict{Tuple{Int,Int}, Any}((1, pos) => op for (pos, op) in operators)
+    return expect(TransferOperator([gates], row, virtual_qubits), sites;
+                  optimizer=optimizer)
+end
+
+# =============================================================================
+# Section 3: Correlation Functions
+# =============================================================================
+
+"""
+    correlation_function(op::TransferOperator, observable, separations;
+                         col=1, position=1, connected=false, optimizer=GreedyMethod())
+
+Two-point correlation ⟨O(col,pos,period 0) O(col,pos,period r)⟩ for an
+N-column unit cell.  Separations `r` are in units of full unit-cell periods.
+
+    ⟨O₀ O_r⟩ = l† T̃ T^{r-1} T̃ r / (l†r)
+
+where T̃ is the per-period transfer matrix with the observable inserted at
+`(col, position)`, and T = T_combined.
+"""
+function correlation_function(op::TransferOperator,
+                              observable::Union{Symbol,AbstractMatrix},
+                              separations;
+                              col::Int=1, position::Int=1,
+                              connected::Bool=false,
+                              optimizer=GreedyMethod())
+    O    = _resolve_op(observable)
+    seps = separations isa Integer ? [separations] : collect(separations)
+    isempty(seps) && return Dict{Int, ComplexF64}()
+
+    T_combined = reduce(*, _column_transfer_matrices(op))
+    l_vec, r_vec, nf, _ = _fixed_points(T_combined)
+    E_O = get_transfer_matrix_with_operator(
+        op, Dict((col, position) => O); optimizer=optimizer)
+
+    sorted_seps = sort(seps)
+    current = E_O * r_vec
+    l_E_O   = E_O' * l_vec
+
+    correlations = Dict{Int, ComplexF64}()
+    prev_sep = 1
+    for sep in sorted_seps
+        for _ in 1:(sep - prev_sep)
+            current = T_combined * current
         end
-        op_matrices[pos] = O
+        prev_sep = sep
+        correlations[sep] = dot(l_E_O, current) / nf
     end
 
-    # Get transfer matrix and E_O with multiple operators
-    E = get_transfer_matrix(gates, row, virtual_qubits)
-    E_O = get_transfer_matrix_with_operator(gates, row, virtual_qubits, op_matrices; optimizer=optimizer)
+    if connected
+        O_sq = (dot(l_vec, E_O * r_vec) / nf)^2
+        for k in keys(correlations)
+            correlations[k] -= O_sq
+        end
+    end
+    return correlations
+end
 
-    # Compute right fixed point: E * r = λ * r
-    eig_right = eigen(E)
-    sorted_idx_r = sortperm(abs.(eig_right.values), rev=true)
-    r_vec = eig_right.vectors[:, sorted_idx_r[1]]  # Dominant right eigenvector
+"""
+    correlation_function(gates, row, virtual_qubits, observable, separations;
+                         position=1, connected=false, optimizer=GreedyMethod())
 
-    # Compute left fixed point: l† * E = λ * l†
-    # Equivalently: E' * l = λ* * l, so l is right eigenvector of E'
-    eig_left = eigen(E')
-    sorted_idx_l = sortperm(abs.(eig_left.values), rev=true)
-    l_vec = eig_left.vectors[:, sorted_idx_l[1]]  # Dominant left eigenvector
-
-    # Biorthogonal normalization factor
-    norm_factor = dot(l_vec, r_vec)
-
-    # Compute ⟨O₁ O₂ ...⟩ = l† · E_O · r / (l† · r)
-    O_expectation = dot(l_vec, E_O * r_vec) / norm_factor
-
-    return O_expectation
+Two-point correlation for a 1×1 unit cell (legacy interface).
+Separations are in units of single columns.
+"""
+function correlation_function(gates, row, virtual_qubits,
+                              observable::Union{Symbol,AbstractMatrix},
+                              separations;
+                              position::Int=1, connected::Bool=false,
+                              optimizer=GreedyMethod())
+    op = TransferOperator([gates], row, virtual_qubits)
+    return correlation_function(op, observable, separations;
+                                col=1, position=position,
+                                connected=connected, optimizer=optimizer)
 end
 
 # =============================================================================
-# Observable Expectation Values (legacy interface using transfer matrix)
+# Section 4: TFIM Energy
 # =============================================================================
-# These functions use the `expect` and `correlation_function` infrastructure
-# internally. The `rho` argument is accepted for API compatibility but unused.
 
 """
-    compute_X_expectation(rho, gates, row, virtual_qubits)
+    compute_exact_energy(m::TFIM, op::TransferOperator; optimizer=GreedyMethod())
 
-Compute total ⟨X⟩ = Σ_pos ⟨X_pos⟩ summed over all row positions.
+Exact TFIM energy per column for any N-column unit cell.
+
+Returns `(energy, X_total, ZZ_vert, ZZ_horiz)` — all quantities are
+per-column averages.
 """
-function compute_X_expectation(rho, gates, row, virtual_qubits; optimizer=GreedyMethod())
-    total = 0.0
-    for pos in 1:row
-        total += real(expect(gates, row, virtual_qubits, :X; position=pos, optimizer=optimizer))
+function compute_exact_energy(m::TFIM, op::TransferOperator;
+                              optimizer=GreedyMethod())
+    N   = length(op.columns)
+    row = op.row
+    vq  = op.virtual_qubits
+    σx  = _resolve_op(:X)
+    σz  = _resolve_op(:Z)
+
+    T_cols     = _column_transfer_matrices(op)
+    T_combined = reduce(*, T_cols)
+    l_vec, r_vec, nf, _ = _fixed_points(T_combined)
+    l_pre, r_suf = _precompute_shifted_vectors(T_cols, l_vec, r_vec)
+
+    # Precompute single-operator transfer matrices
+    E_O_X = Dict{Tuple{Int,Int}, Matrix{ComplexF64}}()
+    E_O_Z = Dict{Tuple{Int,Int}, Matrix{ComplexF64}}()
+    for c in 1:N, pos in 1:row
+        E_O_X[(c, pos)] = get_transfer_matrix_with_operator(
+            op.columns[c], row, vq, σx; position=pos, optimizer=optimizer)
+        E_O_Z[(c, pos)] = get_transfer_matrix_with_operator(
+            op.columns[c], row, vq, σz; position=pos, optimizer=optimizer)
     end
-    return total
-end
 
-"""
-    compute_Z_expectation(rho, gates, row, virtual_qubits)
-
-Compute total ⟨Z⟩ = Σ_pos ⟨Z_pos⟩ summed over all row positions.
-"""
-function compute_Z_expectation(rho, gates, row, virtual_qubits; optimizer=GreedyMethod())
-    total = 0.0
-    for pos in 1:row
-        total += real(expect(gates, row, virtual_qubits, :Z; position=pos, optimizer=optimizer))
+    # ⟨X⟩ summed over all sites
+    X_total = 0.0
+    for c in 1:N, pos in 1:row
+        X_total += real(dot(l_pre[c], E_O_X[(c, pos)] * r_suf[c]) / nf)
     end
-    return total
-end
 
-"""
-    compute_single_expectation(rho, gates, row, virtual_qubits, observable; position=1)
-
-Compute single-site expectation ⟨O_pos⟩.
-"""
-function compute_single_expectation(rho, gates, row, virtual_qubits, observable;
-                                     position::Int=1, optimizer=GreedyMethod())
-    return expect(gates, row, virtual_qubits, observable; position=position, optimizer=optimizer)
-end
-
-"""
-    compute_ZZ_expectation(rho, gates, row, virtual_qubits)
-
-Compute vertical and horizontal ZZ correlations.
-
-Returns `(ZZ_vert, ZZ_horiz)`:
-- `ZZ_vert`: Σ ⟨Z_i Z_{i+1}⟩ over vertical bonds in one column (periodic boundary)
-- `ZZ_horiz`: Σ ⟨Z_pos(col) Z_pos(col+1)⟩ over horizontal bonds between adjacent columns
-"""
-function compute_ZZ_expectation(rho, gates, row, virtual_qubits; optimizer=GreedyMethod())
-    # Vertical ZZ: sum over all vertical bonds (periodic)
+    # Vertical ZZ (within each column, periodic boundary)
     ZZ_vert = 0.0
     if row > 1
-        for i in 1:(row-1)
-            ZZ_vert += real(expect(gates, row, virtual_qubits, Dict(i => :Z, i+1 => :Z); optimizer=optimizer))
+        for c in 1:N, i in 1:row
+            j = i % row + 1
+            E_OO = get_transfer_matrix_with_operator(
+                op.columns[c], row, vq, Dict(i => σz, j => σz);
+                optimizer=optimizer)
+            ZZ_vert += real(dot(l_pre[c], E_OO * r_suf[c]) / nf)
         end
-        # Periodic boundary: bond between row and 1
-        ZZ_vert += real(expect(gates, row, virtual_qubits, Dict(row => :Z, 1 => :Z); optimizer=optimizer))
     end
 
-    # Horizontal ZZ: correlation at separation 1
+    # Horizontal ZZ — within-period (c → c+1, c < N)
     ZZ_horiz = 0.0
-    for pos in 1:row
-        corr = correlation_function(gates, row, virtual_qubits, :Z, [1]; position=pos, optimizer=optimizer)
-        ZZ_horiz += real(corr[1])
+    for c in 1:(N-1), pos in 1:row
+        val = dot(l_pre[c],
+                  E_O_Z[(c, pos)] * E_O_Z[(c+1, pos)] * r_suf[c+1]) / nf
+        ZZ_horiz += real(val)
     end
 
-    return ZZ_vert, ZZ_horiz
+    # Horizontal ZZ — cross-period (N → 1′)
+    l_shifted = l_pre[N]
+    r_shifted = r_suf[1]
+    for pos in 1:row
+        val = dot(l_shifted,
+                  E_O_Z[(N, pos)] * E_O_Z[(1, pos)] * r_shifted) / nf
+        ZZ_horiz += real(val)
+    end
+
+    # Per-column averages
+    X_total  /= N
+    ZZ_vert  /= N
+    ZZ_horiz /= N
+
+    energy = -m.g * X_total - m.J * (row == 1 ? ZZ_horiz : ZZ_vert + ZZ_horiz)
+    return energy, X_total, ZZ_vert, ZZ_horiz
 end
 
-"""
-    compute_exact_energy(gates, row, virtual_qubits, J, g)
+# --- Legacy wrappers ---
 
-Compute exact TFIM energy per column: E = -g Σ⟨X⟩ - J Σ⟨ZZ⟩.
 """
-function compute_exact_energy(gates, row, virtual_qubits, J, g; optimizer=GreedyMethod())
-    X_total = compute_X_expectation(nothing, gates, row, virtual_qubits; optimizer=optimizer)
-    ZZ_vert, ZZ_horiz = compute_ZZ_expectation(nothing, gates, row, virtual_qubits; optimizer=optimizer)
+    compute_exact_energy(gates, row, virtual_qubits, J, g; optimizer)
+
+TFIM energy per column for a 1×1 unit cell (legacy interface).
+"""
+function compute_exact_energy(gates, row, virtual_qubits, J, g;
+                              optimizer=GreedyMethod())
+    X_total = compute_X_expectation(nothing, gates, row, virtual_qubits;
+                                    optimizer=optimizer)
+    ZZ_vert, ZZ_horiz = compute_ZZ_expectation(nothing, gates, row,
+                                                virtual_qubits;
+                                                optimizer=optimizer)
     return -g * X_total - J * (row == 1 ? ZZ_horiz : ZZ_vert + ZZ_horiz)
 end
 
+function _compute_pauli_total(gates, row, virtual_qubits, obs::Symbol; optimizer=GreedyMethod())
+    total = 0.0
+    for pos in 1:row
+        total += real(expect(gates, row, virtual_qubits, obs;
+                             position=pos, optimizer=optimizer))
+    end
+    return total
+end
+
+"""
+    compute_X_expectation(rho, gates, row, virtual_qubits; optimizer)
+
+Total ⟨X⟩ = Σ_pos ⟨X_pos⟩ summed over all row positions.
+`rho` is accepted for API compatibility but unused.
+"""
+compute_X_expectation(rho, gates, row, virtual_qubits;
+                      optimizer=GreedyMethod()) =
+    _compute_pauli_total(gates, row, virtual_qubits, :X; optimizer=optimizer)
+
+"""
+    compute_Z_expectation(rho, gates, row, virtual_qubits; optimizer)
+
+Total ⟨Z⟩ = Σ_pos ⟨Z_pos⟩ summed over all row positions.
+`rho` is accepted for API compatibility but unused.
+"""
+compute_Z_expectation(rho, gates, row, virtual_qubits;
+                      optimizer=GreedyMethod()) =
+    _compute_pauli_total(gates, row, virtual_qubits, :Z; optimizer=optimizer)
+
+"""
+    compute_single_expectation(rho, gates, row, virtual_qubits, observable;
+                                position=1, optimizer)
+
+Single-site expectation ⟨O_pos⟩.
+`rho` is accepted for API compatibility but unused.
+"""
+compute_single_expectation(rho, gates, row, virtual_qubits, observable;
+                           position::Int=1, optimizer=GreedyMethod()) =
+    expect(gates, row, virtual_qubits, observable;
+           position=position, optimizer=optimizer)
+
+"""
+    compute_ZZ_expectation(rho, gates, row, virtual_qubits; optimizer)
+
+Vertical and horizontal ZZ correlations for a single column.
+
+Returns `(ZZ_vert, ZZ_horiz)`:
+- `ZZ_vert`:  Σ ⟨Z_i Z_{i+1}⟩ over vertical bonds (periodic boundary)
+- `ZZ_horiz`: Σ ⟨Z_pos(col) Z_pos(col+1)⟩ over horizontal bonds
+"""
+function compute_ZZ_expectation(rho, gates, row, virtual_qubits;
+                                optimizer=GreedyMethod())
+    ZZ_vert = 0.0
+    if row > 1
+        for i in 1:(row-1)
+            ZZ_vert += real(expect(gates, row, virtual_qubits,
+                                  Dict(i => :Z, i+1 => :Z);
+                                  optimizer=optimizer))
+        end
+        ZZ_vert += real(expect(gates, row, virtual_qubits,
+                               Dict(row => :Z, 1 => :Z);
+                               optimizer=optimizer))
+    end
+
+    ZZ_horiz = 0.0
+    for pos in 1:row
+        corr = correlation_function(gates, row, virtual_qubits, :Z, [1];
+                                    position=pos, optimizer=optimizer)
+        ZZ_horiz += real(corr[1])
+    end
+    return ZZ_vert, ZZ_horiz
+end
+
 # =============================================================================
-# Inter-column Correlation (different row positions on adjacent columns)
+# Section 5: Heisenberg J1-J2 Energy
+# =============================================================================
+
+"""
+    compute_exact_heisenberg_energy(op::TransferOperator, J1, J2;
+                                     optimizer=GreedyMethod())
+
+Heisenberg J1-J2 energy per column for any N-column unit cell.
+
+    H = J1 Σ_{⟨i,j⟩} S_i·S_j  +  J2 Σ_{⟨⟨i,j⟩⟩} S_i·S_j
+
+with S_i·S_j = (σx σx + σy σy + σz σz)/4.
+
+Bonds:
+- J1 vertical:   (pos, col)-(pos±1, col)   within column (periodic)
+- J1 horizontal:  (pos, col)-(pos, col+1)   between adjacent columns
+- J2 diagonal:    (pos, col)-(pos±1, col+1) between adjacent columns
+
+Returns energy per column (total energy / N_columns).
+"""
+function compute_exact_heisenberg_energy(op::TransferOperator,
+                                          J1::Float64, J2::Float64;
+                                          optimizer=GreedyMethod())
+    paulis = [_resolve_op(:X), _resolve_op(:Y), _resolve_op(:Z)]
+    N   = length(op.columns)
+    row = op.row
+    vq  = op.virtual_qubits
+
+    T_cols     = _column_transfer_matrices(op)
+    T_combined = reduce(*, T_cols)
+    l_vec, r_vec, nf, _ = _fixed_points(T_combined)
+    l_pre, r_suf = _precompute_shifted_vectors(T_cols, l_vec, r_vec)
+
+    # Precompute single-operator E_O for each (column, pauli_idx, position)
+    E_O = Dict{Tuple{Int,Int,Int}, Matrix{ComplexF64}}()
+    for c in 1:N, (si, σ) in enumerate(paulis), pos in 1:row
+        E_O[(c, si, pos)] = get_transfer_matrix_with_operator(
+            op.columns[c], row, vq, σ; position=pos, optimizer=optimizer)
+    end
+
+    energy = 0.0
+
+    # === J1: Vertical bonds (within column, periodic) ===
+    if row > 1
+        for c in 1:N, i in 1:row
+            j = i % row + 1
+            for σ in paulis
+                E_OO = get_transfer_matrix_with_operator(
+                    op.columns[c], row, vq, Dict(i => σ, j => σ);
+                    optimizer=optimizer)
+                val = dot(l_pre[c], E_OO * r_suf[c]) / nf
+                energy += J1 * real(val) / 4.0
+            end
+        end
+    end
+
+    # === J1: Horizontal bonds (same position, adjacent columns) ===
+    # Within-period (c → c+1, c < N)
+    for c in 1:(N-1), (si, _) in enumerate(paulis), pos in 1:row
+        val = dot(l_pre[c],
+                  E_O[(c, si, pos)] * E_O[(c+1, si, pos)] * r_suf[c+1]) / nf
+        energy += J1 * real(val) / 4.0
+    end
+
+    # Cross-period (N → 1′)
+    l_shifted = l_pre[N]
+    r_shifted = r_suf[1]
+    for (si, _) in enumerate(paulis), pos in 1:row
+        val = dot(l_shifted,
+                  E_O[(N, si, pos)] * E_O[(1, si, pos)] * r_shifted) / nf
+        energy += J1 * real(val) / 4.0
+    end
+
+    # === J2: Diagonal NNN bonds ===
+    if J2 != 0.0
+        for i in 1:row
+            j_up   = i % row + 1
+            j_down = (i - 2 + row) % row + 1
+
+            for (si, _) in enumerate(paulis)
+                # Within-period (c → c+1)
+                for c in 1:(N-1), j in (j_up, j_down)
+                    val = dot(l_pre[c],
+                              E_O[(c, si, i)] * E_O[(c+1, si, j)] *
+                              r_suf[c+1]) / nf
+                    energy += J2 * real(val) / 4.0
+                end
+
+                # Cross-period (N → 1′)
+                for j in (j_up, j_down)
+                    val = dot(l_shifted,
+                              E_O[(N, si, i)] * E_O[(1, si, j)] *
+                              r_shifted) / nf
+                    energy += J2 * real(val) / 4.0
+                end
+            end
+        end
+    end
+
+    return energy / N
+end
+
+# --- Legacy wrappers ---
+
+"""
+    compute_exact_heisenberg_energy(gates, row, virtual_qubits, J1, J2; optimizer)
+
+Heisenberg J1-J2 energy per column for a 1×1 unit cell (legacy interface).
+"""
+function compute_exact_heisenberg_energy(gates, row, virtual_qubits,
+                                          J1::Float64, J2::Float64;
+                                          optimizer=GreedyMethod())
+    op = TransferOperator([gates], row, virtual_qubits)
+    return compute_exact_heisenberg_energy(op, J1, J2; optimizer=optimizer)
+end
+
+"""
+    compute_exact_heisenberg_energy_2x2(gates_odd, gates_even, row,
+                                         virtual_qubits, J1, J2; optimizer)
+
+Heisenberg J1-J2 energy per column for a 2×2 unit cell (legacy interface).
+"""
+function compute_exact_heisenberg_energy_2x2(gates_odd, gates_even, row,
+                                              virtual_qubits,
+                                              J1::Float64, J2::Float64;
+                                              optimizer=GreedyMethod())
+    op = TransferOperator([gates_odd, gates_even], row, virtual_qubits)
+    return compute_exact_heisenberg_energy(op, J1, J2; optimizer=optimizer)
+end
+
+# =============================================================================
+# Section 6: Inter-column Correlation (unchanged)
 # =============================================================================
 
 """
@@ -289,256 +516,32 @@ end
 Compute ⟨O1_{pos1}(col) O2_{pos2}(col+1)⟩ between adjacent columns.
 
 Optionally pass precomputed `l_vec`, `r_vec`, `norm_factor`, and `E_O_cache`
-(Dict mapping (operator_index, position) => E_O matrix) to avoid redundant work.
+(Dict mapping (operator, position) => E_O matrix) to avoid redundant work.
 """
 function intercolumn_correlation(gates, row, virtual_qubits,
                                   O1::AbstractMatrix, pos1::Int,
                                   O2::AbstractMatrix, pos2::Int;
-                                  l_vec=nothing, r_vec=nothing, norm_factor=nothing,
-                                  E_O_cache=nothing, optimizer=GreedyMethod())
-    # Get or compute E_O matrices
-    if E_O_cache !== nothing && haskey(E_O_cache, (O1, pos1)) && haskey(E_O_cache, (O2, pos2))
+                                  l_vec=nothing, r_vec=nothing,
+                                  norm_factor=nothing,
+                                  E_O_cache=nothing,
+                                  optimizer=GreedyMethod())
+    if E_O_cache !== nothing &&
+       haskey(E_O_cache, (O1, pos1)) && haskey(E_O_cache, (O2, pos2))
         E_O1 = E_O_cache[(O1, pos1)]
         E_O2 = E_O_cache[(O2, pos2)]
     else
-        E_O1 = get_transfer_matrix_with_operator(gates, row, virtual_qubits, O1; position=pos1, optimizer=optimizer)
-        E_O2 = get_transfer_matrix_with_operator(gates, row, virtual_qubits, O2; position=pos2, optimizer=optimizer)
+        E_O1 = get_transfer_matrix_with_operator(
+            gates, row, virtual_qubits, O1; position=pos1,
+            optimizer=optimizer)
+        E_O2 = get_transfer_matrix_with_operator(
+            gates, row, virtual_qubits, O2; position=pos2,
+            optimizer=optimizer)
     end
 
-    # Compute fixed points if not provided
     if l_vec === nothing || r_vec === nothing || norm_factor === nothing
         E = get_transfer_matrix(gates, row, virtual_qubits)
-        eig_r = eigen(E)
-        idx_r = sortperm(abs.(eig_r.values), rev=true)
-        r_vec = eig_r.vectors[:, idx_r[1]]
-        eig_l = eigen(E')
-        idx_l = sortperm(abs.(eig_l.values), rev=true)
-        l_vec = eig_l.vectors[:, idx_l[1]]
-        norm_factor = dot(l_vec, r_vec)
+        l_vec, r_vec, norm_factor, _ = _fixed_points(E)
     end
 
-    # ⟨O1_{pos1}(col) O2_{pos2}(col+1)⟩ = l† · E_{O1} · E_{O2} · r / norm
     return dot(l_vec, E_O1 * E_O2 * r_vec) / norm_factor
-end
-
-# =============================================================================
-# Heisenberg J1-J2 Energy (exact tensor contraction)
-# =============================================================================
-
-"""
-    compute_exact_heisenberg_energy(gates, row, virtual_qubits, J1, J2; optimizer=GreedyMethod())
-
-Compute Heisenberg J1-J2 energy per column using exact tensor contraction.
-
-    H = J1 Σ_{⟨i,j⟩} S_i · S_j + J2 Σ_{⟨⟨i,j⟩⟩} S_i · S_j
-
-where S_i · S_j = (X_i X_j + Y_i Y_j + Z_i Z_j) / 4 for spin-1/2.
-
-Bonds:
-- J1 vertical: (pos, col)-(pos+1, col) within column (periodic in vertical direction)
-- J1 horizontal: (pos, col)-(pos, col+1) between adjacent columns
-- J2 diagonal: (pos, col)-(pos±1, col+1) between adjacent columns
-"""
-function compute_exact_heisenberg_energy(gates, row, virtual_qubits, J1::Float64, J2::Float64;
-                                          optimizer=GreedyMethod())
-    σx = Matrix{ComplexF64}(Matrix(X))
-    σy = ComplexF64[0 -im; im 0]
-    σz = Matrix{ComplexF64}(Matrix(Z))
-    paulis = [σx, σy, σz]
-
-    # Precompute transfer matrix fixed points
-    E = get_transfer_matrix(gates, row, virtual_qubits)
-    eig_r = eigen(E)
-    idx_r = sortperm(abs.(eig_r.values), rev=true)
-    r_vec = eig_r.vectors[:, idx_r[1]]
-    eig_l = eigen(E')
-    idx_l = sortperm(abs.(eig_l.values), rev=true)
-    l_vec = eig_l.vectors[:, idx_l[1]]
-    nf = dot(l_vec, r_vec)
-
-    # Precompute E_O for each (pauli, position)
-    E_O_cache = Dict{Tuple{Matrix{ComplexF64},Int}, Matrix{ComplexF64}}()
-    for σ in paulis
-        for pos in 1:row
-            E_O_cache[(σ, pos)] = get_transfer_matrix_with_operator(
-                gates, row, virtual_qubits, σ; position=pos, optimizer=optimizer)
-        end
-    end
-
-    energy = 0.0
-
-    # --- J1: Nearest-neighbor vertical bonds (within column, periodic) ---
-    if row > 1
-        for i in 1:row
-            j = i % row + 1  # next position with periodic wrap
-            for σ in paulis
-                E_OO = get_transfer_matrix_with_operator(
-                    gates, row, virtual_qubits, Dict(i => σ, j => σ); optimizer=optimizer)
-                val = dot(l_vec, E_OO * r_vec) / nf
-                energy += J1 * real(val) / 4.0
-            end
-        end
-    end
-
-    # --- J1: Nearest-neighbor horizontal bonds (same position, adjacent columns) ---
-    for σ in paulis
-        for pos in 1:row
-            E_O = E_O_cache[(σ, pos)]
-            # ⟨σ_pos(col) σ_pos(col+1)⟩ = l† · E_O² · r / norm
-            val = dot(l_vec, E_O * E_O * r_vec) / nf
-            energy += J1 * real(val) / 4.0
-        end
-    end
-
-    # --- J2: Next-nearest-neighbor diagonal bonds ---
-    if J2 != 0.0
-        for i in 1:row
-            j_up = i % row + 1                    # pos+1 with wrap
-            j_down = (i - 2 + row) % row + 1      # pos-1 with wrap
-
-            for σ in paulis
-                E_O_i = E_O_cache[(σ, i)]
-                E_O_up = E_O_cache[(σ, j_up)]
-                E_O_down = E_O_cache[(σ, j_down)]
-
-                # Diagonal: (i, col) -> (i+1, col+1)
-                val1 = dot(l_vec, E_O_i * E_O_up * r_vec) / nf
-                energy += J2 * real(val1) / 4.0
-
-                # Anti-diagonal: (i, col) -> (i-1, col+1)
-                val2 = dot(l_vec, E_O_i * E_O_down * r_vec) / nf
-                energy += J2 * real(val2) / 4.0
-            end
-        end
-    end
-
-    return energy
-end
-
-# =============================================================================
-# Heisenberg J1-J2 Energy for 2×2 Unit Cell (exact tensor contraction)
-# =============================================================================
-
-"""
-    compute_exact_heisenberg_energy_2x2(gates_odd, gates_even, row, virtual_qubits, J1, J2;
-                                         optimizer=GreedyMethod())
-
-Compute Heisenberg J1-J2 energy per column for a 2-column unit cell.
-
-Odd columns use `gates_odd`, even columns use `gates_even`.
-The combined transfer matrix is T = T_odd * T_even with fixed points l, r.
-
-Energy contributions:
-- Within-period bonds (odd→even column)
-- Cross-period bonds (even→next odd column, using dominant eigenvalue λ)
-
-Returns energy per column (total / 2).
-"""
-function compute_exact_heisenberg_energy_2x2(gates_odd, gates_even, row, virtual_qubits,
-                                              J1::Float64, J2::Float64;
-                                              optimizer=GreedyMethod())
-    σx = Matrix{ComplexF64}(Matrix(X))
-    σy = ComplexF64[0 -im; im 0]
-    σz = Matrix{ComplexF64}(Matrix(Z))
-    paulis = [σx, σy, σz]
-
-    # Build individual and combined transfer matrices
-    T_odd  = get_transfer_matrix(gates_odd, row, virtual_qubits)
-    T_even = get_transfer_matrix(gates_even, row, virtual_qubits)
-    T_combined = T_odd * T_even
-
-    # Fixed points of T_combined
-    eig_r = eigen(T_combined)
-    idx_r = sortperm(abs.(eig_r.values), rev=true)
-    r_vec = eig_r.vectors[:, idx_r[1]]
-    λ = eig_r.values[idx_r[1]]
-
-    eig_l = eigen(T_combined')
-    idx_l = sortperm(abs.(eig_l.values), rev=true)
-    l_vec = eig_l.vectors[:, idx_l[1]]
-    nf = dot(l_vec, r_vec)
-
-    # Precompute E_O for each (pauli, position) for both gate sets
-    E_O_odd  = Dict{Tuple{Matrix{ComplexF64},Int}, Matrix{ComplexF64}}()
-    E_O_even = Dict{Tuple{Matrix{ComplexF64},Int}, Matrix{ComplexF64}}()
-    for σ in paulis, pos in 1:row
-        E_O_odd[(σ, pos)]  = get_transfer_matrix_with_operator(
-            gates_odd, row, virtual_qubits, σ; position=pos, optimizer=optimizer)
-        E_O_even[(σ, pos)] = get_transfer_matrix_with_operator(
-            gates_even, row, virtual_qubits, σ; position=pos, optimizer=optimizer)
-    end
-
-    # Precompute intermediate vectors for cross-period bonds
-    r_mid = T_even * r_vec   # T_even · r
-    l_mid = T_odd' * l_vec   # T_odd† · l
-
-    energy = 0.0
-
-    # =====================================================================
-    # J1: Vertical bonds (within column, periodic)
-    # =====================================================================
-    if row > 1
-        for col_type in (:odd, :even)
-            gates_col = col_type == :odd ? gates_odd : gates_even
-            T_next = col_type == :odd ? T_even : T_odd
-            for i in 1:row
-                j = i % row + 1
-                for σ in paulis
-                    E_OO = get_transfer_matrix_with_operator(
-                        gates_col, row, virtual_qubits, Dict(i => σ, j => σ);
-                        optimizer=optimizer)
-                    if col_type == :odd
-                        # l† · E_OO_odd · T_even · r / nf
-                        val = dot(l_vec, E_OO * T_even * r_vec) / nf
-                    else
-                        # l† · T_odd · E_OO_even · r / nf
-                        val = dot(l_vec, T_odd * E_OO * r_vec) / nf
-                    end
-                    energy += J1 * real(val) / 4.0
-                end
-            end
-        end
-    end
-
-    # =====================================================================
-    # J1: Horizontal bonds (same position, adjacent columns)
-    # =====================================================================
-    for σ in paulis, pos in 1:row
-        # Within-period: odd→even (same period)
-        # l† · E_O_odd(σ,pos) · E_O_even(σ,pos) · r / nf
-        val_wp = dot(l_vec, E_O_odd[(σ, pos)] * E_O_even[(σ, pos)] * r_vec) / nf
-        energy += J1 * real(val_wp) / 4.0
-
-        # Cross-period: even→next odd
-        # l_mid† · E_O_even(σ,pos) · E_O_odd(σ,pos) · r_mid / (λ · nf)
-        val_cp = dot(l_mid, E_O_even[(σ, pos)] * E_O_odd[(σ, pos)] * r_mid) / (λ * nf)
-        energy += J1 * real(val_cp) / 4.0
-    end
-
-    # =====================================================================
-    # J2: Diagonal NNN bonds
-    # =====================================================================
-    if J2 != 0.0
-        for i in 1:row
-            j_up   = i % row + 1
-            j_down = (i - 2 + row) % row + 1
-
-            for σ in paulis
-                # Within-period: odd(i)→even(i±1)
-                for j in (j_up, j_down)
-                    val = dot(l_vec, E_O_odd[(σ, i)] * E_O_even[(σ, j)] * r_vec) / nf
-                    energy += J2 * real(val) / 4.0
-                end
-
-                # Cross-period: even(i)→next odd(i±1)
-                for j in (j_up, j_down)
-                    val = dot(l_mid, E_O_even[(σ, i)] * E_O_odd[(σ, j)] * r_mid) / (λ * nf)
-                    energy += J2 * real(val) / 4.0
-                end
-            end
-        end
-    end
-
-    # Energy per column = total / 2 (2-column unit cell)
-    return energy / 2.0
 end

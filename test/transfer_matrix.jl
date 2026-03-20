@@ -833,45 +833,51 @@ end
 end
 
 @testset "transfer_matrix_consistency" begin
-    virtual_qubits = 1
-    nqubits = 1 + 2 * virtual_qubits
-    
-    for row in [1, 2, 3]
-        @testset "row=$row" begin
-            # Generate random unitary gates
-            gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
-            gates = [Matrix(gate) for _ in 1:row]
-            
-            # Get transfer matrix from custom implementation
-            T_custom = get_transfer_matrix(gates, row, virtual_qubits)
-            
-            # Get transfer matrix from ITensor implementation
-            T_itensor, eigs_itensor, ξ_itensor = transfer_matrix_ITensor(gates, row, virtual_qubits)
-            T_itensor_array = Array(T_itensor, inds(T_itensor)...)  # Convert ITensor to array
-            
-            # Test 1: Transfer matrices should match (up to index ordering/transpose)
-            # Note: ITensor and custom implementation may have different index conventions
-            # which results in a transpose. Both T and T' have the same spectrum.
-            @test size(T_custom) == size(T_itensor_array)
-            @test isapprox(T_custom, T_itensor_array, atol=1e-10) 
-            
-            # Get spectrum from all three methods
-            _, gap_custom, eigenvalues_custom, _ = compute_transfer_spectrum(gates, row, nqubits)
-            spectrum_mpskit, ξ_mpskit = spectrum_MPSKit(gates, row, virtual_qubits)
-            
-            # Test 2: Eigenvalue magnitudes should match
-            eigs_custom_sorted = sort(abs.(eigenvalues_custom), rev=true)
-            eigs_itensor_sorted = sort(abs.(eigs_itensor), rev=true)
-            eigs_mpskit_sorted = sort(abs.(spectrum_mpskit), rev=true)
-            
-            n_compare = min(length(eigs_custom_sorted), length(eigs_itensor_sorted), length(eigs_mpskit_sorted))
-            @test eigs_custom_sorted[1:n_compare] ≈ eigs_itensor_sorted[1:n_compare] atol=1e-6
-            @test eigs_custom_sorted[1:n_compare] ≈ eigs_mpskit_sorted[1:n_compare] atol=1e-6
-            
-            # Test 3: Correlation lengths should match
-            @test isapprox(1/gap_custom, ξ_itensor, atol=1e-6)
-            @test isapprox(1/gap_custom, ξ_mpskit, atol=1e-6)
+    has_itensor = hasmethod(transfer_matrix_ITensor, Tuple{Any, Any, Any})
+    has_mpskit = hasmethod(spectrum_MPSKit, Tuple{Any, Any, Any})
+
+    if has_itensor && has_mpskit
+        virtual_qubits = 1
+        nqubits = 1 + 2 * virtual_qubits
+
+        for row in [1, 2, 3]
+            @testset "row=$row" begin
+                # Generate random unitary gates
+                gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
+                gates = [Matrix(gate) for _ in 1:row]
+
+                # Get transfer matrix from custom implementation
+                T_custom = get_transfer_matrix(gates, row, virtual_qubits)
+
+                # Get transfer matrix from ITensor implementation
+                T_itensor, eigs_itensor, ξ_itensor = transfer_matrix_ITensor(gates, row, virtual_qubits)
+                T_itensor_array = Array(T_itensor, inds(T_itensor)...)  # Convert ITensor to array
+
+                # Test 1: Transfer matrices should match (up to index ordering/transpose)
+                # Note: ITensor and custom implementation may have different index conventions
+                # which results in a transpose. Both T and T' have the same spectrum.
+                @test size(T_custom) == size(T_itensor_array)
+                @test isapprox(T_custom, T_itensor_array, atol=1e-10)
+
+                # Get spectrum from all three methods
+                _, gap_custom, eigenvalues_custom, _ = compute_transfer_spectrum(gates, row, nqubits)
+                spectrum_mpskit, ξ_mpskit = spectrum_MPSKit(gates, row, virtual_qubits)
+
+                # Test 2: Eigenvalue magnitudes should match
+                eigs_custom_sorted = sort(abs.(eigenvalues_custom), rev=true)
+                eigs_itensor_sorted = sort(abs.(eigs_itensor), rev=true)
+                eigs_mpskit_sorted = sort(abs.(spectrum_mpskit), rev=true)
+
+                n_compare = min(length(eigs_custom_sorted), length(eigs_itensor_sorted), length(eigs_mpskit_sorted))
+                @test eigs_custom_sorted[1:n_compare] ≈ eigs_itensor_sorted[1:n_compare] atol=1e-6
+                @test eigs_custom_sorted[1:n_compare] ≈ eigs_mpskit_sorted[1:n_compare] atol=1e-6
+
+                # Test 3: Correlation lengths should match
+                @test isapprox(1/gap_custom, ξ_itensor, atol=1e-6)
+                @test isapprox(1/gap_custom, ξ_mpskit, atol=1e-6)
+            end
         end
+    else
+        @info "Skipping transfer_matrix_consistency: extension methods unavailable" has_itensor has_mpskit
     end
 end
-

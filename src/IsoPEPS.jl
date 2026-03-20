@@ -75,6 +75,7 @@ include("observables_exact.jl")
 include("observables_sampling.jl")
 
 include("training.jl")
+include("results_io.jl")
 include("visualization.jl")
 
 # =============================================================================
@@ -124,7 +125,7 @@ export compute_energy_from_samples, compute_exact_energy_from_gates
 export build_unitary_gate, build_unitary_gate_2x2
 
 # Sampling-Based Observables
-export compute_tfim_energy, compute_heisenberg_energy, compute_acf
+export compute_energy, compute_tfim_energy, compute_heisenberg_energy, compute_acf
 
 # Optimization / Training
 export CircuitOptimizationResult, ExactOptimizationResult, ManifoldOptimizationResult

@@ -4,6 +4,210 @@
 # Functions that compute expectation values and energies from measurement samples
 # (as opposed to exact tensor network contraction in observables_exact.jl)
 
+# =============================================================================
+# Section 1: Internal Helpers (private)
+# =============================================================================
+
+"""Number of columns in sample vector."""
+_n_cols(samples, row) = div(length(samples), row)
+
+# =============================================================================
+# Section 2: Core expect API for samples
+# =============================================================================
+
+"""
+    expect(samples::Vector{Float64}, row::Int)
+    expect(samples::Vector{Float64}, row::Int; position::Int)
+
+Single-site expectation from samples:
+- without `position`: averaged over all sampled sites
+- with `position`: averaged over columns at fixed row position
+"""
+function expect(samples::Vector{Float64}, row::Int; position::Union{Nothing,Int}=nothing)
+    if isnothing(position)
+        return mean(samples)
+    end
+    return mean(samples[position:row:end])
+end
+
+"""
+    expect(samples::Vector{Float64}, row::Int, pos1::Int, pos2::Int; col_separation::Int=0)
+
+Two-site expectation ⟨O_{pos1,c} O_{pos2,c+sep}⟩ averaged over all valid columns.
+"""
+function expect(samples::Vector{Float64}, row::Int, pos1::Int, pos2::Int;
+                col_separation::Int=0)
+    ncols = _n_cols(samples, row)
+    total = 0.0
+    count = 0
+    for c in 1:(ncols - col_separation)
+        i = row * (c - 1) + pos1
+        j = row * (c - 1 + col_separation) + pos2
+        total += samples[i] * samples[j]
+        count += 1
+    end
+    return total / count
+end
+
+# =============================================================================
+# Section 3: Correlation Functions from samples
+# =============================================================================
+
+"""
+    correlation_function(samples::Vector{Float64}, row::Int, separations;
+                         position::Int=1, connected::Bool=false)
+
+Return a dictionary mapping separation `r` to
+`⟨O_{position,c} O_{position,c+r}⟩`.
+"""
+function correlation_function(samples::Vector{Float64}, row::Int, separations;
+                              position::Int=1, connected::Bool=false)
+    seps = separations isa Integer ? [separations] : collect(separations)
+    correlations = Dict{Int, Float64}()
+    for sep in seps
+        correlations[sep] = expect(samples, row, position, position;
+                                   col_separation=sep)
+    end
+
+    if connected
+        μ = expect(samples, row; position=position)
+        for k in keys(correlations)
+            correlations[k] -= μ^2
+        end
+    end
+    return correlations
+end
+
+# =============================================================================
+# Section 4: Energy (model-dispatched wrappers + existing implementations)
+# =============================================================================
+
+compute_energy(m::TFIM, X_samples, Z_samples, row) =
+    compute_tfim_energy(X_samples, Z_samples, m.g, m.J, row)
+
+compute_energy(m::HeisenbergJ1J2, X_samples, Z_samples, Y_samples, row) =
+    compute_heisenberg_energy(X_samples, Z_samples, Y_samples, m.J1, m.J2, row)
+
+"""
+    compute_tfim_energy(X_samples, Z_samples, g, J, row)
+
+Compute TFIM energy from measurement samples.
+
+# Arguments
+- `X_samples`: Vector of X measurement outcomes
+- `Z_samples`: Vector of Z measurement outcomes
+- `g`: Transverse field strength
+- `J`: Coupling strength (default: 1.0)
+- `row`: Number of rows
+
+# Returns
+- Energy estimate: E = -g⟨X⟩ - J⟨ZZ⟩
+
+# Description
+Computes the transverse field Ising model energy:
+H = -g ∑ᵢ Xᵢ - J ∑⟨ij⟩ ZᵢZⱼ
+
+Sample layout for row=4:
+  Z[1]  Z[5]  Z[9]   ...   ← row 1
+  Z[2]  Z[6]  Z[10]  ...   ← row 2
+  Z[3]  Z[7]  Z[11]  ...   ← row 3
+  Z[4]  Z[8]  Z[12]  ...   ← row 4
+   ↑     ↑     ↑
+  col1  col2  col3
+
+- Vertical bonds: Z[i]*Z[i+1] only when i % row != 0 (not at last row of column)
+- Horizontal bonds: Z[i]*Z[i+row] (same row, adjacent columns)
+"""
+function compute_tfim_energy(X_samples, Z_samples, g, J, row)
+    X_mean = mean(X_samples)
+    N = length(Z_samples)
+
+    if row == 1
+        # Row=1: only horizontal bonds (no vertical neighbors)
+        ZZ_horiz = mean(Z_samples[i] * Z_samples[i+1] for i in 1:N-1)
+        ZZ_mean = ZZ_horiz
+    else
+        # Vertical bonds: Z[i]*Z[i+1] only when NOT at the last row of a column
+        # Skip when i % row == 0 (e.g., Z[4]*Z[5] would be diagonal, not vertical)
+        ZZ_vert_pairs = [Z_samples[i] * Z_samples[i+1]
+                         for i in 1:N-1 if i % row != 0]
+        ZZ_vert = mean(ZZ_vert_pairs)
+
+        # Horizontal bonds: Z[i]*Z[i+row] (same row, adjacent columns)
+        ZZ_horiz = mean(Z_samples[i] * Z_samples[i+row] for i in 1:N-row)
+        # Both contribute to energy
+        ZZ_mean = ZZ_vert + ZZ_horiz
+    end
+
+    return -g * X_mean - J * ZZ_mean
+end
+
+"""
+    compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, J2, row)
+
+Compute Heisenberg J1-J2 energy from X, Y, Z measurement samples.
+
+    S_i · S_j = (X_i X_j + Y_i Y_j + Z_i Z_j) / 4
+
+# Arguments
+- `X_samples`: Vector of X measurement outcomes
+- `Z_samples`: Vector of Z measurement outcomes
+- `Y_samples`: Vector of Y measurement outcomes
+- `J1`: Nearest-neighbor coupling
+- `J2`: Next-nearest-neighbor (diagonal) coupling
+- `row`: Number of rows
+
+# Returns
+- Energy estimate per column
+"""
+function compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, J2, row)
+    all_samples = (Z_samples, X_samples, Y_samples)
+
+    # Helper: compute vertical and horizontal correlations for one set of samples
+    function _correlations(S, row)
+        N = length(S)
+        if row == 1
+            vert = 0.0
+            horiz = mean(S[i] * S[i+1] for i in 1:N-1)
+        else
+            vert_pairs = [S[i] * S[i+1] for i in 1:N-1 if i % row != 0]
+            vert = mean(vert_pairs)
+            horiz = mean(S[i] * S[i+row] for i in 1:N-row)
+        end
+        return vert, horiz
+    end
+
+    # Sum XX + YY + ZZ for NN bonds
+    SS_vert = 0.0
+    SS_horiz = 0.0
+    for S in all_samples
+        v, h = _correlations(S, row)
+        SS_vert += v
+        SS_horiz += h
+    end
+
+    energy = J1 * (row == 1 ? SS_horiz : SS_vert + SS_horiz) / 4.0
+
+    # J2: diagonal NNN bonds
+    if J2 != 0.0 && row > 1
+        SS_diag = 0.0
+        for S in all_samples
+            N = length(S)
+            # Diagonal: (pos,col)->(pos+1,col+1)
+            diag1 = [S[i] * S[i+row+1] for i in 1:N-row-1 if i % row != 0]
+            # Anti-diagonal: (pos,col)->(pos-1,col+1)
+            diag2 = [S[i] * S[i+row-1] for i in 1:N-row+1 if (i-1) % row != 0]
+            SS_diag += mean(diag1) + mean(diag2)
+        end
+        energy += J2 * SS_diag / 4.0
+    end
+    return energy
+end
+
+# =============================================================================
+# Section 5: ACF (unchanged)
+# =============================================================================
+
 """
     compute_acf(data; max_lag::Int=100, n_bootstrap::Int=100, normalize::Bool=true)
 
@@ -138,118 +342,173 @@ function compute_acf(data::Vector{Float64}; max_lag::Int=100, row::Int=1, n_boot
     return compute_acf(reshape(data, 1, :); max_lag=max_lag, row=row, n_bootstrap=n_bootstrap, normalize=normalize)
 end
 
-"""
-    compute_tfim_energy(X_samples, Z_samples, g, J, row)
+# =============================================================================
+# Section 6: Circuit Resampling and Gate Reconstruction
+# =============================================================================
 
-Compute TFIM energy from measurement samples.
+"""
+    resample_circuit(filename::String; conv_step=1000, samples=100000, measure_first=nothing)
+
+Extract final parameters from a saved result and re-run the circuit to generate new samples.
 
 # Arguments
-- `X_samples`: Vector of X measurement outcomes
-- `Z_samples`: Vector of Z measurement outcomes
-- `g`: Transverse field strength
-- `J`: Coupling strength (default: 1.0)
-- `row`: Number of rows
+- `filename`: Path to JSON result file containing CircuitOptimizationResult
+- `conv_step`: Number of convergence steps before sampling (default: 1000)
+- `samples`: Number of samples to collect (default: 100000)
+- `measure_first`: Which observable to measure first, :X or :Z (default: use value from saved result)
 
 # Returns
-- Energy estimate: E = -g⟨X⟩ - J⟨ZZ⟩
+- Tuple of (rho, Z_samples, X_samples, params, gates) where:
+  - `rho`: Final quantum state
+  - `Z_samples`: Vector of Z measurement outcomes
+  - `X_samples`: Vector of X measurement outcomes
+  - `params`: Parameters used (from the saved result)
+  - `gates`: Gates reconstructed from parameters
 
-# Description
-Computes the transverse field Ising model energy:
-H = -g ∑ᵢ Xᵢ - J ∑⟨ij⟩ ZᵢZⱼ
-
-Sample layout for row=4:
-  Z[1]  Z[5]  Z[9]   ...   ← row 1
-  Z[2]  Z[6]  Z[10]  ...   ← row 2
-  Z[3]  Z[7]  Z[11]  ...   ← row 3
-  Z[4]  Z[8]  Z[12]  ...   ← row 4
-   ↑     ↑     ↑
-  col1  col2  col3
-
-- Vertical bonds: Z[i]*Z[i+1] only when i % row != 0 (not at last row of column)
-- Horizontal bonds: Z[i]*Z[i+row] (same row, adjacent columns)
+# Example
+```julia
+rho, Z_samples, X_samples, params, gates = resample_circuit("results/circuit_J=1.0_g=2.0_row=6.json"; samples=50000)
+```
 """
-function compute_tfim_energy(X_samples, Z_samples, g, J, row)
-    X_mean = mean(X_samples)
-    N = length(Z_samples)
+function resample_circuit(filename::String; conv_step=100, samples=1000000, measure_first=nothing, measure_y=false)
+    result, input_args = load_result(filename)
 
-    if row == 1
-        # Row=1: only horizontal bonds (no vertical neighbors)
-        ZZ_horiz = mean(Z_samples[i] * Z_samples[i+1] for i in 1:N-1)
-        ZZ_mean = ZZ_horiz
-    else
-        # Vertical bonds: Z[i]*Z[i+1] only when NOT at the last row of a column
-        # Skip when i % row == 0 (e.g., Z[4]*Z[5] would be diagonal, not vertical)
-        ZZ_vert_pairs = [Z_samples[i] * Z_samples[i+1]
-                         for i in 1:N-1 if i % row != 0]
-        ZZ_vert = mean(ZZ_vert_pairs)
-
-        # Horizontal bonds: Z[i]*Z[i+row] (same row, adjacent columns)
-        ZZ_horiz = mean(Z_samples[i] * Z_samples[i+row] for i in 1:N-row)
-        # Both contribute to energy
-        ZZ_mean = ZZ_vert + ZZ_horiz
+    if !(result isa CircuitOptimizationResult)
+        @warn "Result is not CircuitOptimizationResult, cannot resample"
+        return nothing
     end
 
-    return -g * X_mean - J * ZZ_mean
+    # Extract parameters from result
+    params = result.final_params
+
+    # Extract circuit configuration from input_args
+    p = input_args[:p]
+    row = input_args[:row]
+    nqubits = input_args[:nqubits]
+    share_params = get(input_args, :share_params, true)
+
+    # Use measure_first from result if not specified
+    if isnothing(measure_first)
+        measure_first = Symbol(get(input_args, :measure_first, "Z"))
+    end
+
+    println("=== Resampling Circuit ===")
+    println("File: ", basename(filename))
+    println("Parameters: $(length(params)) params")
+    println("Configuration: p=$p, row=$row, nqubits=$nqubits")
+    println("Share params: $share_params")
+    println("Measure first: $measure_first")
+    println("Conv steps: $conv_step, Samples: $samples")
+
+    # Detect unit cell type: 2x2 if param count matches 4*3*nqubits*p
+    model_str = get(input_args, :model, "tfim")
+    m = _construct_model(model_str, Dict{Symbol,Any}(k => v for (k,v) in input_args if k in (:J, :g, :J1, :J2)))
+    is_two_by_two = (model_str == "heisenberg_j1j2") && (length(params) == 4 * PARAMS_PER_QUBIT_PER_LAYER * nqubits * p)
+
+    # Reconstruct gates from parameters
+    if is_two_by_two
+        gates_odd, gates_even = build_unitary_gate_2x2(params, p, row, nqubits)
+        println("Unit cell: 2x2 (gates_odd + gates_even)")
+    else
+        gates = build_unitary_gate(params, p, row, nqubits; share_params=share_params)
+    end
+
+    # Run the quantum channel to generate new samples
+    println("\nGenerating new samples...")
+    need_y = needs_y_measurement(m)
+    if is_two_by_two
+        channel_result = sample_quantum_channel(gates_odd, gates_even, row, nqubits;
+                                                conv_step=conv_step,
+                                                samples=samples,
+                                                model=m)
+    else
+        channel_result = sample_quantum_channel(gates, row, nqubits;
+                                                conv_step=conv_step,
+                                                samples=samples,
+                                                model=m)
+    end
+
+    if need_y
+        rho, Z_samples, X_samples, Y_samples = channel_result
+        println("Generated $(length(Z_samples)) Z, $(length(X_samples)) X, $(length(Y_samples)) Y samples")
+        return rho, Z_samples, X_samples, Y_samples, params, (is_two_by_two ? (gates_odd, gates_even) : gates)
+    else
+        rho, Z_samples, X_samples = channel_result
+        println("Generated $(length(Z_samples)) Z samples and $(length(X_samples)) X samples")
+        return rho, Z_samples, X_samples, params, (is_two_by_two ? (gates_odd, gates_even) : gates)
+    end
 end
 
 """
-    compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, J2, row)
+    reconstruct_gates(filename::String; share_params=true, plot=true, save_plot=false)
 
-Compute Heisenberg J1-J2 energy from X, Y, Z measurement samples.
-
-    S_i · S_j = (X_i X_j + Y_i Y_j + Z_i Z_j) / 4
+Reconstruct gates from optimization result stored in JSON file and analyze transfer spectrum.
 
 # Arguments
-- `X_samples`: Vector of X measurement outcomes
-- `Z_samples`: Vector of Z measurement outcomes
-- `Y_samples`: Vector of Y measurement outcomes
-- `J1`: Nearest-neighbor coupling
-- `J2`: Next-nearest-neighbor (diagonal) coupling
-- `row`: Number of rows
+- `filename`: Path to JSON result file
+- `share_params`: Share parameters across circuit layers (default: true)
+- `plot`: Display eigenvalue spectrum plot (default: true)
+- `save_plot`: Save plot to PDF file (default: false)
 
 # Returns
-- Energy estimate per column
+- Tuple of (gates, rho, gap, eigenvalues)
+
+# Example
+```julia
+# With visualization (default)
+gates, rho, gap, eigenvalues = reconstruct_gates("result.json")
+
+# Without visualization
+gates, rho, gap, eigenvalues = reconstruct_gates("result.json"; plot=false)
+
+# Save the plot
+gates, rho, gap, eigenvalues = reconstruct_gates("result.json"; save_plot=true)
+```
 """
-function compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, J2, row)
-    all_samples = (Z_samples, X_samples, Y_samples)
+function reconstruct_gates(filename::String; share_params=true, plot=true, save_plot=true, use_iterative=:auto, matrix_free=:auto)
+    result, input_args = load_result(filename)
 
-    # Helper: compute vertical and horizontal correlations for one set of samples
-    function _correlations(S, row)
-        N = length(S)
-        if row == 1
-            vert = 0.0
-            horiz = mean(S[i] * S[i+1] for i in 1:N-1)
-        else
-            vert_pairs = [S[i] * S[i+1] for i in 1:N-1 if i % row != 0]
-            vert = mean(vert_pairs)
-            horiz = mean(S[i] * S[i+row] for i in 1:N-row)
+    p = input_args[:p]
+    row = input_args[:row]
+    nqubits = input_args[:nqubits]
+
+    gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
+
+    # Compute transfer spectrum
+    rho, gap, eigenvalues, eigenvalues_raw = compute_transfer_spectrum(gates, row, nqubits; use_iterative=use_iterative, matrix_free=matrix_free)
+
+    println("=== Gate Analysis for $(basename(filename)) ===")
+    println("Spectral gap: ", gap)
+    println("Largest eigenvalue: ", maximum(abs.(eigenvalues)))
+    println("Second largest eigenvalue: ", eigenvalues[2])
+    println("Correlation length ξ: ", round(1/gap, digits=2))
+
+    # Count eigenvalues near 1
+    n_near_one = sum(eigenvalues .> 0.99)
+    println("Eigenvalues > 0.99: $n_near_one / $(length(eigenvalues))")
+
+    # Status indicator
+    if gap > 0.1
+        println("Status: ✓ Good spectral gap")
+    elseif gap > 0.01
+        println("Status: ⚠ Poor spectral gap")
+    else
+        println("Status: ✗ Very small spectral gap - optimization issue likely")
+    end
+
+    # Plot eigenvalue spectrum if requested
+    if plot
+        save_path = save_plot ? replace(filename, ".json" => "_eigenvalues.pdf") : nothing
+        fig = plot_eigenvalue_spectrum(eigenvalues_raw;
+                                        title=basename(filename),
+                                        save_path=save_path,
+                                        show_gap=true)
+        display(fig)
+
+        if save_plot
+            println("Plot saved to: $save_path")
         end
-        return vert, horiz
     end
 
-    # Sum XX + YY + ZZ for NN bonds
-    SS_vert = 0.0
-    SS_horiz = 0.0
-    for S in all_samples
-        v, h = _correlations(S, row)
-        SS_vert += v
-        SS_horiz += h
-    end
-
-    energy = J1 * (row == 1 ? SS_horiz : SS_vert + SS_horiz) / 4.0
-
-    # J2: diagonal NNN bonds
-    if J2 != 0.0 && row > 1
-        SS_diag = 0.0
-        for S in all_samples
-            N = length(S)
-            # Diagonal: (pos,col)->(pos+1,col+1)
-            diag1 = [S[i] * S[i+row+1] for i in 1:N-row-1 if i % row != 0]
-            # Anti-diagonal: (pos,col)->(pos-1,col+1)
-            diag2 = [S[i] * S[i+row-1] for i in 1:N-row+1 if (i-1) % row != 0]
-            SS_diag += mean(diag1) + mean(diag2)
-        end
-        energy += J2 * SS_diag / 4.0
-    end
-    return energy
+    return gates, rho, gap, eigenvalues
 end
