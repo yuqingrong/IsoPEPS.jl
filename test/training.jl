@@ -49,7 +49,8 @@ end
     # Uses 3 params per qubit per layer (Rz-Ry-Rz decomposition)
     params = rand(3 * nqubits * p)
     
-    result = optimize_circuit(params, J, g, p, row, nqubits; 
+    result = optimize_circuit(params, p, row, nqubits;
+                              model=TFIM(J=J, g=g),
                               maxiter=2, conv_step=10, samples=50)
     
     @test result isa CircuitOptimizationResult

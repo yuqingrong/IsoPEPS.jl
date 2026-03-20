@@ -818,10 +818,9 @@ end
     # Need enough samples for statistical convergence
     conv_step = 1000
     samples = 500000
-    rho, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits; 
-                                                        conv_step=conv_step, 
-                                                        samples=samples,
-                                                        measure_first=:Z)
+    rho, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits;
+                                                        conv_step=conv_step,
+                                                        samples=samples)
     
     # Reshape samples for compute_acf (row samples per column → reshape to get horizontal correlations)
     # Z_samples is a flat vector, need to compute correlations properly

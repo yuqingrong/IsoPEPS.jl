@@ -309,21 +309,20 @@ function resample_circuit(filename::String; conv_step=100, samples=1000000, meas
 
     # Run the quantum channel to generate new samples
     println("\nGenerating new samples...")
+    need_y = needs_y_measurement(m)
     if is_two_by_two
         channel_result = sample_quantum_channel(gates_odd, gates_even, row, nqubits;
                                                 conv_step=conv_step,
                                                 samples=samples,
-                                                measure_first=measure_first,
-                                                measure_y=measure_y)
+                                                model=m)
     else
         channel_result = sample_quantum_channel(gates, row, nqubits;
                                                 conv_step=conv_step,
                                                 samples=samples,
-                                                measure_first=measure_first,
-                                                measure_y=measure_y)
+                                                model=m)
     end
 
-    if measure_y
+    if need_y
         rho, Z_samples, X_samples, Y_samples = channel_result
         println("Generated $(length(Z_samples)) Z, $(length(X_samples)) X, $(length(Y_samples)) Y samples")
         return rho, Z_samples, X_samples, Y_samples, params, (is_two_by_two ? (gates_odd, gates_even) : gates)
@@ -996,18 +995,17 @@ function plot_expectation_values(result::CircuitOptimizationResult;
                 100000  # default
             end
 
-            resampled = resample_circuit(datafile; conv_step=100, samples=adaptive_samples,
-                                         measure_first=nothing, measure_y=need_y)
+            resampled = resample_circuit(datafile; conv_step=100, samples=adaptive_samples)
             if !isnothing(resampled)
                 if need_y
                     _, Z_samples, X_samples, Y_samples, _, _ = resampled
-                    Z_samples = Z_samples[100*2+1:end-4] #TODO: conv_step
-                    X_samples = X_samples[100+1:end-4]
-                    Y_samples = Y_samples[100+1:end-4]
+                    Z_samples = Z_samples[101:end]
+                    X_samples = X_samples[101:end]
+                    Y_samples = Y_samples[101:end]
                 else
                     _, Z_samples, X_samples, _, _ = resampled
-                    Z_samples = Z_samples[100*2+1:end-4]
-                    X_samples = X_samples[100+1:end-4]
+                    Z_samples = Z_samples[101:end]
+                    X_samples = X_samples[101:end]
                 end
             else
                 @warn "Resampling failed for $datafile; using samples in result"
@@ -1350,8 +1348,7 @@ function plot_correlation_function(filename::String;
     println("\nGenerating samples (conv_step=$conv_step, samples=$samples)...")
     rho, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits;
                                                         conv_step=conv_step,
-                                                        samples=samples,
-                                                        measure_first=:Z)
+                                                        samples=samples)
 
     Z_vec = Z_samples[conv_step+1:end]
 
@@ -1673,9 +1670,9 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
                 continue
             end
             _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
-            Z_samples = Z_samples[100*2+1:end-4] #TODO: conv_step
-            X_samples = X_samples[100+1:end-4]
-            Y_samples = Y_samples[100+1:end-4]
+            Z_samples = Z_samples[conv_step+1:end] 
+            X_samples = X_samples[conv_step+1:end]
+            Y_samples = Y_samples[conv_step+1:end]
             energy_exact = compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, val, row)
         else
             g = val

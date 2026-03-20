@@ -16,9 +16,7 @@ share_params = true
 [optimization]
 maxiter = 500
 abstol = 1e-5
-sigma0 = 1.0
 n_runs = 44
 samples = 10000
 conv_step = 100
-measure_first = "Z"
 seed = 123

@@ -17,7 +17,6 @@ Run circuit optimization for multiple parameter values and save results to JSON 
 - `p::Int`: Circuit depth
 - `nqubits::Int`: Number of qubits per row
 - `maxiter`: Maximum iterations for optimization
-- `measure_first`: Which basis to measure first (:X or :Z)
 - `seed`: Random seed for reproducibility
 - `verbose`: Print progress information
 - `output_dir`: Directory to save results (default: "data")
@@ -91,10 +90,9 @@ end
 
 function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vector{Float64},
                     row::Int, p::Int, nqubits::Int,
-                    maxiter::Int, measure_first::Symbol=:Z, seed::Int=123, verbose::Bool=true,
+                    maxiter::Int, seed::Int=123, verbose::Bool=true,
                     output_dir::String, share_params::Bool=true, conv_step::Int=100, samples::Int=10000,
-                    n_runs::Int=44, abstol::Float64=0.01, sigma0::Float64=1.0,
-                    popsize::Union{Int,Nothing}=nothing, zz_weight::Float64=0.0,
+                    n_runs::Int=44, abstol::Float64=0.01,
                     unit_cell::Symbol=:single,
                     model_params...)
 
@@ -133,15 +131,11 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
         result = optimize_circuit(params, p, row, nqubits;
                                   model=model,
                                   maxiter=maxiter,
-                                  measure_first=measure_first,
                                   share_params=share_params,
                                   conv_step=conv_step,
                                   samples=samples,
                                   n_runs=n_runs,
                                   abstol=abstol,
-                                  sigma0=sigma0,
-                                  popsize=popsize,
-                                  zz_weight=zz_weight,
                                   unit_cell=unit_cell,
                                   model_kw...)
 
@@ -154,7 +148,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
         input_args = Dict{Symbol,Any}(
             :model => model, :scan_param => scan_param, scan_param => val,
             :row => row, :p => p, :nqubits => nqubits,
-            :maxiter => maxiter, :measure_first => measure_first,
+            :maxiter => maxiter,
             :share_params => share_params, :seed => seed,
             :warm_started_from => warm_val
         )
@@ -173,7 +167,6 @@ end
      J1=1.0,
      row=4, p=3, nqubits=3,
      maxiter=500,
-     measure_first=:Z,
      seed=123,
      verbose=true,
      output_dir=joinpath(@__DIR__, "results"),
@@ -193,7 +186,6 @@ end
 #     J1=1.0,
 #     row=3, p=3, nqubits=3,
 #     maxiter=500,
-#     measure_first=:Z,
 #     seed=123,
 #     verbose=true,
 #     output_dir=joinpath(@__DIR__, "results_heisenberg"),
@@ -201,10 +193,7 @@ end
 #     conv_step=1000,
 #     samples=40000,
 #     n_runs=1,
-#     abstol=1e-5,
-#     sigma0=1.0,
-#     popsize=nothing,
-#     zz_weight=0.0
+#     abstol=1e-5
 # )
 
 simulation(;
@@ -216,7 +205,6 @@ simulation(;
     p=4,
     nqubits=3,
     maxiter=500,
-    measure_first=:Z,
     seed=123,
     verbose=true,
     output_dir=joinpath(@__DIR__, "results"),
@@ -224,7 +212,4 @@ simulation(;
     conv_step=100,
     samples=10000,
     n_runs=1,
-    abstol=1e-5,
-    sigma0=1.0,
-    popsize=nothing,
-    zz_weight=0.0)
+    abstol=1e-5)

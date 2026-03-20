@@ -4,7 +4,7 @@ J1 = 1.0
 
 [scan]
 parameter = "J2"
-values = [0.0]
+values = [0.6]
 
 [circuit]
 row = 4
@@ -14,11 +14,9 @@ unit_cell = "two_by_two"
 share_params = true
 
 [optimization]
-maxiter = 5000
+maxiter = 500
 abstol = 1e-5
-sigma0 = 1.0
 n_runs = 1
 samples = 10000
 conv_step = 100
-measure_first = "Z"
 seed = 123

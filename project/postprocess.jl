@@ -626,10 +626,9 @@ function resample_circuit(filename::String; conv_step=1000, samples=100000, meas
     
     # Run the quantum channel to generate new samples
     println("\nGenerating new samples...")
-    rho, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits; 
-                                                        conv_step=conv_step, 
-                                                        samples=samples,
-                                                        measure_first=measure_first)
+    rho, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits;
+                                                        conv_step=conv_step,
+                                                        samples=samples)
     
     println("Generated $(length(Z_samples)) Z samples and $(length(X_samples)) X samples")
     
@@ -889,10 +888,9 @@ function run_energy_evolution(file1::String, file2::String; n_runs=50, conv_step
         
         energies = zeros(n_runs)
         Threads.@threads for run_idx in 1:n_runs
-            _, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits; 
-                                                              conv_step=conv_step, 
-                                                              samples=samples,
-                                                              measure_first=:Z)
+            _, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits;
+                                                              conv_step=conv_step,
+                                                              samples=samples)
             # Z_samples includes burn-in period, X_samples does not (collected in second phase)
             Z_valid = Z_samples[conv_step+1:end]
             X_valid = X_samples  # Already post burn-in

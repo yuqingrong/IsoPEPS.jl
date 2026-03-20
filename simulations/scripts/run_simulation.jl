@@ -45,11 +45,9 @@ function run_simulation(config_path::String)
     # Optimization parameters
     maxiter = opt_cfg["maxiter"]
     abstol = Float64(opt_cfg["abstol"])
-    sigma0 = Float64(get(opt_cfg, "sigma0", 1.0))
     n_runs = get(opt_cfg, "n_runs", 44)
     samples = get(opt_cfg, "samples", 10000)
     conv_step = get(opt_cfg, "conv_step", 100)
-    measure_first = Symbol(get(opt_cfg, "measure_first", "Z"))
     seed = get(opt_cfg, "seed", 123)
 
     # Scan parameters
@@ -86,13 +84,11 @@ function run_simulation(config_path::String)
         result = optimize_circuit(params, p, row, nqubits;
                                   model=m,
                                   maxiter=maxiter,
-                                  measure_first=measure_first,
                                   share_params=share_params,
                                   conv_step=conv_step,
                                   samples=samples,
                                   n_runs=n_runs,
                                   abstol=abstol,
-                                  sigma0=sigma0,
                                   unit_cell=unit_cell)
 
         # Save result

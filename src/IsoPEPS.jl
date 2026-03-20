@@ -62,16 +62,17 @@ end
 # =============================================================================
 # Include core module files
 # =============================================================================
+
+# Model type hierarchy (must come before quantum_channels which uses AbstractModel)
+include("models/abstract.jl")
+include("models/tfim.jl")
+include("models/heisenberg_j1j2.jl")
+
 include("quantum_channels.jl")
 include("gates.jl")
 include("transfer_matrix.jl")
 include("observables_exact.jl")
 include("observables_sampling.jl")
-
-# Model type hierarchy (must come after gates/observables, before training)
-include("models/abstract.jl")
-include("models/tfim.jl")
-include("models/heisenberg_j1j2.jl")
 
 include("training.jl")
 include("visualization.jl")
