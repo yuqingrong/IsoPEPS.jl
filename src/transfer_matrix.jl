@@ -3,156 +3,175 @@
 # =============================================================================
 # Functions for building and computing transfer matrix properties
 
+# =============================================================================
+# TransferOperator — Unified API for N-column unit cells
+# =============================================================================
+
 """
-    compute_transfer_spectrum(gates, row, nqubits; channel_type=:virtual, num_eigenvalues=2, use_iterative=:auto, matrix_free=:auto)
+    TransferOperator{G<:AbstractVector}
 
-Compute the transfer matrix spectrum and fixed point.
+Unified transfer operator for arbitrary unit-cell widths.
+Wraps one gate vector per column (1 for 1×1, 2 for 2×2, …) and exposes
+`apply_transfer(op, v)` (matrix-free T·v), `Matrix(op)` (explicit matrix),
+and `matrix_size(op)`.
+"""
+struct TransferOperator{G<:AbstractVector}
+    columns::Vector{G}
+    row::Int
+    virtual_qubits::Int
+end
 
-# Arguments
-- `gates`: Vector of gate matrices
-- `row`: Number of rows
-- `nqubits`: Number of qubits per gate (e.g., 3 for 8×8 gates with 1 virtual qubit)
-- `channel_type`: `:virtual` (default) or `:physical`
-  - `:virtual`: Virtual transfer matrix (contracts physical indices, virtual boundaries open)
-    - Matrix dimension: `bond_dim^(2*(row+1))`
-  - `:physical`: Physical channel (contracts virtual indices with environment)
-    - Matrix dimension: `2^row × 2^row`
-    - Requires computing virtual fixed point first
-- `num_eigenvalues`: Number of eigenvalues to compute (default: 2 for gap calculation)
-- `use_iterative`: `:auto` (default), `:always`, or `:never` for iterative solver
-- `matrix_free`: `:auto` (default), `:always`, or `:never` for matrix-free approach
-  - When enabled, never forms the full transfer matrix (essential for large row)
-  - Only applies to `:virtual` channel_type
+"""1×1 unit-cell constructor: `TransferOperator(gates, row, nqubits)`"""
+TransferOperator(gates, row, nqubits) =
+    TransferOperator([gates], row, (nqubits - 1) ÷ 2)
+
+"""2×2 unit-cell constructor: `TransferOperator(gates_odd, gates_even, row, nqubits)`"""
+TransferOperator(gates_odd, gates_even, row, nqubits) =
+    TransferOperator([gates_odd, gates_even], row, (nqubits - 1) ÷ 2)
+
+"""
+    matrix_size(op::TransferOperator)
+
+Transfer matrix dimension: `bond_dim^(2*(row+1))`.
+"""
+function matrix_size(op::TransferOperator)
+    bond_dim = 2^op.virtual_qubits
+    return bond_dim^(2 * (op.row + 1))
+end
+
+"""Apply one column's transfer matrix to vector `v` (matrix-free)."""
+function _apply_single_column(gates, row, virtual_qubits, v)
+    A_tensors = gates_to_tensors(gates, row, virtual_qubits)
+    code, total_legs = _build_transfer_contraction_code(A_tensors, row, virtual_qubits)
+    tensor_ket = [A_tensors[i] for i in 1:row]
+    tensor_bra = [conj(A_tensors[i]) for i in 1:row]
+    bond_dim = 2^virtual_qubits
+    v_tensor = reshape(v, ntuple(_ -> bond_dim, 2 * total_legs)...)
+    return vec(apply_transfer_matvec(code, tensor_ket, tensor_bra, v_tensor, total_legs))
+end
+
+"""
+    apply_transfer(op::TransferOperator, v)
+
+Matrix-free T·v.  Columns are applied right-to-left so that for 2×2:
+`T_col1 * (T_col2 * v)`, consistent with `Matrix(op) = T_col1 * T_col2`.
+"""
+function apply_transfer(op::TransferOperator, v)
+    for gates in reverse(op.columns)
+        v = _apply_single_column(gates, op.row, op.virtual_qubits, v)
+    end
+    return v
+end
+
+"""
+    Matrix(op::TransferOperator)
+
+Build the explicit combined transfer matrix (product of per-column matrices).
+Uses the raw contraction convention (no transpose) consistent with `apply_transfer`.
+"""
+function Base.Matrix(op::TransferOperator)
+    bond_dim = 2^op.virtual_qubits
+    total_legs = op.row + 1
+    ms = bond_dim^(2 * total_legs)
+    mats = map(op.columns) do gates
+        A_tensors = gates_to_tensors(gates, op.row, op.virtual_qubits)
+        _, T = contract_transfer_matrix([A_tensors[i] for i in 1:op.row],
+                                         [conj(A_tensors[i]) for i in 1:op.row], op.row)
+        reshape(T, ms, ms)
+    end
+    return reduce(*, mats)
+end
+
+# =============================================================================
+# Unified compute_transfer_spectrum (primary method)
+# =============================================================================
+
+"""
+    compute_transfer_spectrum(op::TransferOperator; num_eigenvalues=2,
+                              use_iterative=:auto, matrix_free=:auto,
+                              check_normalization=false)
+
+Compute the transfer matrix spectrum and fixed point for any unit-cell width.
+
+Three solver paths are selected automatically based on `matrix_size(op)`:
+  • **matrix-free** (`sz > 1024` or `matrix_free=:always`): KrylovKit with `apply_transfer`
+  • **iterative**  (`sz > 256` or `use_iterative=:always`): KrylovKit on explicit matrix
+  • **full-eigen** (otherwise): `LinearAlgebra.eigen`
 
 # Returns
-- `rho_or_E`: For `:virtual`: fixed point density matrix ρ; For `:physical`: physical channel matrix E
-- `gap`: Spectral gap = -log|λ₂/λ₁|
-- `eigenvalues`: Sorted eigenvalue magnitudes (top `num_eigenvalues` if iterative)
-- `eigenvalues_raw`: Raw complex eigenvalues (sorted by magnitude, descending)
-
-# Description
-Constructs the transfer matrix from gates and computes its spectral properties.
-- For `:virtual`: The virtual transfer matrix propagates in the virtual boundary space.
-  The spectral gap quantifies correlation length in the horizontal direction.
-- For `:physical`: The physical channel maps physical ket states to physical bra states,
-  with virtual indices contracted using the fixed point ρ (left) and identity R (right).
+- `rho`:  Fixed-point density matrix (dominant eigenvector, trace-normalized)
+- `gap`:  Spectral gap = −log|λ₂/λ₁|
+- `eigenvalues`:     Top `num_eigenvalues` eigenvalue magnitudes
+- `eigenvalues_raw`: Corresponding raw complex eigenvalues
 """
-function compute_transfer_spectrum(gates, row, nqubits; channel_type=:virtual, num_eigenvalues=2, use_iterative=:auto, matrix_free=:auto)
-    virtual_qubits = (nqubits - 1) ÷ 2
-    
-    # Handle physical channel type
-    if channel_type == :physical
-        return _compute_physical_channel_spectrum(gates, row, nqubits, virtual_qubits; num_eigenvalues=num_eigenvalues)
-    elseif channel_type != :virtual
-        error("Unknown channel_type: $channel_type. Use :virtual or :physical")
-    end
-    
-    # Virtual channel computation (existing code)
-    A_tensors = gates_to_tensors(gates, row, virtual_qubits)
+function compute_transfer_spectrum(op::TransferOperator;
+                                   num_eigenvalues=2,
+                                   use_iterative=:auto,
+                                   matrix_free=:auto,
+                                   check_normalization=false)
+    sz = matrix_size(op)
+    should_use_matrix_free = matrix_free == :always || (matrix_free == :auto && sz > 1024)
+    should_use_iterative   = use_iterative == :always || (use_iterative == :auto && sz > 256)
 
-    # Matrix size: bond_dim^(2*total_legs) where total_legs = row + 1 (periodic + row bonds)
-    bond_dim = 2^virtual_qubits
-    total_legs = row + 1
-    matrix_size = bond_dim^(2*total_legs)
-    # Decide whether to use matrix-free approach (essential for large row)
-    should_use_matrix_free = if matrix_free == :auto
-        matrix_size > 1024  # Use matrix-free for matrices larger than 1024x1024
-    elseif matrix_free == :always
-        true
-    else
-        false
-    end
-    
-    # Decide whether to use iterative solver
-    should_use_iterative = if use_iterative == :auto
-        matrix_size > 256
-    elseif use_iterative == :always
-        true
-    else
-        false
-    end
-    
     if should_use_matrix_free
-        # Matrix-free approach: define T*v as a function
-        # This avoids O(n²) memory for large matrices
-        
-        # Precompute the contraction code for applying transfer matrix
-        bond_dim = 2^virtual_qubits
-        code, total_legs = _build_transfer_contraction_code(A_tensors, row, virtual_qubits)
-        tensor_ket = [A_tensors[i] for i in 1:row]
-        tensor_bra = [conj(A_tensors[i]) for i in 1:row]
-        
-        # Define the linear map T*v
-        function apply_transfer(v)
-            # v is a vector of length bond_dim^(2*total_legs) = matrix_size
-            # Reshape to tensor form for left indices (2*total_legs indices, each dim bond_dim)
-            v_tensor = reshape(v, ntuple(_ -> bond_dim, 2*total_legs)...)
-            # Apply transfer matrix via contraction
-            result = _apply_transfer_to_vector(code, tensor_ket, tensor_bra, v_tensor, total_legs)
-            return vec(result)
-        end
-        
-        # Use KrylovKit with the linear map
-        v0 = randn(ComplexF64, matrix_size)
-        v0 = v0 / norm(v0)
-        vals, vecs, info = KrylovKit.eigsolve(apply_transfer, v0, num_eigenvalues, :LM; 
-                                              ishermitian=false, krylovdim=max(30, 2*num_eigenvalues))
-        
-        # Sort by magnitude (descending)
-        sorted_indices = sortperm(abs.(vals), rev=true)
-        eigenvalues_raw = vals[sorted_indices]
-        eigenvalues = abs.(eigenvalues_raw)
-        
-        gap = -log(eigenvalues[2]/eigenvalues[1])
-        
-        fixed_point = reshape(vecs[sorted_indices[1]], 
-                              Int(sqrt(matrix_size)), Int(sqrt(matrix_size)))
+        v0 = randn(ComplexF64, sz); v0 ./= norm(v0)
+        vals, vecs, _ = KrylovKit.eigsolve(v -> apply_transfer(op, v), v0,
+                                           num_eigenvalues, :LM;
+                                           ishermitian=false,
+                                           krylovdim=max(30, 2 * num_eigenvalues))
+        sorted          = sortperm(abs.(vals), rev=true)
+        eigenvalues_raw = vals[sorted]
+        eigenvalues     = abs.(eigenvalues_raw)
+        fixed_point     = reshape(vecs[sorted[1]], isqrt(sz), isqrt(sz))
+
     elseif should_use_iterative
-        # Build full matrix but use iterative eigensolver
-        _, T = contract_transfer_matrix([A_tensors[i] for i in 1:row], 
-                                         [conj(A_tensors[i]) for i in 1:row], row)
-        T = reshape(T, matrix_size, matrix_size)
-        
-        vals, vecs, info = KrylovKit.eigsolve(T, num_eigenvalues, :LM; 
-                                              ishermitian=false, krylovdim=max(30, 2*num_eigenvalues))
-        
-        sorted_indices = sortperm(abs.(vals), rev=true)
-        eigenvalues_raw = vals[sorted_indices]
-        eigenvalues = abs.(eigenvalues_raw)
-        
-        # Handle case with only 1 eigenvalue
-        gap = length(eigenvalues) > 1 ? -log(eigenvalues[2]/eigenvalues[1]) : Inf
-        
-        fixed_point = reshape(vecs[sorted_indices[1]], 
-                              Int(sqrt(matrix_size)), Int(sqrt(matrix_size)))
+        vals, vecs, _ = KrylovKit.eigsolve(Matrix(op), num_eigenvalues, :LM;
+                                           ishermitian=false,
+                                           krylovdim=max(30, 2 * num_eigenvalues))
+        sorted          = sortperm(abs.(vals), rev=true)
+        eigenvalues_raw = vals[sorted]
+        eigenvalues     = abs.(eigenvalues_raw)
+        fixed_point     = reshape(vecs[sorted[1]], isqrt(sz), isqrt(sz))
+
     else
-        # Full eigendecomposition for small matrices
-        _, T = contract_transfer_matrix([A_tensors[i] for i in 1:row], 
-                                         [conj(A_tensors[i]) for i in 1:row], row)
-        T = reshape(T, matrix_size, matrix_size)
-        eig_result = LinearAlgebra.eigen(T)
-        sorted_indices = sortperm(abs.(eig_result.values), rev=true)
-        eigenvalues_raw = eig_result.values[sorted_indices]
-        eigenvalues = abs.(eigenvalues_raw)
-        # Handle case with only 1 eigenvalue
-        gap = length(eigenvalues) > 1 ? -log(eigenvalues[2]/eigenvalues[1]) : Inf
-        
-        fixed_point = reshape(eig_result.vectors[:, sorted_indices[1]], 
-                              Int(sqrt(matrix_size)), Int(sqrt(matrix_size)))
+        eig             = LinearAlgebra.eigen(Matrix(op))
+        sorted          = sortperm(abs.(eig.values), rev=true)
+        eigenvalues_raw = eig.values[sorted]
+        eigenvalues     = abs.(eigenvalues_raw)
+        fixed_point     = reshape(eig.vectors[:, sorted[1]], isqrt(sz), isqrt(sz))
     end
+
+    if check_normalization
+        @assert isapprox(eigenvalues[1], 1.0, atol=1e-6) """
+            Transfer matrix dominant eigenvalue |λ₁| = $(eigenvalues[1]) ≠ 1.
+            Gates are not properly normalized/isometric (U†U = I required).
+            """
+    end
+
     rho = fixed_point ./ tr(fixed_point)
-    
-    # Assert that the dominant eigenvalue magnitude is approximately 1
-    # For isometric PEPS, the transfer matrix should satisfy |λ₁| = 1
-    #@assert isapprox(eigenvalues[1], 1.0, atol=1e-6) 
-    """
-        Transfer matrix dominant eigenvalue |λ₁| = $(eigenvalues[1]) ≠ 1.
-        This indicates the gates are not properly normalized/isometric.
-        For isometric PEPS, we require |λ₁| = 1.
-        Check that gates satisfy U†U = I (isometry condition).
-        """
-    
-    return rho, gap, eigenvalues, eigenvalues_raw
+    gap = length(eigenvalues) > 1 ? -log(eigenvalues[2] / eigenvalues[1]) : Inf
+    n   = min(num_eigenvalues, length(eigenvalues))
+    return rho, gap, eigenvalues[1:n], eigenvalues_raw[1:n]
+end
+
+# =============================================================================
+# Backward-Compatibility Shims (compute_transfer_spectrum)
+# =============================================================================
+
+"""
+    compute_transfer_spectrum(gates, row, nqubits; ...)
+
+Legacy 1×1 API — delegates to `TransferOperator` path.
+"""
+function compute_transfer_spectrum(gates, row, nqubits;
+                                   num_eigenvalues=2, use_iterative=:auto,
+                                   matrix_free=:auto, channel_type=:virtual,
+                                   check_normalization=false)
+    channel_type == :virtual ||
+        error("channel_type=$channel_type is no longer supported; use TransferOperator API")
+    return compute_transfer_spectrum(TransferOperator(gates, row, nqubits);
+                                    num_eigenvalues, use_iterative, matrix_free,
+                                    check_normalization)
 end
 
 
@@ -457,38 +476,13 @@ end
 """
     compute_transfer_spectrum_2x2(gates_odd, gates_even, row, nqubits; num_eigenvalues=2)
 
-Compute the transfer matrix spectrum for a 2-column unit cell.
-
-The combined transfer matrix is T = T_odd * T_even. Its eigenvalues give the
-correlation length of the 2-column periodic structure.
-
-# Returns
-- `rho`: Fixed point density matrix
-- `gap`: Spectral gap = -log|λ₂/λ₁|
-- `eigenvalues`: Sorted eigenvalue magnitudes
-- `eigenvalues_raw`: Raw complex eigenvalues
+Legacy 2×2 API — delegates to `TransferOperator` path.
+Now supports all three solver paths (matrix-free, iterative, full-eigen).
 """
 function compute_transfer_spectrum_2x2(gates_odd, gates_even, row, nqubits;
                                         num_eigenvalues=2)
-    virtual_qubits = (nqubits - 1) ÷ 2
-    T_combined, _, _ = get_combined_transfer_matrix(gates_odd, gates_even, row, virtual_qubits)
-
-    eig_result = eigen(T_combined)
-    sorted_idx = sortperm(abs.(eig_result.values), rev=true)
-    eigenvalues_raw = eig_result.values[sorted_idx]
-    eigenvalues = abs.(eigenvalues_raw)
-
-    gap = length(eigenvalues) > 1 ? -log(eigenvalues[2] / eigenvalues[1]) : Inf
-
-    bond_dim = 2^virtual_qubits
-    total_legs = row + 1
-    matrix_size = bond_dim^(2 * total_legs)
-    fixed_point = reshape(eig_result.vectors[:, sorted_idx[1]],
-                          Int(sqrt(matrix_size)), Int(sqrt(matrix_size)))
-    rho = fixed_point ./ tr(fixed_point)
-
-    n = min(num_eigenvalues, length(eigenvalues))
-    return rho, gap, eigenvalues[1:n], eigenvalues_raw[1:n]
+    return compute_transfer_spectrum(TransferOperator(gates_odd, gates_even, row, nqubits);
+                                    num_eigenvalues)
 end
 
 
@@ -570,6 +564,51 @@ function get_transfer_matrix_with_operator(gates, row, virtual_qubits, operators
     E_O = reshape(T_O, matrix_size, matrix_size)
     
     return transpose(E_O)
+end
+
+# =============================================================================
+# TransferOperator: get_transfer_matrix_with_operator
+# =============================================================================
+
+"""
+    get_transfer_matrix_with_operator(op::TransferOperator, operators::Dict{Tuple{Int,Int},<:AbstractMatrix};
+                                      optimizer=GreedyMethod())
+
+Build transfer matrix with operators inserted at `(column, row_position)` sites.
+
+# Example
+```julia
+op = TransferOperator(gates_odd, gates_even, row, nqubits)
+E_ZZ = get_transfer_matrix_with_operator(op, Dict((1,3)=>Z, (2,4)=>Z))
+```
+"""
+function get_transfer_matrix_with_operator(
+        op::TransferOperator,
+        operators::Dict{Tuple{Int,Int},M};
+        optimizer=GreedyMethod()) where {M<:AbstractMatrix}
+    mats = map(enumerate(op.columns)) do (c, gates)
+        col_ops = Dict(r => O for ((col, r), O) in operators if col == c)
+        if isempty(col_ops)
+            get_transfer_matrix(gates, op.row, op.virtual_qubits)
+        else
+            get_transfer_matrix_with_operator(gates, op.row, op.virtual_qubits,
+                                              col_ops; optimizer=optimizer)
+        end
+    end
+    return reduce(*, mats)
+end
+
+"""
+    get_transfer_matrix_with_operator(op::TransferOperator, O::AbstractMatrix;
+                                      column=1, position=1, optimizer=GreedyMethod())
+
+Single-operator convenience: insert `O` at `(column, position)`.
+"""
+function get_transfer_matrix_with_operator(
+        op::TransferOperator, O::AbstractMatrix;
+        column::Int=1, position::Int=1, optimizer=GreedyMethod())
+    return get_transfer_matrix_with_operator(
+        op, Dict((column, position) => O); optimizer=optimizer)
 end
 
 """

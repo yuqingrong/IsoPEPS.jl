@@ -131,6 +131,7 @@ export CircuitOptimizationResult, ExactOptimizationResult, ManifoldOptimizationR
 export optimize_circuit, optimize_exact, optimize_manifold, initialize_tfim_params
 
 # Exact Tensor Contraction - Transfer Matrix
+export TransferOperator, matrix_size, apply_transfer
 export compute_transfer_spectrum, compute_single_transfer
 export get_combined_transfer_matrix, compute_transfer_spectrum_2x2
 export contract_transfer_matrix, gates_to_tensors, get_transfer_matrix, get_physical_channel
