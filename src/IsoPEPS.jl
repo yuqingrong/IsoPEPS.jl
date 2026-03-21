@@ -101,7 +101,7 @@ function pepskit_ground_state end
 function transfer_matrix_ITensor end
 
 # --- ITensors + ITensorMPS DMRG extension ---
-function snake_order_2d_to_1d end
+function row_major_2d_to_1d end
 function build_2d_tfim_hamiltonian end
 function build_2d_heisenberg_j1j2_hamiltonian end
 function build_hamiltonian end

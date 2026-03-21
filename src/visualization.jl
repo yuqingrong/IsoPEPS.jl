@@ -531,8 +531,26 @@ function plot_expectation_values(result::CircuitOptimizationResult;
         end
     end
 
+    # --- Shared: reconstruct gates + TransferOperator for exact computation ---
+    can_compute_exact = !isnothing(row) && !isnothing(p) && !isnothing(nqubits) && !isempty(result.final_params)
+    skip_exact = can_compute_exact && nqubits >= 5
+    op = nothing
+
+    if can_compute_exact && !skip_exact
+        is_two_by_two = (m isa HeisenbergJ1J2) &&
+            (length(result.final_params) == 4 * PARAMS_PER_QUBIT_PER_LAYER * nqubits * p)
+        if is_two_by_two
+            gates_odd, gates_even = build_unitary_gate_2x2(result.final_params, p, row, nqubits)
+            op = TransferOperator(gates_odd, gates_even, row, nqubits)
+        else
+            gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=true)
+            op = TransferOperator(gates, row, nqubits)
+        end
+    else
+        can_compute_exact = false
+    end
+
     labels = String[]; sample_values = Float64[]; exact_values = Float64[]; sample_errors = Float64[]
-    can_compute_exact = false
 
     if m isa HeisenbergJ1J2
         N = length(Z_samples)
@@ -570,28 +588,136 @@ function plot_expectation_values(result::CircuitOptimizationResult;
 
         # Energy
         energy_sample = compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, J2, row)
+
+        # --- Exact correlations (precompute shared quantities) ---
+        energy_exact = NaN
+        exact_vert = Dict{Symbol, Float64}()
+        exact_horiz = Dict{Symbol, Float64}()
+        exact_diag_down = Dict{Symbol, Float64}()
+        exact_diag_up = Dict{Symbol, Float64}()
+
+        if can_compute_exact
+            N_cols = length(op.columns)
+            vq = op.virtual_qubits
+            T_cols = _column_transfer_matrices(op)
+            T_combined = reduce(*, T_cols)
+            l_vec, r_vec, nf, _ = _fixed_points(T_combined)
+            l_pre, r_suf = _precompute_shifted_vectors(T_cols, l_vec, r_vec)
+
+            pauli_syms = [:X, :Y, :Z]
+            pauli_mats = [_resolve_op(s) for s in pauli_syms]
+
+            # Precompute single-operator transfer matrices
+            E_O = Dict{Tuple{Int,Int,Int}, Matrix{ComplexF64}}()
+            for c in 1:N_cols, (si, σ) in enumerate(pauli_mats), pos in 1:row
+                E_O[(c, si, pos)] = get_transfer_matrix_with_operator(
+                    op.columns[c], row, vq, σ; position=pos, optimizer=GreedyMethod())
+            end
+
+            for (si, σ) in enumerate(pauli_mats)
+                sym = pauli_syms[si]
+
+                # Vertical: open boundary (row-1 bonds), all columns
+                if row > 1
+                    vert_vals = Float64[]
+                    for c in 1:N_cols, i in 1:row-1
+                        E_OO = get_transfer_matrix_with_operator(
+                            op.columns[c], row, vq, Dict(i => σ, i+1 => σ);
+                            optimizer=GreedyMethod())
+                        push!(vert_vals, real(dot(l_pre[c], E_OO * r_suf[c]) / nf))
+                    end
+                    exact_vert[sym] = mean(vert_vals)
+                end
+
+                # Horizontal: within-period + cross-period, all columns
+                horiz_vals = Float64[]
+                for c in 1:(N_cols-1), pos in 1:row
+                    val = dot(l_pre[c],
+                              E_O[(c, si, pos)] * E_O[(c+1, si, pos)] * r_suf[c+1]) / nf
+                    push!(horiz_vals, real(val))
+                end
+                # Cross-period: col N → col 1'
+                for pos in 1:row
+                    val = dot(l_pre[N_cols],
+                              E_O[(N_cols, si, pos)] * E_O[(1, si, pos)] * r_suf[1]) / nf
+                    push!(horiz_vals, real(val))
+                end
+                exact_horiz[sym] = mean(horiz_vals)
+
+                # NNN diagonal (if needed)
+                if J2 != 0.0 && row > 1
+                    diag_down_vals = Float64[]
+                    diag_up_vals = Float64[]
+                    for i in 1:row
+                        j_down = i % row + 1
+                        j_up = (i - 2 + row) % row + 1
+
+                        # Within-period
+                        for c in 1:(N_cols-1)
+                            val_d = dot(l_pre[c],
+                                        E_O[(c, si, i)] * E_O[(c+1, si, j_down)] * r_suf[c+1]) / nf
+                            push!(diag_down_vals, real(val_d))
+                            val_u = dot(l_pre[c],
+                                        E_O[(c, si, i)] * E_O[(c+1, si, j_up)] * r_suf[c+1]) / nf
+                            push!(diag_up_vals, real(val_u))
+                        end
+
+                        # Cross-period
+                        val_d = dot(l_pre[N_cols],
+                                    E_O[(N_cols, si, i)] * E_O[(1, si, j_down)] * r_suf[1]) / nf
+                        push!(diag_down_vals, real(val_d))
+                        val_u = dot(l_pre[N_cols],
+                                    E_O[(N_cols, si, i)] * E_O[(1, si, j_up)] * r_suf[1]) / nf
+                        push!(diag_up_vals, real(val_u))
+                    end
+                    exact_diag_down[sym] = mean(diag_down_vals)
+                    exact_diag_up[sym] = mean(diag_up_vals)
+                end
+            end
+
+            # Energy: compute_exact_heisenberg_energy returns per-column sums,
+            # sampling compute_heisenberg_energy returns per-bond means.
+            # Reconstruct energy from per-bond exact values to match sampling convention.
+            SS_vert_exact = sum(get(exact_vert, s, 0.0) for s in pauli_syms)
+            SS_horiz_exact = sum(get(exact_horiz, s, 0.0) for s in pauli_syms)
+            energy_exact = J1 * (row == 1 ? SS_horiz_exact : SS_vert_exact + SS_horiz_exact) / 4.0
+            if J2 != 0.0 && row > 1
+                SS_diag_exact = sum(get(exact_diag_down, s, 0.0) + get(exact_diag_up, s, 0.0)
+                                    for s in pauli_syms)
+                energy_exact += J2 * SS_diag_exact / 4.0
+            end
+        end
+
         push!(labels, "E"); push!(sample_values, energy_sample)
-        push!(exact_values, NaN); push!(sample_errors, 0.0)
+        push!(exact_values, energy_exact); push!(sample_errors, 0.0)
 
         # Per-component NN correlations
-        for (name, S) in [("XX", X_samples), ("YY", Y_samples), ("ZZ", Z_samples)]
+        for (name, S, pauli) in [("XX", X_samples, :X), ("YY", Y_samples, :Y), ("ZZ", Z_samples, :Z)]
             vv, ve, hv, he = _nn_correlations(S, row)
+
+            vert_ex = get(exact_vert, pauli, NaN)
+            horiz_ex = get(exact_horiz, pauli, NaN)
+
             if !isnothing(vv)
                 push!(labels, "⟨$(name)⟩ᵥ"); push!(sample_values, vv)
-                push!(exact_values, NaN); push!(sample_errors, ve)
+                push!(exact_values, vert_ex); push!(sample_errors, ve)
             end
             push!(labels, "⟨$(name)⟩ₕ"); push!(sample_values, hv)
-            push!(exact_values, NaN); push!(sample_errors, he)
+            push!(exact_values, horiz_ex); push!(sample_errors, he)
         end
 
         # NNN diagonal correlations (only when J2 ≠ 0 and row > 1)
         if J2 != 0.0 && !isnothing(row) && row > 1
-            for (name, S) in [("XX", X_samples), ("YY", Y_samples), ("ZZ", Z_samples)]
+            for (name, S, pauli) in [("XX", X_samples, :X), ("YY", Y_samples, :Y), ("ZZ", Z_samples, :Z)]
                 d1v, d1e, d2v, d2e = _diag_correlations(S, row)
+
+                d1_exact = get(exact_diag_down, pauli, NaN)
+                d2_exact = get(exact_diag_up, pauli, NaN)
+
                 push!(labels, "⟨$(name)⟩↘"); push!(sample_values, d1v)
-                push!(exact_values, NaN); push!(sample_errors, d1e)
+                push!(exact_values, d1_exact); push!(sample_errors, d1e)
                 push!(labels, "⟨$(name)⟩↗"); push!(sample_values, d2v)
-                push!(exact_values, NaN); push!(sample_errors, d2e)
+                push!(exact_values, d2_exact); push!(sample_errors, d2e)
             end
         end
 
@@ -638,29 +764,16 @@ function plot_expectation_values(result::CircuitOptimizationResult;
         X_exact = nothing; Z_exact = nothing
         ZZ_vert_exact = nothing; ZZ_horiz_exact = nothing; energy_exact = nothing
 
-        can_compute_exact = !isnothing(row) && !isnothing(p) && !isnothing(nqubits) && !isempty(result.final_params)
-        skip_exact_for_large_system = !isnothing(nqubits) && nqubits >= 5
-
-        if can_compute_exact && !skip_exact_for_large_system
-            virtual_qubits = (nqubits - 1) ÷ 2
-            gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=true)
-            X_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, :X; position=i)) for i in 1:row)
-            Z_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, :Z; position=i)) for i in 1:row)
+        if can_compute_exact
+            energy_raw, X_total, ZZ_vert_e, ZZ_horiz_e = compute_exact_energy(m, op)
+            # compute_exact_energy returns per-column sums; divide by row for per-site averages
+            # to match sampling convention (compute_tfim_energy uses per-site/per-bond means)
+            energy_exact = energy_raw / row
+            X_exact = X_total / row
+            ZZ_horiz_exact = ZZ_horiz_e / row
+            Z_exact = mean(real(expect(op, :Z; col=1, position=i)) for i in 1:row)
             if row > 1
-                ZZ_vert_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, Dict(i => :Z, i+1 => :Z))) for i in 1:row-1)
-            end
-            ZZ_horiz_vals = Float64[]
-            for pos in 1:row
-                correlations = correlation_function(gates, row, virtual_qubits, :Z, 1; position=pos)
-                if haskey(correlations, 1)
-                    push!(ZZ_horiz_vals, real(correlations[1]))
-                end
-            end
-            if !isempty(ZZ_horiz_vals)
-                ZZ_horiz_exact = mean(ZZ_horiz_vals)
-            end
-            if !isnothing(g) && !isnothing(ZZ_horiz_exact) && (row == 1 || !isnothing(ZZ_vert_exact))
-                energy_exact = -g*X_exact - J*(row == 1 ? ZZ_horiz_exact : ZZ_vert_exact + ZZ_horiz_exact)
+                ZZ_vert_exact = ZZ_vert_e / row
             end
         end
 

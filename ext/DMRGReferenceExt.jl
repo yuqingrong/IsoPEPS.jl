@@ -6,35 +6,28 @@ using ITensorMPS
 using LinearAlgebra
 
 """
-    snake_order_2d_to_1d(Lx::Int, Ly::Int)
+    row_major_2d_to_1d(Lx::Int, Ly::Int)
 
-Map 2D lattice coordinates to 1D chain using snake ordering.
+Map 2D lattice coordinates to 1D chain using row-major ordering.
 Returns a dictionary mapping (i,j) -> site_index.
 
 # Example for 3x3 lattice:
 ```
 1 → 2 → 3
-        ↓
-6 ← 5 ← 4
+↓
+4 → 5 → 6
 ↓
 7 → 8 → 9
 ```
 """
-function IsoPEPS.snake_order_2d_to_1d(Lx::Int, Ly::Int)
+function IsoPEPS.row_major_2d_to_1d(Lx::Int, Ly::Int)
     mapping = Dict{Tuple{Int,Int}, Int}()
     site = 1
 
     for j in 1:Ly
-        if j % 2 == 1  # Odd rows: left to right
-            for i in 1:Lx
-                mapping[(i, j)] = site
-                site += 1
-            end
-        else  # Even rows: right to left
-            for i in Lx:-1:1
-                mapping[(i, j)] = site
-                site += 1
-            end
+        for i in 1:Lx
+            mapping[(i, j)] = site
+            site += 1
         end
     end
 
@@ -52,7 +45,7 @@ function IsoPEPS.build_2d_tfim_hamiltonian(Lx::Int, Ly::Int, J::Float64, g::Floa
     N = Lx * Ly
     sites = siteinds("S=1", N)
 
-    coord_to_site = IsoPEPS.snake_order_2d_to_1d(Lx, Ly)
+    coord_to_site = IsoPEPS.row_major_2d_to_1d(Lx, Ly)
 
     os = OpSum()
 
@@ -98,7 +91,7 @@ function IsoPEPS.build_2d_heisenberg_j1j2_hamiltonian(Lx::Int, Ly::Int, J1::Floa
     N = Lx * Ly
     sites = siteinds("S=1/2", N)
 
-    coord_to_site = IsoPEPS.snake_order_2d_to_1d(Lx, Ly)
+    coord_to_site = IsoPEPS.row_major_2d_to_1d(Lx, Ly)
 
     os = OpSum()
 

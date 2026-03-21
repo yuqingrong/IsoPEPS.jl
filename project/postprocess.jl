@@ -950,9 +950,9 @@ end
 # Uncomment the block below (remove #= and =#) to run analysis examples
 
 # Analyze a single result
-J=1.0;g = 1.0; row=4 ; nqubits=3; p=3; virtual_qubits=2;D=2
+J=1.0;g = 1.0; row=4 ; nqubits=3; p=3; virtual_qubits=1;D=2
 data_dir = joinpath(@__DIR__, "results")
-datafile = joinpath(data_dir, "circuit_heisenberg_j1j2_J1=1.0_J2=1.0_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json")
+datafile = joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J)_J2=0.0_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile)
 # Reconstruct gates and analyze
@@ -971,78 +971,3 @@ fig, data = plot_correlation_function(datafile;
                                    samples=40000,
                                    save_path="project/results/figures/correlation_function_g=$(g)_row=$(row)_nqubits=$(nqubits).pdf")
 display(fig)
-
-gates, rho, gap, eigenvalues = reconstruct_gates(datafile)
-_, gap, eigenvalues, eigenvalues_raw = compute_transfer_spectrum(gates, row, nqubits)
-eigenvalues_raw
-xi = -log(abs(eigenvalues[5]/eigenvalues[1]))
-_,coefficients,_= compute_correlation_coefficients(gates, row, virtual_qubits, Matrix(Z))
-picked_idx = findall(abs.(coefficients) .> 1e-3)
-[(i, coefficients[i]) for i in picked_idx]
-
-corr = correlation_function(gates, row, virtual_qubits, :Z, 1000; connected=true)
-rho, Z_samples, X_samples, params, gates = resample_circuit(datafile; conv_step=1000, samples=1000000)
-_,acf, acf_err, corr, corr_err, corr_connected, corr_connected_err = compute_acf(Z_samples; max_lag=50)
-@show corr[1:2:end]
-IsoPEPS.expect(gates, row, virtual_qubits, :X)
-rho, Z_samples, X_samples, params, gates = resample_circuit(datafile; conv_step=1000, samples=1000000)
-mean(X_samples)
-
-# Save the plot
-save(joinpath(dirname(datafile), replace(basename(datafile), ".json" => "_eigenvalues.pdf")), fig)
-println("Energy: $energy")
-# Analyze autocorrelation (using saved samples)
-lags, acf, fit_params = analyze_acf(datafile, row; max_lag=100, resample=false, samples=1000000)
-
-data_dir = joinpath(@__DIR__, "results")
-datafile1 = joinpath(data_dir, "circuit_J=1.0_g=2.0_row=2_nqubits=3_ones.json")
-datafile2 = joinpath(data_dir, "circuit_J=1.0_g=2.0_row=2_nqubits=5.json")
-
-run_energy_evolution(datafile1, datafile2; n_runs=100, conv_step=100, samples=40000)
-
-# Compare two results
-# exact_datafile = joinpath(data_dir, "exact_J=1.0_g=2.0_row=3.json")
-# result1, result2 = compare_results(datafile, exact_datafile)
-
-# Visualize correlation
-visualize_correlation(datafile)
-
-# Analyze autocorrelation with fresh resampled data
-# lags, acf, ξ = analyze_acf(datafile; max_lag=10, resample=true, samples=50000)
-
-# Or resample circuit separately to get the raw samples
-# rho, Z_samples, X_samples, params, gates = resample_circuit(datafile; conv_step=1000, samples=50000)
-
-# Plot energy landscape
-fig = plot_energy_vs_g(data_dir; J=1.0, row=3)
-display(fig)
-
-# Plot training history comparison
-fig = plot_training_history_comparison(data_dir; J=1.0, row=3, selected_g=[1.0, 2.0, 3.0])
-display(fig)
-
-
-#=
-# ============================================================================
-# Batch process ACF and correlation length scaling
-# ============================================================================
-
-# Step 1: Compute and save ξ for all result files (run once for each file)
-# J_val = 1.0; g_val = 3.0; nqubits_val = 3
-# for row_val in [2, 4, 6, 7, 8, 10, 12]
-#     datafile = joinpath(data_dir, "circuit_J=$(J_val)_g=$(g_val)_row=$(row_val)_nqubits=$(nqubits_val).json")
-#     if isfile(datafile)
-#         println("\n=== Processing J=$J_val, g=$g_val, row=$row_val, nqubits=$nqubits_val ===")
-#         lags, acf, ξ = analyze_acf(datafile; max_lag=6, resample=true, samples=1000000)
-#     end
-# end
-
-# Step 2: Extract correlation lengths from all result files and plot scaling
-row, ξ = extract_correlation_lengths(data_dir; J=1.0, g=3.0, nqubits=5)
-if !isnothing(row) && !isnothing(ξ)
-    fig = plot_corr_scale(row, ξ;
-                          title="Correlation Length Scaling, g=3.0, p=4, virtual_bond=4",
-                          save_path="project/results/corr_scaling_g3.pdf")
-    display(fig)
-end
-=#
