@@ -159,7 +159,7 @@ export save_result, load_result, save_results, load_results, resample_circuit
 export reconstruct_gates
 
 # Visualization (loaded via CairoMakie extension)
-export plot_acf, fit_acf, fit_acf_oscillatory
+export plot_acf, fit_acf, fit_acf_power, fit_acf_oscillatory
 export plot_training_history, plot_variance_vs_samples, plot_expectation_values
 export plot_corr_scale
 export plot_eigenvalue_spectrum, plot_correlation_function

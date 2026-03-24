@@ -71,6 +71,72 @@ function fit_acf(lags::AbstractVector, acf::AbstractVector;
             model=(r) -> A .* exp.(-r ./ ξ))
 end
 
+# ============================================================================
+# fit_acf_power — power-law decay: C(r) = A * r^(-η)
+# ============================================================================
+
+function fit_acf_power(lags::AbstractVector, acf::AbstractVector;
+                       fit_range::Union{Tuple{Int,Int},Nothing}=nothing,
+                       include_zero::Bool=false)
+    lags_vec = collect(Float64, lags)
+    acf_vec = collect(Float64, acf)
+
+    if include_zero
+        mask = trues(length(lags_vec))
+    else
+        mask = lags_vec .> 0
+    end
+
+    if !isnothing(fit_range)
+        start_lag, end_lag = fit_range
+        range_mask = (lags_vec .>= start_lag) .& (lags_vec .<= end_lag)
+        mask = mask .& range_mask
+    end
+
+    fit_lags = lags_vec[mask]
+    fit_acf_vals = acf_vec[mask]
+
+    if length(fit_lags) < 2
+        error("Not enough valid data points for fitting (need at least 2)")
+    end
+
+    # Determine the sign of the correlation from the mean of first few points
+    sign_sample = fit_acf_vals[1:min(3, length(fit_acf_vals))]
+    correlation_sign = sign(mean(sign_sample))
+    if iszero(correlation_sign)
+        correlation_sign = 1.0
+    end
+
+    fit_acf_abs = abs.(fit_acf_vals)
+
+    # Log-space OLS: fit log|C(r)| = log(A) - η*log(r)
+    valid_idx = fit_acf_abs .> 1e-15
+    A_abs = fit_acf_abs[1]
+    η = 1.0
+
+    if sum(valid_idx) >= 2
+        log_abs    = log.(fit_acf_abs[valid_idx])
+        log_lags   = log.(fit_lags[valid_idx])
+        # Design matrix: log|C| = log(A) - η*log(r)  →  [1, -log(r)] * [log(A), η]ᵀ
+        X = hcat(ones(length(log_lags)), -log_lags)
+        coeffs = X \ log_abs
+        log_A_abs = coeffs[1]
+        η_fit     = coeffs[2]
+        if η_fit > 0
+            A_abs = exp(log_A_abs)
+            η     = η_fit
+        else
+            # Fallback: two-point slope estimate
+            η     = clamp(-(log_abs[end] - log_abs[1]) /
+                           (log_lags[end] - log_lags[1]), 0.01, Inf)
+            A_abs = exp(log_abs[1] + η * log_lags[1])
+        end
+    end
+
+    A = correlation_sign * A_abs
+    return (A=A, η=η, fit_lags=fit_lags,
+            model=(r) -> A .* r .^ (-η))
+end
 
 # ============================================================================
 # plot_eigenvalue_spectrum
@@ -1099,14 +1165,31 @@ function plot_correlation_function(filename::String;
         # Update title with fitted ξ
         ax2.title = "Connected Correlation (ξ_fit=$(round(ξ_fitted, digits=2)), ξ_TM=$(round(correlation_length, digits=2)))"
     catch e
-        @warn "Fitting failed: $e"
-        println("Skipping fit overlay")
-        println("Exception: ", e)
-        println("Stacktrace: ")
-        for (exc, bt) in Base.catch_stack()
-            showerror(stdout, exc, bt)
-            println()
-        end
+        @warn "Exponential fitting failed: $e"
+        println("Skipping exponential fit overlay")
+    end
+
+    # Fit power-law decay: C(r) = A * r^(-η)
+    η_fitted = nothing
+    A_power_fitted = nothing
+    try
+        println("\nFitting connected correlation to A*r^(-η)...")
+        power_params = fit_acf_power(separations, exact_connected_vals; include_zero=false)
+        η_fitted = power_params.η
+        A_power_fitted = power_params.A
+        println("Fitted exponent η = $(round(η_fitted, digits=3))")
+        println("Fitted amplitude A = $(round(A_power_fitted, digits=4))")
+
+        # Plot power-law fitted curve
+        r_fit = range(1, max_separation, length=100)
+        power_curve = abs(A_power_fitted) .* r_fit .^ (-η_fitted)
+        power_curve_plot = max.(power_curve, min_val)
+        lines!(ax2, r_fit, power_curve_plot,
+               label="Fit: |A|*r^(-$(round(η_fitted, digits=2)))",
+               color=:purple, linewidth=3, linestyle=:dot)
+    catch e
+        @warn "Power-law fitting failed: $e"
+        println("Skipping power-law fit overlay")
     end
 
     axislegend(ax2, position=:rt)
@@ -1133,6 +1216,8 @@ function plot_correlation_function(filename::String;
         correlation_length = correlation_length,
         correlation_length_fitted = ξ_fitted,
         fitted_amplitude = A_fitted,
+        power_law_exponent = η_fitted,
+        power_law_amplitude = A_power_fitted,
         g = g, row = row, nqubits = nqubits
     )
 
