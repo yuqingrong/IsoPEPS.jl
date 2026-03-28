@@ -252,7 +252,7 @@ end
 
 # ==================== Example usage ====================
 Ly = 4
-D = 16
+D = 4
 model_choice = "heisenberg_j1j2"
 Lx1 = 100
 Lx2 =  200

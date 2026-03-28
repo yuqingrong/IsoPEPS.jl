@@ -4,6 +4,7 @@ using Random
 using CairoMakie
 using Yao
 using LinearAlgebra, OMEinsum
+using JSON3
 """
     simulation(; model, scan_param, scan_values, row, p, nqubits, ...)
 
@@ -112,12 +113,32 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
         val = scan_values[i]
 
         # Try to warm-start from the closest existing result file in output_dir
+        # 1. First try same nqubits
         warm_params, warm_val = _find_warm_start_params(output_dir, model, scan_param, val, row, p, nqubits;
                                                          fixed_params...)
+        warm_from_nqubits = nothing
+
+        # 2. If no same-nqubits result, try smaller nqubits and embed
+        if warm_params === nothing
+            for nq in (nqubits-2):-2:3
+                warm_params, warm_val = _find_warm_start_params(output_dir, model, scan_param, val, row+2, p, nq;
+                                                                 fixed_params...)
+                if warm_params !== nothing
+                    warm_params = embed_params(warm_params, p, nq, nqubits; unit_cell=unit_cell)
+                    warm_from_nqubits = nq
+                    break
+                end
+            end
+        end
+
         @show warm_val
         if warm_params !== nothing
             params = warm_params
-            verbose && println("Starting $(scan_param) = $(val), warm-started from saved $(scan_param) = $(warm_val)")
+            if warm_from_nqubits !== nothing
+                verbose && println("Starting $(scan_param) = $(val), warm-started from nqubits=$(warm_from_nqubits) $(scan_param) = $(warm_val)")
+            else
+                verbose && println("Starting $(scan_param) = $(val), warm-started from saved $(scan_param) = $(warm_val)")
+            end
         else
             Random.seed!(seed)
             n_params = unit_cell == :two_by_two ? 4 * 2* nqubits * p : PARAMS_PER_QUBIT_PER_LAYER * nqubits * p
@@ -165,7 +186,7 @@ end
      scan_param=:J2,
      scan_values=[0.5],
      J1=1.0,
-     row=4, p=3, nqubits=5,
+     row=2, p=3, nqubits=5,
      maxiter=500,
      seed=123,
      verbose=true,

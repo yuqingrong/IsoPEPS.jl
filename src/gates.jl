@@ -165,3 +165,47 @@ function _build_layer(params, r, nqubits; max_stride::Int=nqubits-1)
 
     return gate * _get_cnot_product(nqubits; max_stride=max_stride)
 end
+
+"""
+    embed_params(params, p, nqubits_from, nqubits_to; unit_cell=:single)
+
+Embed parameters from a smaller nqubits into a larger nqubits parameter space.
+Copies existing qubit rotations and sets new qubits to identity (θ=0).
+
+Works for both `:single` (shared params) and `:two_by_two` (4 gate chunks) unit cells.
+
+# Example
+```julia
+# Optimize at nqubits=3, then warm-start at nqubits=5
+params_3 = result.final_params
+params_5 = embed_params(params_3, p, 3, 5; unit_cell=:two_by_two)
+```
+"""
+function embed_params(params::Vector{Float64}, p::Int, nqubits_from::Int, nqubits_to::Int;
+                      unit_cell::Symbol=:single)
+    nqubits_to > nqubits_from || error("nqubits_to ($nqubits_to) must be > nqubits_from ($nqubits_from)")
+    ppq = PARAMS_PER_QUBIT_PER_LAYER  # 2
+
+    chunk_from = ppq * nqubits_from * p
+    chunk_to   = ppq * nqubits_to * p
+
+    n_chunks = unit_cell == :two_by_two ? 4 : 1
+    @assert length(params) >= n_chunks * chunk_from "Expected $(n_chunks * chunk_from) params, got $(length(params))"
+
+    new_params = zeros(Float64, n_chunks * chunk_to)
+
+    for c in 0:(n_chunks-1)
+        old_chunk = params[c*chunk_from+1 : (c+1)*chunk_from]
+        for r in 1:p
+            for i in 1:nqubits_from
+                old_idx = ppq * nqubits_from * (r-1) + ppq * (i-1) + 1
+                new_idx = c * chunk_to + ppq * nqubits_to * (r-1) + ppq * (i-1) + 1
+                new_params[new_idx]   = old_chunk[old_idx]
+                new_params[new_idx+1] = old_chunk[old_idx+1]
+            end
+            # Qubits nqubits_from+1 : nqubits_to stay at 0 (identity rotation)
+        end
+    end
+
+    return new_params
+end

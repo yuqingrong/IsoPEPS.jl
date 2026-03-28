@@ -123,7 +123,7 @@ export model_name, needs_y_measurement, default_unit_cell, model_label
 export compute_energy_from_samples, compute_exact_energy_from_gates
 
 # Gate Construction
-export build_unitary_gate, build_unitary_gate_2x2
+export build_unitary_gate, build_unitary_gate_2x2, embed_params
 
 # Sampling-Based Observables
 export compute_energy, compute_tfim_energy, compute_heisenberg_energy, compute_acf
