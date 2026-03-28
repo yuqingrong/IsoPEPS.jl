@@ -6,26 +6,30 @@ using ITensorMPS
 using LinearAlgebra
 
 """
-    row_major_2d_to_1d(Lx::Int, Ly::Int)
+    column_major_2d_to_1d(Lx::Int, Ly::Int)
 
-Map 2D lattice coordinates to 1D chain using row-major ordering.
+Map 2D lattice coordinates to 1D chain using column-major ordering.
 Returns a dictionary mapping (i,j) -> site_index.
 
-# Example for 3x3 lattice:
+This ordering is optimal for DMRG on cylinders: the short direction (Ly)
+is the inner loop, so vertical bonds are nearest-neighbor in the 1D chain
+(distance 1) and horizontal bonds are short-range (distance Ly).
+
+# Example for 3x3 lattice (Lx=3 columns, Ly=3 rows):
 ```
-1 → 2 → 3
-↓
-4 → 5 → 6
-↓
-7 → 8 → 9
+1  4  7
+↓  ↓  ↓
+2  5  8
+↓  ↓  ↓
+3  6  9
 ```
 """
-function IsoPEPS.row_major_2d_to_1d(Lx::Int, Ly::Int)
+function IsoPEPS.column_major_2d_to_1d(Lx::Int, Ly::Int)
     mapping = Dict{Tuple{Int,Int}, Int}()
     site = 1
 
-    for j in 1:Ly
-        for i in 1:Lx
+    for i in 1:Lx         # columns (long direction) outer
+        for j in 1:Ly      # rows (short direction) inner
             mapping[(i, j)] = site
             site += 1
         end
@@ -45,7 +49,7 @@ function IsoPEPS.build_2d_tfim_hamiltonian(Lx::Int, Ly::Int, J::Float64, g::Floa
     N = Lx * Ly
     sites = siteinds("S=1", N)
 
-    coord_to_site = IsoPEPS.row_major_2d_to_1d(Lx, Ly)
+    coord_to_site = IsoPEPS.column_major_2d_to_1d(Lx, Ly)
 
     os = OpSum()
 
@@ -83,7 +87,7 @@ end
 """
     build_2d_heisenberg_j1j2_hamiltonian(Lx::Int, Ly::Int, J1::Float64, J2::Float64)
 
-Build 2D Heisenberg J1-J2 Hamiltonian mapped to 1D chain.
+Build 2D Heisenberg J1-J2 Hamiltonian on a cylinder (periodic in y, open in x).
 
 H = J1 Σ_{⟨i,j⟩} S_i · S_j + J2 Σ_{⟨⟨i,j⟩⟩} S_i · S_j
 """
@@ -91,13 +95,13 @@ function IsoPEPS.build_2d_heisenberg_j1j2_hamiltonian(Lx::Int, Ly::Int, J1::Floa
     N = Lx * Ly
     sites = siteinds("S=1/2", N)
 
-    coord_to_site = IsoPEPS.row_major_2d_to_1d(Lx, Ly)
+    coord_to_site = IsoPEPS.column_major_2d_to_1d(Lx, Ly)
 
     os = OpSum()
 
     # J1: Nearest-neighbor Heisenberg coupling
-    # Horizontal bonds
-    for j in 1:(Ly-1)
+    # Horizontal bonds (open in x)
+    for j in 1:Ly
         for i in 1:(Lx-1)
             site1 = coord_to_site[(i, j)]
             site2 = coord_to_site[(i+1, j)]
@@ -107,31 +111,33 @@ function IsoPEPS.build_2d_heisenberg_j1j2_hamiltonian(Lx::Int, Ly::Int, J1::Floa
         end
     end
 
-    # Vertical bonds
-    for j in 1:(Ly-1)
-        for i in 1:(Lx-1)
+    # Vertical bonds (periodic in y)
+    for j in 1:Ly
+        j_next = mod1(j + 1, Ly)
+        for i in 1:Lx
             site1 = coord_to_site[(i, j)]
-            site2 = coord_to_site[(i, j+1)]
+            site2 = coord_to_site[(i, j_next)]
             os += J1 * 0.5, "S+", site1, "S-", site2
             os += J1 * 0.5, "S-", site1, "S+", site2
             os += J1,       "Sz", site1, "Sz", site2
         end
     end
 
-    # J2: Next-nearest-neighbor (diagonal) coupling
+    # J2: Next-nearest-neighbor (diagonal) coupling (periodic in y, open in x)
     if J2 != 0.0
-        for j in 1:(Ly-1)
+        for j in 1:Ly
+            j_next = mod1(j + 1, Ly)
             for i in 1:(Lx-1)
-                # Diagonal (i,j) -> (i+1,j+1)
+                # Diagonal (i,j) -> (i+1,j_next)
                 site1 = coord_to_site[(i, j)]
-                site2 = coord_to_site[(i+1, j+1)]
+                site2 = coord_to_site[(i+1, j_next)]
                 os += J2 * 0.5, "S+", site1, "S-", site2
                 os += J2 * 0.5, "S-", site1, "S+", site2
                 os += J2,       "Sz", site1, "Sz", site2
 
-                # Anti-diagonal (i+1,j) -> (i,j+1)
+                # Anti-diagonal (i+1,j) -> (i,j_next)
                 site1 = coord_to_site[(i+1, j)]
-                site2 = coord_to_site[(i, j+1)]
+                site2 = coord_to_site[(i, j_next)]
                 os += J2 * 0.5, "S+", site1, "S-", site2
                 os += J2 * 0.5, "S-", site1, "S+", site2
                 os += J2,       "Sz", site1, "Sz", site2
@@ -189,7 +195,7 @@ function IsoPEPS.dmrg_ground_state_2d(Lx::Int, Ly::Int; model::String="tfim",
     println("Running DMRG...")
     energy, psi = dmrg(H, psi0, sweeps; outputlevel=1)
 
-    energy_per_site = energy / ((Ly-1)*(Lx-1))
+    energy_per_site = energy / N
 
     println("Ground state energy: $energy")
     println("Energy per site: $energy_per_site")

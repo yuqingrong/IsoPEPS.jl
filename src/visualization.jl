@@ -581,7 +581,7 @@ function plot_expectation_values(result::CircuitOptimizationResult;
             if !isnothing(resampled)
                 if need_y
                     _, Z_samples, X_samples, Y_samples, _, _ = resampled
-                    Z_samples = Z_samples[101:end]
+                    Z_samples = Z_samples[101:end] 
                     X_samples = X_samples[101:end]
                     Y_samples = Y_samples[101:end]
                 else
@@ -714,28 +714,35 @@ function plot_expectation_values(result::CircuitOptimizationResult;
                 if J2 != 0.0 && row > 1
                     diag_down_vals = Float64[]
                     diag_up_vals = Float64[]
-                    for i in 1:row
-                        j_down = i % row + 1
-                        j_up = (i - 2 + row) % row + 1
 
-                        # Within-period
+                    # Diagonal-down ↘: (i, c) → (i+1, c+1), open vertical boundary
+                    for i in 1:row-1
+                        j_down = i + 1
                         for c in 1:(N_cols-1)
                             val_d = dot(l_pre[c],
                                         E_O[(c, si, i)] * E_O[(c+1, si, j_down)] * r_suf[c+1]) / nf
                             push!(diag_down_vals, real(val_d))
-                            val_u = dot(l_pre[c],
-                                        E_O[(c, si, i)] * E_O[(c+1, si, j_up)] * r_suf[c+1]) / nf
-                            push!(diag_up_vals, real(val_u))
                         end
-
                         # Cross-period
                         val_d = dot(l_pre[N_cols],
                                     E_O[(N_cols, si, i)] * E_O[(1, si, j_down)] * r_suf[1]) / nf
                         push!(diag_down_vals, real(val_d))
+                    end
+
+                    # Diagonal-up ↗: (i, c) → (i-1, c+1), open vertical boundary
+                    for i in 2:row
+                        j_up = i - 1
+                        for c in 1:(N_cols-1)
+                            val_u = dot(l_pre[c],
+                                        E_O[(c, si, i)] * E_O[(c+1, si, j_up)] * r_suf[c+1]) / nf
+                            push!(diag_up_vals, real(val_u))
+                        end
+                        # Cross-period
                         val_u = dot(l_pre[N_cols],
                                     E_O[(N_cols, si, i)] * E_O[(1, si, j_up)] * r_suf[1]) / nf
                         push!(diag_up_vals, real(val_u))
                     end
+
                     exact_diag_down[sym] = mean(diag_down_vals)
                     exact_diag_up[sym] = mean(diag_up_vals)
                 end
@@ -887,7 +894,7 @@ function plot_expectation_values(result::CircuitOptimizationResult;
         return nothing
     end
 
-    fig = Figure(size=(600, 400))
+    fig = Figure(size=(800, 400))
     ax = Axis(fig[1, 1],
               xlabel="Observable", ylabel="Value",
               title=plot_title,
@@ -1004,31 +1011,47 @@ function plot_correlation_function(filename::String;
     g = get(input_args, :g, NaN)
     virtual_qubits = (nqubits - 1) ÷ 2
     share_params = get(input_args, :share_params, true)
+    model_str = get(input_args, :model, "tfim")
+    is_heisenberg = model_str == "heisenberg_j1j2"
 
     params = result.final_params
-    gates = build_unitary_gate(params, p, row, nqubits; share_params=share_params)
+
+    # Detect 2x2 unit cell
+    is_2x2 = is_heisenberg &&
+        (length(params) == 4 * PARAMS_PER_QUBIT_PER_LAYER * nqubits * p)
+
+    if is_2x2
+        gates_odd, gates_even = build_unitary_gate_2x2(params, p, row, nqubits)
+        op = TransferOperator(gates_odd, gates_even, row, nqubits)
+    else
+        gates = build_unitary_gate(params, p, row, nqubits; share_params=share_params)
+        op = TransferOperator(gates, row, nqubits)
+    end
+    N_cols = length(op.columns)
 
     println("=== Correlation Function Analysis ===")
     println("File: ", basename(filename))
-    println("Configuration: g=$g, row=$row, nqubits=$nqubits")
+    println("Configuration: g=$g, row=$row, nqubits=$nqubits, unit_cell=$(N_cols)x1")
 
     println("\nComputing exact correlations (transfer matrix)...")
     println("Averaging over all positions 1 to $row...")
 
     # Compute correlations for each position and average
-    separations = collect(1:max_separation)
-    exact_full_vals = zeros(Float64, max_separation)
-    exact_connected_vals = zeros(Float64, max_separation)
+    # Separations are in period units; exact values at r*N_cols columns
+    max_sep_periods = cld(max_separation, N_cols)
+    separations = [r * N_cols for r in 1:max_sep_periods]
+    exact_full_vals = zeros(Float64, max_sep_periods)
+    exact_connected_vals = zeros(Float64, max_sep_periods)
 
     for pos in 1:row
-        exact_full_pos = correlation_function(gates, row, virtual_qubits, :Z, 1:max_separation;
+        exact_full_pos = correlation_function(op, :Z, 1:max_sep_periods;
                                               position=pos, connected=false)
-        exact_connected_pos = correlation_function(gates, row, virtual_qubits, :Z, 1:max_separation;
+        exact_connected_pos = correlation_function(op, :Z, 1:max_sep_periods;
                                                    position=pos, connected=true)
 
-        for r in separations
-            exact_full_vals[r] += real(exact_full_pos[r])
-            exact_connected_vals[r] += real(exact_connected_pos[r])
+        for (i, r) in enumerate(1:max_sep_periods)
+            exact_full_vals[i] += real(exact_full_pos[r])
+            exact_connected_vals[i] += real(exact_connected_pos[r])
         end
     end
 
@@ -1036,19 +1059,29 @@ function plot_correlation_function(filename::String;
     exact_full_vals ./= row
     exact_connected_vals ./= row
 
-    _, gap, _, _ = compute_transfer_spectrum(gates, row, nqubits)
-    correlation_length = 1 / gap
-    println("Correlation length ξ = $(round(correlation_length, digits=2))")
+    _, gap, _, _ = compute_transfer_spectrum(op)
+    correlation_length = N_cols / gap
+    println("Correlation length ξ = $(round(correlation_length, digits=2)) columns")
 
     println("\nGenerating samples (conv_step=$conv_step, samples=$samples)...")
-    rho, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits;
-                                                        conv_step=conv_step,
-                                                        samples=samples)
+    if is_2x2
+        rho, Z_samples, X_samples = sample_quantum_channel(gates_odd, gates_even, row, nqubits;
+                                                            conv_step=conv_step,
+                                                            samples=samples)
+    else
+        gates = op.columns[1]
+        rho, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits;
+                                                            conv_step=conv_step,
+                                                            samples=samples)
+    end
 
     Z_vec = Z_samples[conv_step+1:end]
 
+    # Use row*N_cols for subsampling so each subchain has same-column-type measurements
+    # (for 2x2 unit cells, row alone mixes odd/even column types)
+    acf_row = row * N_cols
     lags, acf, acf_err, corr_full, corr_err, corr_connected, corr_connected_err = compute_acf(
-        reshape(Float64.(Z_vec), 1, :); max_lag=max_separation+1, row=row
+        reshape(Float64.(Z_vec), 1, :); max_lag=max_sep_periods+1, row=acf_row
     )
 
     @show corr_err
@@ -1059,16 +1092,18 @@ function plot_correlation_function(filename::String;
     sample_connected = corr_connected
     sample_connected_err = corr_connected_err
 
-    n_sample_seps = min(length(sample_full) - 1, max_separation)
-    sample_seps = 1:n_sample_seps
-    sample_full_vals = sample_full[2:n_sample_seps+1]
-    sample_full_err_vals = sample_full_err[2:n_sample_seps+1]
-    sample_connected_vals = sample_connected[2:n_sample_seps+1]
-    sample_connected_err_vals = sample_connected_err[2:n_sample_seps+1]
+    n_sample_lags = min(length(sample_full) - 1, max_sep_periods)
+    # Sample lags are in period units; convert to column separations
+    sample_seps = [k * N_cols for k in 1:n_sample_lags]
+    sample_full_vals = sample_full[2:n_sample_lags+1]
+    sample_full_err_vals = sample_full_err[2:n_sample_lags+1]
+    sample_connected_vals = sample_connected[2:n_sample_lags+1]
+    sample_connected_err_vals = sample_connected_err[2:n_sample_lags+1]
 
     println("Sampling std errors range (full): $(round(minimum(sample_full_err_vals), sigdigits=2)) - $(round(maximum(sample_full_err_vals), sigdigits=2))")
     println("Sampling std errors range (connected): $(round(minimum(sample_connected_err_vals), sigdigits=2)) - $(round(maximum(sample_connected_err_vals), sigdigits=2))")
 
+    # Both exact and sample are now at the same separations (N_cols, 2*N_cols, ...)
     common_seps = min(length(exact_full_vals), length(sample_full_vals))
     error_full = abs.(exact_full_vals[1:common_seps] .- sample_full_vals[1:common_seps])
     error_connected = abs.(exact_connected_vals[1:common_seps] .- sample_connected_vals[1:common_seps])
@@ -1077,10 +1112,15 @@ function plot_correlation_function(filename::String;
     println("Mean |exact - sample| error (full): $(round(mean_error_full, digits=6))")
     println("Mean |exact - sample| error (connected): $(round(mean_error_connected, digits=6))")
 
-    fig = Figure(size=(800, 700))
+    fig = Figure(size=(800, is_heisenberg ? 1000 : 700))
     min_val = 1e-15
 
-    title_str = "Correlation Function: g=$g, row=$row, nqubits=$nqubits, ξ=$(round(correlation_length, digits=2))"
+    if is_heisenberg
+        J2 = get(input_args, :J2, 0.0)
+        title_str = "Correlation Function: J2=$J2, row=$row, nqubits=$nqubits, ξ=$(round(correlation_length, digits=2))"
+    else
+        title_str = "Correlation Function: g=$g, row=$row, nqubits=$nqubits, ξ=$(round(correlation_length, digits=2))"
+    end
     Label(fig[0, 1], title_str, fontsize=16, font=:bold)
 
     ax1 = Axis(fig[1, 1],
@@ -1134,8 +1174,6 @@ function plot_correlation_function(filename::String;
     ξ_fitted = nothing
     A_fitted = nothing
     try
-        # Pass raw values to fit_acf (not absolute values)
-        # fit_acf will handle absolute values internally
         fit_params = fit_acf(separations, exact_connected_vals; include_zero=false)
         ξ_fitted = fit_params.ξ
         A_fitted = fit_params.A
@@ -1144,7 +1182,6 @@ function plot_correlation_function(filename::String;
         println("Transfer matrix ξ = $(round(correlation_length, digits=3))")
         println("Ratio ξ_fitted/ξ_transfer = $(round(ξ_fitted/correlation_length, digits=3))")
 
-        # Check fit quality
         r_check = separations[1:min(10, length(separations))]
         fitted_check = abs(A_fitted) .* exp.(-r_check ./ ξ_fitted)
         data_check = abs.(exact_connected_vals[1:length(r_check)])
@@ -1154,7 +1191,6 @@ function plot_correlation_function(filename::String;
             println("  r=$r: data=$(data_check[i]), fit=$(fitted_check[i]), rel_err=$(round(rel_err, digits=1))%")
         end
 
-        # Plot fitted curve ON TOP of data with high visibility
         r_fit = range(1, max_separation, length=100)
         fitted_curve = abs(A_fitted) .* exp.(-r_fit ./ ξ_fitted)
         fitted_curve_plot = max.(fitted_curve, min_val)
@@ -1162,37 +1198,76 @@ function plot_correlation_function(filename::String;
                label="Fit: |A|*exp(-r/$(round(ξ_fitted, digits=2)))",
                color=:green, linewidth=3, linestyle=:dash)
 
-        # Update title with fitted ξ
         ax2.title = "Connected Correlation (ξ_fit=$(round(ξ_fitted, digits=2)), ξ_TM=$(round(correlation_length, digits=2)))"
     catch e
         @warn "Exponential fitting failed: $e"
         println("Skipping exponential fit overlay")
     end
 
+    axislegend(ax2, position=:rt)
+
     # Fit power-law decay: C(r) = A * r^(-η)
     η_fitted = nothing
     A_power_fitted = nothing
-    try
-        println("\nFitting connected correlation to A*r^(-η)...")
-        power_params = fit_acf_power(separations, exact_connected_vals; include_zero=false)
-        η_fitted = power_params.η
-        A_power_fitted = power_params.A
-        println("Fitted exponent η = $(round(η_fitted, digits=3))")
-        println("Fitted amplitude A = $(round(A_power_fitted, digits=4))")
 
-        # Plot power-law fitted curve
-        r_fit = range(1, max_separation, length=100)
-        power_curve = abs(A_power_fitted) .* r_fit .^ (-η_fitted)
-        power_curve_plot = max.(power_curve, min_val)
-        lines!(ax2, r_fit, power_curve_plot,
-               label="Fit: |A|*r^(-$(round(η_fitted, digits=2)))",
-               color=:purple, linewidth=3, linestyle=:dot)
-    catch e
-        @warn "Power-law fitting failed: $e"
-        println("Skipping power-law fit overlay")
+    if is_heisenberg
+        # Heisenberg: power-law fit on a separate log-log panel
+        ax3 = Axis(fig[3, 1],
+                   xlabel="Separation r",
+                   ylabel="|⟨Z_i Z_{i+r}⟩_c|",
+                   title="Connected Correlation (power-law fit)",
+                   xscale=log10, yscale=log10)
+
+        lines!(ax3, separations, exact_connected_abs, label="Exact contraction", color=:blue, linewidth=2)
+        scatter!(ax3, separations, exact_connected_abs, color=:blue, markersize=8)
+        scatter!(ax3, collect(sample_seps), sample_connected_abs,
+                 label="Sampling ± std err", color=:red, markersize=8, marker=:diamond)
+        errorbars!(ax3, collect(sample_seps), sample_connected_abs, err_low_conn, err_high_conn,
+                   color=:red, whiskerwidth=6)
+
+        try
+            println("\nFitting connected correlation to A*r^(-η)...")
+            power_fit_range = (1, min(max_separation, max(5, ceil(Int, 2 * correlation_length))))
+            power_params = fit_acf_power(separations, exact_connected_vals; include_zero=false, fit_range=power_fit_range)
+            η_fitted = power_params.η
+            A_power_fitted = power_params.A
+            println("Fitted exponent η = $(round(η_fitted, digits=3))")
+            println("Fitted amplitude A = $(round(A_power_fitted, digits=4))")
+
+            r_fit = range(1, max_separation, length=100)
+            power_curve = abs(A_power_fitted) .* r_fit .^ (-η_fitted)
+            power_curve_plot = max.(power_curve, min_val)
+            lines!(ax3, r_fit, power_curve_plot,
+                   label="Fit: |A|*r^(-$(round(η_fitted, digits=2)))",
+                   color=:purple, linewidth=3, linestyle=:dot)
+        catch e
+            @warn "Power-law fitting failed: $e"
+            println("Skipping power-law fit overlay")
+        end
+
+        axislegend(ax3, position=:rt)
+    else
+        # TFIM: power-law fit on the same panel as exponential
+        try
+            println("\nFitting connected correlation to A*r^(-η)...")
+            power_fit_range = (1, min(max_separation, max(5, ceil(Int, 2 * correlation_length))))
+            power_params = fit_acf_power(separations, exact_connected_vals; include_zero=false, fit_range=power_fit_range)
+            η_fitted = power_params.η
+            A_power_fitted = power_params.A
+            println("Fitted exponent η = $(round(η_fitted, digits=3))")
+            println("Fitted amplitude A = $(round(A_power_fitted, digits=4))")
+
+            r_fit = range(1, max_separation, length=100)
+            power_curve = abs(A_power_fitted) .* r_fit .^ (-η_fitted)
+            power_curve_plot = max.(power_curve, min_val)
+            lines!(ax2, r_fit, power_curve_plot,
+                   label="Fit: |A|*r^(-$(round(η_fitted, digits=2)))",
+                   color=:purple, linewidth=3, linestyle=:dot)
+        catch e
+            @warn "Power-law fitting failed: $e"
+            println("Skipping power-law fit overlay")
+        end
     end
-
-    axislegend(ax2, position=:rt)
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))
@@ -1576,12 +1651,13 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
     # Load results and compute correlations
     correlation_data = Dict{Float64, NamedTuple}()
     colors = [:blue, :green, :red, :orange, :purple, :brown, :pink, :gray]
+    skipped_g = Float64[]
 
     for (idx, g) in enumerate(g_values)
         filename = joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
 
         if !isfile(filename)
-            @warn "File not found: $(basename(filename)), skipping g=$g"
+            push!(skipped_g, g)
             continue
         end
 
@@ -1611,7 +1687,8 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
         # Fit correlation to get fitted ξ
         ξ_fitted = nothing
         try
-            fit_params = fit_acf(collect(separations), corr_vals; include_zero=false)
+            exp_fit_range = (1, min(max_separation, max(5, ceil(Int, 2 * ξ))))
+            fit_params = fit_acf(collect(separations), corr_vals; include_zero=false, fit_range=exp_fit_range)
             ξ_fitted = fit_params.ξ
             println("  ξ_transfer = $(round(ξ, digits=3)), ξ_fitted = $(round(ξ_fitted, digits=3))")
         catch e
@@ -1625,6 +1702,10 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
             correlation_length_fitted = ξ_fitted,
             color = colors[mod1(idx, length(colors))]
         )
+    end
+
+    if !isempty(skipped_g)
+        println("\nSkipped $(length(skipped_g)) missing g values: $skipped_g")
     end
 
     if isempty(correlation_data)
@@ -1716,5 +1797,362 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
     end
 
     return fig, correlation_data
+end
+
+# ============================================================================
+# plot_correlation_vs_J2
+# ============================================================================
+
+"""
+    plot_correlation_vs_J2(data_dir::String, J2_values::Vector{Float64};
+                           J1=1.0, row=3, nqubits=3, p=3,
+                           max_separation=20,
+                           connected=true,
+                           dmrg_file=nothing,
+                           save_path=nothing)
+
+Plot correlation length ξ vs J2 for the Heisenberg J1-J2 model.
+
+# Arguments
+- `data_dir`: Directory containing result JSON files
+- `J2_values`: Vector of J2 values to scan
+- `J1`: Nearest-neighbor coupling (default: 1.0)
+- `row`: Number of rows (default: 3)
+- `nqubits`: Number of qubits (default: 3)
+- `p`: Circuit depth (default: 3)
+- `max_separation`: Maximum separation for correlation function (default: 20)
+- `connected`: Use connected correlation (default: true)
+- `dmrg_file`: Optional JSON file with DMRG reference (expected keys: `J2_values`, `correlation_lengths`)
+- `save_path`: Path to save figure (optional)
+
+# Returns
+- `fig`: Makie Figure object
+- `data`: Dict mapping J2 values to correlation data
+"""
+function plot_correlation_vs_J2(data_dir::String, J2_values::Vector{Float64};
+                                J1=1.0, row=3, nqubits=3, p=3,
+                                max_separation=20,
+                                connected=true,
+                                dmrg_file::Union{String,Nothing}=nothing,
+                                save_path::Union{String,Nothing}=nothing)
+
+    println("="^70)
+    println("Correlation Length vs J2 Analysis")
+    println("="^70)
+    println("Connected: $connected, J1=$J1, row=$row, nqubits=$nqubits, p=$p")
+
+    correlation_data = Dict{Float64, NamedTuple}()
+    colors = [:blue, :green, :red, :orange, :purple, :brown, :pink, :gray]
+    skipped_J2 = Float64[]
+
+    for (idx, val) in enumerate(J2_values)
+        # Find file (prefer 2x2 over 1x1)
+        candidates = [
+            joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json"),
+            joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
+            joinpath(data_dir, "circuit_heisenberg_j1j2_J=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
+        ]
+        filename = ""
+        for c in candidates
+            if isfile(c)
+                filename = c
+                break
+            end
+        end
+        if isempty(filename)
+            push!(skipped_J2, val)
+            continue
+        end
+
+        println("\nProcessing J2=$val  →  $(basename(filename))")
+
+        result, input_args = load_result(filename)
+        virtual_qubits = (nqubits - 1) ÷ 2
+        share_params = get(input_args, :share_params, true)
+
+        # Detect 2x2 unit cell from filename
+        is_2x2 = endswith(filename, "_2x2.json")
+
+        if is_2x2
+            gates_odd, gates_even = build_unitary_gate_2x2(result.final_params, p, row, nqubits)
+            op = TransferOperator(gates_odd, gates_even, row, nqubits)
+        else
+            gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
+            op = TransferOperator(gates, row, nqubits)
+        end
+
+        # Compute correlation length from transfer matrix
+        # gap is per period; multiply by N_cols to get ξ in column units
+        N_cols = length(op.columns)
+        _, gap, _, _ = compute_transfer_spectrum(op)
+        ξ = N_cols / gap
+
+        # Compute correlation function at every column separation
+        T_cols = _column_transfer_matrices(op)
+        T_combined = reduce(*, T_cols)
+        l_vec, r_vec, nf_corr, _ = _fixed_points(T_combined)
+        _, r_suf = _precompute_shifted_vectors(T_cols, l_vec, r_vec)
+        σz = _resolve_op(:Z)
+
+        E_O_col = Dict{Tuple{Int,Int}, Matrix{ComplexF64}}()
+        for c in 1:N_cols, pos in 1:row
+            E_O_col[(c, pos)] = get_transfer_matrix_with_operator(
+                op.columns[c], op.row, op.virtual_qubits, Dict(pos => σz);
+                optimizer=GreedyMethod())
+        end
+
+        corr_vals = zeros(Float64, max_separation)
+        for pos in 1:row
+            l_side = E_O_col[(1, pos)]' * l_vec
+            dim = size(T_cols[1], 1)
+            middle = Matrix{ComplexF64}(I, dim, dim)
+            for d in 1:max_separation
+                target_type = (d % N_cols) + 1
+                right_part = E_O_col[(target_type, pos)] * r_suf[target_type]
+                full_val = real(dot(l_side, middle * right_part) / nf_corr)
+                if connected
+                    one_pt = real(dot(l_vec, E_O_col[(1, pos)] * r_suf[1]) / nf_corr)
+                    corr_vals[d] += full_val - one_pt^2
+                else
+                    corr_vals[d] += full_val
+                end
+                middle = middle * T_cols[target_type]
+            end
+        end
+        corr_vals ./= row
+        col_seps = collect(Float64, 1:max_separation)
+
+        # Fit with limited range
+        ξ_fitted = nothing
+        try
+            max_fit_col = min(max_separation, max(5, ceil(Int, 2 * ξ)))
+            exp_fit_range = (1, max_fit_col)
+            fit_params = fit_acf(col_seps, corr_vals; include_zero=false, fit_range=exp_fit_range)
+            ξ_fitted = fit_params.ξ
+            println("  ξ_transfer = $(round(ξ, digits=3)), ξ_fitted = $(round(ξ_fitted, digits=3))")
+        catch e
+            println("  ξ_transfer = $(round(ξ, digits=3)), fitting failed")
+        end
+
+        correlation_data[val] = (
+            separations = col_seps,
+            correlations = corr_vals,
+            correlation_length = ξ,
+            correlation_length_fitted = ξ_fitted,
+            color = colors[mod1(idx, length(colors))]
+        )
+    end
+
+    if !isempty(skipped_J2)
+        println("\nSkipped $(length(skipped_J2)) missing J2 values: $skipped_J2")
+    end
+
+    if isempty(correlation_data)
+        error("No valid results found for any J2 value")
+    end
+
+    # Create figure
+    fig = Figure(size=(800, 600))
+
+    ax = Axis(fig[1, 1],
+              xlabel="J₂ / J₁",
+              ylabel="Correlation Length ξ",
+              title="Correlation Length vs J₂ (J₁=$J1, row=$row, D=$(nqubits-1))")
+
+    # Plot correlation lengths from transfer matrix
+    J2_sorted = sort(collect(keys(correlation_data)))
+    ξ_transfer = [correlation_data[j].correlation_length for j in J2_sorted]
+
+    lines!(ax, J2_sorted, ξ_transfer,
+           color=:blue, linewidth=2, label="IsoPEPS (transfer matrix)")
+    scatter!(ax, J2_sorted, ξ_transfer,
+             color=:blue, markersize=12)
+
+    # Overlay DMRG correlation lengths if provided
+    if dmrg_file !== nothing && isfile(dmrg_file)
+        println("\nLoading DMRG reference from: $dmrg_file")
+        dmrg_data = open(dmrg_file, "r") do io
+            JSON3.read(io)
+        end
+
+        if haskey(dmrg_data, :correlation_lengths)
+            j2_key = haskey(dmrg_data, :scan_values) ? :scan_values : :J2_values
+            dmrg_J2 = Float64.(collect(dmrg_data[j2_key]))
+            dmrg_ξ = collect(dmrg_data.correlation_lengths)
+
+            valid = [i for i in eachindex(dmrg_J2)
+                     if dmrg_ξ[i] !== nothing && isfinite(Float64(dmrg_ξ[i])) && Float64(dmrg_ξ[i]) < 1e5]
+            dmrg_J2_valid = dmrg_J2[valid]
+            dmrg_ξ_valid = Float64.(dmrg_ξ[valid])
+
+            lines!(ax, dmrg_J2_valid, dmrg_ξ_valid,
+                   color=:red, linewidth=2, linestyle=:dash, label="DMRG reference")
+            scatter!(ax, dmrg_J2_valid, dmrg_ξ_valid,
+                     color=:red, markersize=8, marker=:diamond)
+            println("  DMRG: $(length(dmrg_J2_valid)) valid J2 points loaded")
+        end
+    elseif dmrg_file !== nothing
+        println("DMRG file not found: $dmrg_file")
+    end
+
+    axislegend(ax, position=:lt)
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        println("\nFigure saved to: $save_path")
+    end
+
+    return fig, correlation_data
+end
+
+# ============================================================================
+# plot_M2_vs_J2
+# ============================================================================
+
+"""
+    plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
+                  J1=1.0, row=3, nqubits=3, p=3,
+                  conv_step=100, samples=1000000,
+                  max_separation=20,
+                  dmrg_file=nothing,
+                  save_path=nothing)
+
+Plot magnetic order parameter squared M²(q) vs J2 for the Heisenberg J1-J2 model.
+
+Computes and plots M²(q0) with q0=(π,π) (Néel order) and M²(q1) with q1=(π,0)
+(stripe order) as functions of J2. The crossing/transition between the two
+order parameters signals the phase boundary.
+
+# Arguments
+- `data_dir`: Directory containing result JSON files
+- `J2_values`: Vector of J2 values to scan
+- `J1`: Nearest-neighbor coupling (default: 1.0)
+- `row`, `nqubits`, `p`: Circuit parameters
+- `conv_step`: Burn-in steps for the quantum channel Markov chain
+- `samples`: Number of measurement samples
+- `max_separation`: Max column separation for structure factor sum
+- `dmrg_file`: Optional JSON file with DMRG reference M² data
+  (expected keys: `J2_values`, `M2_neel`, `M2_stripe`)
+- `save_path`: Optional path to save the figure
+
+# Returns
+- `(fig, data)` tuple
+"""
+function plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
+                       J1=1.0, row=3, nqubits=3, p=3,
+                       conv_step=100, samples=1000000,
+                       max_separation::Int=20,
+                       dmrg_file=nothing,
+                       save_path=nothing)
+
+    q0 = (Float64(π), Float64(π))   # Néel
+    q1 = (Float64(π), 0.0)          # Stripe
+
+    J2_found = Float64[]
+    M2_neel = Float64[]
+    M2_stripe = Float64[]
+
+    println("=== M²(q) vs J2 ===")
+    println("q0 = (π,π) [Néel],  q1 = (π,0) [Stripe]")
+    println("row=$row, nqubits=$nqubits, p=$p, max_sep=$max_separation")
+
+    for val in J2_values
+        # Find file (same pattern as plot_energy_error_vs_g)
+        candidates = [
+            joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json"),
+            joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
+            joinpath(data_dir, "circuit_heisenberg_j1j2_J=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
+        ]
+        filename = ""
+        for c in candidates
+            if isfile(c)
+                filename = c
+                break
+            end
+        end
+        if isempty(filename)
+            @warn "No file found for J2=$val, tried $(length(candidates)) patterns, skipping"
+            continue
+        end
+
+        println("\nJ2=$val  →  $(basename(filename))")
+
+        resample_result = resample_circuit(filename; conv_step=conv_step,
+                                           samples=samples, measure_y=true)
+        if isnothing(resample_result)
+            @warn "Resampling failed for J2=$val, skipping"
+            continue
+        end
+        _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
+        Z_vec = Z_samples[conv_step+1:end]
+        X_vec = X_samples[conv_step+1:end]
+        Y_vec = Y_samples[conv_step+1:end]
+
+        m2_neel   = magnetic_order_squared(X_vec, Z_vec, Y_vec, row, q0;
+                                           max_separation=max_separation)
+        m2_stripe = magnetic_order_squared(X_vec, Z_vec, Y_vec, row, q1;
+                                           max_separation=max_separation)
+
+        push!(J2_found, val)
+        push!(M2_neel, m2_neel)
+        push!(M2_stripe, m2_stripe)
+
+        println("  M²(π,π) = $(round(m2_neel, digits=6)),  M²(π,0) = $(round(m2_stripe, digits=6))")
+    end
+
+    if isempty(J2_found)
+        error("No data found for any J2 value")
+    end
+
+    # --- Plot ---
+    fig = Figure(size=(800, 500))
+    ax = Axis(fig[1, 1],
+              xlabel="J₂ / J₁",
+              ylabel="M²(q)",
+              title="Magnetic Order: row=$row, nqubits=$nqubits, p=$p")
+
+    scatterlines!(ax, J2_found, M2_neel,
+                  label="M²(π,π) Néel", color=:blue, marker=:circle, markersize=10, linewidth=2)
+    scatterlines!(ax, J2_found, M2_stripe,
+                  label="M²(π,0) Stripe", color=:red, marker=:diamond, markersize=10, linewidth=2)
+
+    # Overlay DMRG reference if provided
+    if dmrg_file !== nothing && isfile(dmrg_file)
+        dmrg_data = JSON3.read(read(dmrg_file, String))
+        if haskey(dmrg_data, :J2_values) && haskey(dmrg_data, :M2_neel)
+            dmrg_J2 = Float64.(dmrg_data[:J2_values])
+            dmrg_neel = Float64.(dmrg_data[:M2_neel])
+            scatterlines!(ax, dmrg_J2, dmrg_neel,
+                          label="DMRG M²(π,π)", color=:blue, linestyle=:dash,
+                          marker=:utriangle, markersize=8, linewidth=1.5)
+        end
+        if haskey(dmrg_data, :J2_values) && haskey(dmrg_data, :M2_stripe)
+            dmrg_J2 = Float64.(dmrg_data[:J2_values])
+            dmrg_stripe = Float64.(dmrg_data[:M2_stripe])
+            scatterlines!(ax, dmrg_J2, dmrg_stripe,
+                          label="DMRG M²(π,0)", color=:red, linestyle=:dash,
+                          marker=:utriangle, markersize=8, linewidth=1.5)
+        end
+    elseif dmrg_file !== nothing
+        @warn "DMRG file not found: $dmrg_file"
+    end
+
+    axislegend(ax, position=:rt)
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        println("\nFigure saved to: $save_path")
+    end
+
+    data = (
+        J2_values = J2_found,
+        M2_neel = M2_neel,
+        M2_stripe = M2_stripe,
+        row = row, nqubits = nqubits, p = p
+    )
+
+    return fig, data
 end
 

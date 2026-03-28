@@ -3,6 +3,7 @@ using ITensors
 using ITensorMPS  # triggers DMRGReferenceExt
 using JSON3
 using CairoMakie
+using Statistics
 
 # Core DMRG functions (dmrg_ground_state_2d, build_hamiltonian, etc.)
 # are now provided by IsoPEPS via the DMRGReferenceExt extension.
@@ -108,6 +109,23 @@ function run_dmrg_scan(; model::String="tfim", Lx::Int=4, Ly::Int=4,
     println("=" ^ 60)
 
     return results
+end
+
+"""
+    compute_bulk_energy_density(Ly, Lx1, E1, Lx2, E2)
+
+Extract bulk energy density per site from two DMRG runs on open cylinders
+with the same width `Ly` but different lengths `Lx1` and `Lx2`.
+
+    E(Lx) = e_bulk * Ly * Lx + E_left + E_right
+
+Boundary terms cancel:
+
+    e_bulk = (E2 - E1) / (Ly * (Lx2 - Lx1))
+"""
+function compute_bulk_energy_density(Ly::Int, Lx1::Int, E1::Float64, Lx2::Int, E2::Float64)
+    Lx1 != Lx2 || error("Lx1 and Lx2 must differ")
+    return (E2 - E1) / (Ly * (Lx2 - Lx1))
 end
 
 """
@@ -233,35 +251,26 @@ end
 
 
 # ==================== Example usage ====================
+Ly = 4
+D = 16
 model_choice = "heisenberg_j1j2"
+Lx1 = 100
+Lx2 =  200
 
-Lx = 100; Ly = 4; D = 2
+if model_choice == "heisenberg_j1j2"
+    J2 = 0.5
 
-if model_choice == "tfim"
-    results = run_dmrg_scan(;
-        model = "tfim",
-        Lx = Lx, Ly = Ly,
-        scan_param = :g,
-        scan_values = 0.0:0.25:4.0,
-        J = 1.0,
-        maxdim = D, cutoff = 1e-10, nsweeps = 10,
-        output_file = joinpath(@__DIR__, "results", "dmrg_tfim_$(Lx)x$(Ly)_D=$(D).json")
-    )
-    fig = plot_dmrg_results(joinpath(@__DIR__, "results", "dmrg_tfim_$(Lx)x$(Ly)_D=$(D).json");
-        save_path=joinpath(@__DIR__, "results", "figures", "dmrg_tfim_$(Lx)x$(Ly)_D=$(D).pdf"))
-    display(fig)
+    result1 = dmrg_ground_state_2d(Lx1, Ly;
+        model="heisenberg_j1j2", J1=1.0, J2=J2,
+        maxdim=D, cutoff=1e-20, nsweeps=10)
 
-elseif model_choice == "heisenberg_j1j2"
-    results = run_dmrg_scan(;
-        model = "heisenberg_j1j2",
-        Lx = Lx, Ly = Ly,
-        scan_param = :J2,
-        scan_values = 0.0:0.1:1.0,
-        J1 = 1.0,
-        maxdim = D, cutoff = 1e-10, nsweeps = 10,
-        output_file = joinpath(@__DIR__, "results", "dmrg_j1j2_$(Lx)x$(Ly)_D=$(D).json")
-    )
-    fig = plot_dmrg_results(joinpath(@__DIR__, "results", "dmrg_j1j2_$(Lx)x$(Ly)_D=$(D).json");
-        save_path=joinpath(@__DIR__, "results", "figures", "dmrg_j1j2_$(Lx)x$(Ly)_D=$(D).pdf"))
-    display(fig)
+    result2 = dmrg_ground_state_2d(Lx2, Ly;
+        model="heisenberg_j1j2", J1=1.0, J2=J2,
+        maxdim=D, cutoff=1e-10, nsweeps=10)
+
+    e_bulk = compute_bulk_energy_density(Ly, Lx1, result1.energy, Lx2, result2.energy)
+    println("Bulk energy density e_bulk = $e_bulk")
+    println("  E(Lx=$Lx1) = $(result1.energy), E/N = $(result1.energy_per_site)")
+    println("  E(Lx=$Lx2) = $(result2.energy), E/N = $(result2.energy_per_site)")
 end
+

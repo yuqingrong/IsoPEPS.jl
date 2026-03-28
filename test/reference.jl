@@ -3,6 +3,7 @@ using IsoPEPS
 using Yao, YaoBlocks
 using LinearAlgebra
 using MPSKit
+using MPSKitModels
 
 @testset "mpskit_ground_state" begin
     g = 4.0
@@ -34,4 +35,27 @@ end
     
     rho, gap, eigenval = compute_transfer_spectrum(A_matrix_list, row, nqubits)
     @test gap ≈ 1 / result.correlation_length atol = 1e-5
+end
+
+@testset "j1-j2 infinite cylinder bond counting" begin
+    row = 4
+    unit_cell_cols = 2
+    n_sites = row * unit_cell_cols
+    lattice = InfiniteCylinder(row, n_sites)
+
+    nn = collect(nearest_neighbours(lattice))
+    nnn = collect(next_nearest_neighbours(lattice))
+
+    @test length(nn) == 2 * n_sites
+    @test length(nnn) == 2 * n_sites
+
+    linear_bond(pair) = begin
+        i, j = pair
+        ii = Int(MPSKitModels.linearize_index(i))
+        jj = Int(MPSKitModels.linearize_index(j))
+        ii < jj ? (ii, jj) : (jj, ii)
+    end
+
+    @test length(unique(linear_bond.(nn))) == 2 * n_sites
+    @test length(unique(linear_bond.(nnn))) == 2 * n_sites
 end

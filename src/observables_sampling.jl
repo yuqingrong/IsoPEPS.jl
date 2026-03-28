@@ -79,6 +79,89 @@ function correlation_function(samples::Vector{Float64}, row::Int, separations;
 end
 
 # =============================================================================
+# Section 3b: Structure Factor (magnetic order parameter squared)
+# =============================================================================
+
+"""
+    structure_factor(samples::Vector{Float64}, row::Int, q::Tuple{Real,Real};
+                     max_separation::Int=20)
+
+Magnetic order parameter squared (static structure factor per site) on a
+cylinder geometry from measurement samples:
+
+    M²(q) = (1/N²) Σ_{i,j} ⟨Oᵢ Oⱼ⟩ e^{iq·(rᵢ - rⱼ)}
+
+where N = row × n_cols is the total number of sites.  On the cylinder with
+translation invariance along the column direction this reduces to:
+
+    M²(q) = (1/N) Σ_{p1,p2=1}^{row} [ cos(qy·Δp)·C(p1,p2,0)
+              + 2 Σ_{Δc=1}^{max} cos(qx·Δc + qy·Δp)·C(p1,p2,Δc) ]
+
+where Δp = p2 - p1, C(p1,p2,Δc) = ⟨O_{p1,c} O_{p2,c+Δc}⟩, and
+N = row × (2·max_separation + 1) is the effective number of sites summed over.
+
+# Arguments
+- `samples`: Measurement outcome vector (layout: column-major, row sites per column)
+- `row`: Number of rows (circumference of the cylinder)
+- `q`: Momentum vector (qx, qy)
+- `max_separation`: Maximum column separation for the sum (default: 20)
+
+# Returns
+- Real-valued M²(q) (the 1/N² normalised structure factor)
+"""
+function structure_factor(samples::Vector{Float64}, row::Int, q::Tuple{Real,Real};
+                          max_separation::Int=20)
+    qx, qy = Float64(q[1]), Float64(q[2])
+    ncols = _n_cols(samples, row)
+    max_sep = min(max_separation, ncols - 1)
+
+    S = 0.0
+
+    # Δc = 0 terms
+    for pos1 in 1:row, pos2 in 1:row
+        Δpos = pos2 - pos1
+        corr = expect(samples, row, pos1, pos2; col_separation=0)
+        S += cos(qy * Δpos) * corr
+    end
+
+    # Δc > 0 terms (both +Δc and -Δc combined via cosine)
+    for Δc in 1:max_sep
+        for pos1 in 1:row, pos2 in 1:row
+            Δpos = pos2 - pos1
+            corr = expect(samples, row, pos1, pos2; col_separation=Δc)
+            S += 2.0 * cos(qx * Δc + qy * Δpos) * corr
+        end
+    end
+
+    # N = row × (2·max_sep + 1) effective sites in the summation window
+    N = row * (2 * max_sep + 1)
+    return S / N
+end
+
+"""
+    magnetic_order_squared(X_samples, Z_samples, Y_samples, row, q; max_separation=20)
+
+Full-spin magnetic order parameter squared M²(q) = (1/4)[S_X(q) + S_Y(q) + S_Z(q)].
+
+Computes M²(q) = (1/N²) Σ_{i,j} ⟨Sᵢ·Sⱼ⟩ e^{iq·(rᵢ-rⱼ)} where Sᵅ = σᵅ/2
+are spin-1/2 operators. The factor 1/4 converts from Pauli (σ = ±1) to
+spin-1/2 (S = ±1/2) convention.
+
+Common choices:
+- q = (π, π): Néel antiferromagnetic order
+- q = (π, 0): Stripe antiferromagnetic order
+"""
+function magnetic_order_squared(X_samples::Vector{Float64},
+                                Z_samples::Vector{Float64},
+                                Y_samples::Vector{Float64},
+                                row::Int, q::Tuple{Real,Real};
+                                max_separation::Int=20)
+    return (structure_factor(X_samples, row, q; max_separation=max_separation) +
+            structure_factor(Y_samples, row, q; max_separation=max_separation) +
+            structure_factor(Z_samples, row, q; max_separation=max_separation)) / 4
+end
+
+# =============================================================================
 # Section 4: Energy (model-dispatched wrappers + existing implementations)
 # =============================================================================
 
@@ -145,7 +228,8 @@ end
 """
     compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, J2, row)
 
-Compute Heisenberg J1-J2 energy from X, Y, Z measurement samples.
+Compute Heisenberg J1-J2 energy from X, Y, Z measurement samples on a cylinder
+(periodic in y-direction).
 
     S_i · S_j = (X_i X_j + Y_i Y_j + Z_i Z_j) / 4
 
@@ -155,7 +239,7 @@ Compute Heisenberg J1-J2 energy from X, Y, Z measurement samples.
 - `Y_samples`: Vector of Y measurement outcomes
 - `J1`: Nearest-neighbor coupling
 - `J2`: Next-nearest-neighbor (diagonal) coupling
-- `row`: Number of rows
+- `row`: Number of rows (cylinder circumference)
 
 # Returns
 - Energy estimate per column
@@ -164,14 +248,19 @@ function compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, J2, row)
     all_samples = (Z_samples, X_samples, Y_samples)
 
     # Helper: compute vertical and horizontal correlations for one set of samples
+    # Vertical bonds are periodic (cylinder): includes wrap from row `row` to row 1
     function _correlations(S, row)
         N = length(S)
+        n_cols = div(N, row)
         if row == 1
             vert = 0.0
             horiz = mean(S[i] * S[i+1] for i in 1:N-1)
         else
+            # Open vertical bonds within each column: (pos, pos+1)
             vert_pairs = [S[i] * S[i+1] for i in 1:N-1 if i % row != 0]
-            vert = mean(vert_pairs)
+            # Periodic wrap bonds: (row, col) <-> (1, col)
+            wrap_pairs = [S[c*row] * S[(c-1)*row+1] for c in 1:n_cols]
+            vert = mean(vcat(vert_pairs, wrap_pairs))
             horiz = mean(S[i] * S[i+row] for i in 1:N-row)
         end
         return vert, horiz
@@ -188,16 +277,22 @@ function compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, J2, row)
 
     energy = J1 * (row == 1 ? SS_horiz : SS_vert + SS_horiz) / 4.0
 
-    # J2: diagonal NNN bonds
+    # J2: diagonal NNN bonds (periodic in y)
     if J2 != 0.0 && row > 1
         SS_diag = 0.0
         for S in all_samples
             N = length(S)
-            # Diagonal: (pos,col)->(pos+1,col+1)
-            diag1 = [S[i] * S[i+row+1] for i in 1:N-row-1 if i % row != 0]
-            # Anti-diagonal: (pos,col)->(pos-1,col+1)
-            diag2 = [S[i] * S[i+row-1] for i in 1:N-row+1 if (i-1) % row != 0]
-            SS_diag += mean(diag1) + mean(diag2)
+            n_cols = div(N, row)
+            # Open diagonal: (pos,col)->(pos+1,col+1), skip column boundaries
+            diag_up = [S[i] * S[i+row+1] for i in 1:N-row-1 if i % row != 0]
+            # Open anti-diagonal: (pos,col)->(pos-1,col+1), skip column boundaries
+            diag_down = [S[i] * S[i+row-1] for i in 1:N-row+1 if (i-1) % row != 0]
+            # Periodic wrap diagonals:
+            # (row, col) -> (1, col+1): index c*row -> c*row+1
+            wrap_up = [S[c*row] * S[c*row+1] for c in 1:n_cols-1]
+            # (1, col) -> (row, col+1): index (c-1)*row+1 -> (c+1)*row
+            wrap_down = [S[(c-1)*row+1] * S[(c+1)*row] for c in 1:n_cols-1]
+            SS_diag += mean(vcat(diag_up, wrap_up)) + mean(vcat(diag_down, wrap_down))
         end
         energy += J2 * SS_diag / 4.0
     end

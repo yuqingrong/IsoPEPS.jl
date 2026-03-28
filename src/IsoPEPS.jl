@@ -92,6 +92,7 @@ function optimize_manifold end
 # --- TensorKit + MPSKit + MPSKitModels extension ---
 function mpskit_ground_state end
 function mpskit_ground_state_1d end
+function mpskit_ground_state_j1j2 end
 function spectrum_MPSKit end
 
 # --- PEPSKit extension ---
@@ -101,7 +102,7 @@ function pepskit_ground_state end
 function transfer_matrix_ITensor end
 
 # --- ITensors + ITensorMPS DMRG extension ---
-function row_major_2d_to_1d end
+function column_major_2d_to_1d end
 function build_2d_tfim_hamiltonian end
 function build_2d_heisenberg_j1j2_hamiltonian end
 function build_hamiltonian end
@@ -144,10 +145,10 @@ export reshape_to_mps, spectrum_MPSKit, transfer_matrix_ITensor
 # Exact Observables (Transfer Matrix)
 export compute_X_expectation, compute_Z_expectation, compute_ZZ_expectation, compute_single_expectation
 export compute_exact_energy, compute_exact_heisenberg_energy, compute_exact_heisenberg_energy_2x2, intercolumn_correlation
-export correlation_function, expect
+export correlation_function, expect, structure_factor, magnetic_order_squared
 
 # Reference Implementations (loaded via extensions)
-export mpskit_ground_state, mpskit_ground_state_1d, pepskit_ground_state
+export mpskit_ground_state, mpskit_ground_state_1d, mpskit_ground_state_j1j2, pepskit_ground_state
 
 # DMRG Reference (loaded via ITensors + ITensorMPS extension)
 export dmrg_ground_state_2d, build_hamiltonian
@@ -163,5 +164,5 @@ export plot_acf, fit_acf, fit_acf_power, fit_acf_oscillatory
 export plot_training_history, plot_variance_vs_samples, plot_expectation_values
 export plot_corr_scale
 export plot_eigenvalue_spectrum, plot_correlation_function
-export plot_energy_error_vs_g,plot_correlation_vs_g
+export plot_energy_error_vs_g, plot_correlation_vs_g, plot_correlation_vs_J2, plot_M2_vs_J2
 end
