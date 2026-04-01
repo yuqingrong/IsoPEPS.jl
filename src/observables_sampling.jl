@@ -135,7 +135,7 @@ function structure_factor(samples::Vector{Float64}, row::Int, q::Tuple{Real,Real
 
     # N = row × (2·max_sep + 1) effective sites in the summation window
     N = row * (2 * max_sep + 1)
-    return S / N
+    return S 
 end
 
 """
@@ -158,7 +158,7 @@ function magnetic_order_squared(X_samples::Vector{Float64},
                                 max_separation::Int=20)
     return (structure_factor(X_samples, row, q; max_separation=max_separation) +
             structure_factor(Y_samples, row, q; max_separation=max_separation) +
-            structure_factor(Z_samples, row, q; max_separation=max_separation)) / 4
+            structure_factor(Z_samples, row, q; max_separation=max_separation)) / 4/N
 end
 
 # =============================================================================
@@ -187,18 +187,19 @@ Compute TFIM energy from measurement samples.
 - Energy estimate: E = -g⟨X⟩ - J⟨ZZ⟩
 
 # Description
-Computes the transverse field Ising model energy:
+Computes the transverse field Ising model energy on a cylinder
+(periodic in y-direction):
 H = -g ∑ᵢ Xᵢ - J ∑⟨ij⟩ ZᵢZⱼ
 
 Sample layout for row=4:
   Z[1]  Z[5]  Z[9]   ...   ← row 1
   Z[2]  Z[6]  Z[10]  ...   ← row 2
   Z[3]  Z[7]  Z[11]  ...   ← row 3
-  Z[4]  Z[8]  Z[12]  ...   ← row 4
+  Z[4]  Z[8]  Z[12]  ...   ← row 4 (wraps to row 1)
    ↑     ↑     ↑
   col1  col2  col3
 
-- Vertical bonds: Z[i]*Z[i+1] only when i % row != 0 (not at last row of column)
+- Vertical bonds: Z[i]*Z[i+1] within column + periodic wrap Z[row,col]↔Z[1,col]
 - Horizontal bonds: Z[i]*Z[i+row] (same row, adjacent columns)
 """
 function compute_tfim_energy(X_samples, Z_samples, g, J, row)
@@ -210,15 +211,16 @@ function compute_tfim_energy(X_samples, Z_samples, g, J, row)
         ZZ_horiz = mean(Z_samples[i] * Z_samples[i+1] for i in 1:N-1)
         ZZ_mean = ZZ_horiz
     else
-        # Vertical bonds: Z[i]*Z[i+1] only when NOT at the last row of a column
-        # Skip when i % row == 0 (e.g., Z[4]*Z[5] would be diagonal, not vertical)
+        n_cols = div(N, row)
+        # Open vertical bonds within each column: (pos, pos+1)
         ZZ_vert_pairs = [Z_samples[i] * Z_samples[i+1]
                          for i in 1:N-1 if i % row != 0]
-        ZZ_vert = mean(ZZ_vert_pairs)
+        # Periodic wrap bonds: (row, col) <-> (1, col)
+        wrap_pairs = [Z_samples[c*row] * Z_samples[(c-1)*row+1] for c in 1:n_cols]
+        ZZ_vert = mean(vcat(ZZ_vert_pairs, wrap_pairs))
 
         # Horizontal bonds: Z[i]*Z[i+row] (same row, adjacent columns)
         ZZ_horiz = mean(Z_samples[i] * Z_samples[i+row] for i in 1:N-row)
-        # Both contribute to energy
         ZZ_mean = ZZ_vert + ZZ_horiz
     end
 
@@ -297,6 +299,400 @@ function compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, J2, row)
         energy += J2 * SS_diag / 4.0
     end
     return energy
+end
+
+# =============================================================================
+# Section 4b: Spin-Spin, Dimer-Dimer, Plaquette-Plaquette Correlations
+# =============================================================================
+
+"""
+    spin_spin_correlation(X_samples, Z_samples, Y_samples, row, separations;
+                          pos1::Int=1, pos2::Int=1, connected::Bool=false)
+
+Spin-spin correlation ⟨S_{pos1,c} · S_{pos2,c+r}⟩ = (⟨XX⟩ + ⟨YY⟩ + ⟨ZZ⟩)/4
+from measurement samples on a cylinder.
+
+# Arguments
+- `X_samples`, `Z_samples`, `Y_samples`: Measurement outcome vectors
+- `row`: Number of rows (cylinder circumference)
+- `separations`: Column separations (integer or collection)
+- `pos1`, `pos2`: Row positions of the two spins
+- `connected`: If true, subtract ⟨S⟩·⟨S⟩ (always zero by symmetry for Heisenberg)
+
+# Returns
+- `Dict{Int, Float64}` mapping separation → ⟨S·S⟩
+"""
+function spin_spin_correlation(X_samples::Vector{Float64},
+                               Z_samples::Vector{Float64},
+                               Y_samples::Vector{Float64},
+                               row::Int, separations;
+                               pos1::Int=1, pos2::Int=1,
+                               connected::Bool=false)
+    seps = separations isa Integer ? [separations] : collect(separations)
+    correlations = Dict{Int, Float64}()
+    for sep in seps
+        SS = 0.0
+        for S in (X_samples, Y_samples, Z_samples)
+            SS += expect(S, row, pos1, pos2; col_separation=sep)
+        end
+        correlations[sep] = SS / 4.0
+    end
+    if connected
+        # ⟨S⟩ = 0 by symmetry, but compute explicitly for generality
+        μ = 0.0
+        for S in (X_samples, Y_samples, Z_samples)
+            μ += mean(S[pos1:row:end]) * mean(S[pos2:row:end])
+        end
+        μ /= 4.0
+        for k in keys(correlations)
+            correlations[k] -= μ
+        end
+    end
+    return correlations
+end
+
+"""
+    dimer_dimer_correlation(X_samples, Z_samples, Y_samples, row, separations;
+                            dimer_orientation::Symbol=:vertical, pos::Int=1,
+                            connected::Bool=true)
+
+Dimer-dimer correlation from measurement samples on a cylinder.
+
+The dimer operator is the bond energy D_ij = S_i · S_j = (X_iX_j + Y_iY_j + Z_iZ_j)/4.
+
+For `:vertical` dimers: D connects (pos, col) and (pos', col) where pos' = pos%row+1 (periodic).
+For `:horizontal` dimers: D connects (pos, col) and (pos, col+1).
+
+Returns connected correlator ⟨D(0)D(r)⟩ - ⟨D⟩² when `connected=true`.
+
+# Arguments
+- `X_samples`, `Z_samples`, `Y_samples`: Measurement outcome vectors
+- `row`: Number of rows (cylinder circumference)
+- `separations`: Column separations (integer or collection)
+- `dimer_orientation`: `:vertical` or `:horizontal`
+- `pos`: Row position of the reference dimer
+- `connected`: Subtract ⟨D⟩² (default: true)
+
+# Returns
+- `Dict{Int, Float64}` mapping separation → dimer-dimer correlation
+"""
+function dimer_dimer_correlation(X_samples::Vector{Float64},
+                                 Z_samples::Vector{Float64},
+                                 Y_samples::Vector{Float64},
+                                 row::Int, separations;
+                                 dimer_orientation::Symbol=:vertical,
+                                 pos::Int=1,
+                                 connected::Bool=true)
+    seps = separations isa Integer ? [separations] : collect(separations)
+    all_samples = (X_samples, Y_samples, Z_samples)
+    ncols = _n_cols(Z_samples, row)
+
+    # Build per-column dimer values: D_c = Σ_α S_α[site1,c]*S_α[site2,c] / 4
+    if dimer_orientation == :vertical
+        pos2 = pos % row + 1  # periodic wrap
+        dimer_vals = zeros(ncols)
+        for S in all_samples
+            for c in 1:ncols
+                i1 = row * (c - 1) + pos
+                i2 = row * (c - 1) + pos2
+                dimer_vals[c] += S[i1] * S[i2] / 4.0
+            end
+        end
+    elseif dimer_orientation == :horizontal
+        # Horizontal dimer spans (pos, c) and (pos, c+1), so we have ncols-1 dimers
+        dimer_vals = zeros(ncols - 1)
+        for S in all_samples
+            for c in 1:(ncols - 1)
+                i1 = row * (c - 1) + pos
+                i2 = row * c + pos  # same row, next column
+                dimer_vals[c] += S[i1] * S[i2] / 4.0
+            end
+        end
+    else
+        error("dimer_orientation must be :vertical or :horizontal, got $dimer_orientation")
+    end
+
+    n_dimers = length(dimer_vals)
+    correlations = Dict{Int, Float64}()
+    for sep in seps
+        total = 0.0
+        count = 0
+        for c in 1:(n_dimers - sep)
+            total += dimer_vals[c] * dimer_vals[c + sep]
+            count += 1
+        end
+        correlations[sep] = total / count
+    end
+
+    if connected
+        μ_D = mean(dimer_vals)
+        for k in keys(correlations)
+            correlations[k] -= μ_D^2
+        end
+    end
+    return correlations
+end
+
+"""
+    plaquette_plaquette_correlation(X_samples, Z_samples, Y_samples, row, separations;
+                                    pos::Int=1, connected::Bool=true)
+
+Plaquette-plaquette correlation from measurement samples on a cylinder.
+
+The plaquette operator on a 2×2 square with corners (pos,c), (pos',c), (pos',c+1), (pos,c+1)
+where pos' = pos%row+1 is:
+
+    Q_□ = S_{pos,c}·S_{pos',c} + S_{pos',c}·S_{pos',c+1}
+        + S_{pos',c+1}·S_{pos,c+1} + S_{pos,c+1}·S_{pos,c}
+
+This is a sum of 4 bond operators (left, bottom, right, top of the plaquette).
+Each plaquette is centered between columns c and c+1.
+
+# Arguments
+- `X_samples`, `Z_samples`, `Y_samples`: Measurement outcome vectors
+- `row`: Number of rows (cylinder circumference)
+- `separations`: Column separations between plaquette centers (integer or collection)
+- `pos`: Row position of the top-left corner
+- `connected`: Subtract ⟨Q⟩² (default: true)
+
+# Returns
+- `Dict{Int, Float64}` mapping separation → plaquette-plaquette correlation
+"""
+function plaquette_plaquette_correlation(X_samples::Vector{Float64},
+                                         Z_samples::Vector{Float64},
+                                         Y_samples::Vector{Float64},
+                                         row::Int, separations;
+                                         pos::Int=1,
+                                         connected::Bool=true)
+    seps = separations isa Integer ? [separations] : collect(separations)
+    all_samples = (X_samples, Y_samples, Z_samples)
+    ncols = _n_cols(Z_samples, row)
+    pos2 = pos % row + 1  # periodic wrap in y
+
+    # Four corners of plaquette between columns c and c+1:
+    # TL = (pos, c), BL = (pos', c), BR = (pos', c+1), TR = (pos, c+1)
+    # Q = S_TL·S_BL + S_BL·S_BR + S_BR·S_TR + S_TR·S_TL
+    # Each bond = Σ_α S_α[i]*S_α[j]/4
+
+    n_plaq = ncols - 1  # plaquettes between consecutive columns
+    plaq_vals = zeros(n_plaq)
+    for S in all_samples
+        for c in 1:n_plaq
+            tl = row * (c - 1) + pos
+            bl = row * (c - 1) + pos2
+            br = row * c + pos2
+            tr = row * c + pos
+            # Four bonds of the plaquette
+            plaq_vals[c] += (S[tl]*S[bl] + S[bl]*S[br] + S[br]*S[tr] + S[tr]*S[tl]) / 4.0
+        end
+    end
+
+    correlations = Dict{Int, Float64}()
+    for sep in seps
+        total = 0.0
+        count = 0
+        for c in 1:(n_plaq - sep)
+            total += plaq_vals[c] * plaq_vals[c + sep]
+            count += 1
+        end
+        correlations[sep] = total / count
+    end
+
+    if connected
+        μ_Q = mean(plaq_vals)
+        for k in keys(correlations)
+            correlations[k] -= μ_Q^2
+        end
+    end
+    return correlations
+end
+
+# =============================================================================
+# Section 4c: Structure Factors (Fourier transforms of correlations)
+# =============================================================================
+
+"""
+    spin_spin_structure_factor(X_samples, Z_samples, Y_samples, row, q;
+                               max_separation::Int=20)
+
+Spin-spin static structure factor on a cylinder:
+
+    S_SS(q) = (1/N) Σ_{i,j} ⟨S_i · S_j⟩ e^{iq·(r_i - r_j)}
+
+where S_i · S_j = (X_iX_j + Y_iY_j + Z_iZ_j)/4. This equals `magnetic_order_squared`
+and is provided as an alias with a consistent naming convention.
+
+Common choices:
+- q = (π, π): Néel order parameter
+- q = (π, 0) or (0, π): Stripe order parameter
+"""
+function spin_spin_structure_factor(X_samples::Vector{Float64},
+                                    Z_samples::Vector{Float64},
+                                    Y_samples::Vector{Float64},
+                                    row::Int, q::Tuple{Real,Real};
+                                    max_separation::Int=20)
+    return magnetic_order_squared(X_samples, Z_samples, Y_samples, row, q;
+                                  max_separation=max_separation)
+end
+
+"""
+    dimer_structure_factor(X_samples, Z_samples, Y_samples, row, q;
+                           dimer_orientation::Symbol=:vertical,
+                           max_separation::Int=20)
+
+Dimer static structure factor on a cylinder:
+
+    S_D(q) = (1/N_d) Σ_{b,b'} [⟨D_b D_{b'}⟩ - ⟨D_b⟩⟨D_{b'}⟩] e^{iq·(r_b - r_{b'})}
+
+where D_b = S_i · S_j is the dimer (bond) operator, and the sum runs over all
+pairs of dimers with the same orientation. The positions r_b are the bond centers.
+
+For vertical dimers, r_b = (c, pos + 0.5) so Δr = (Δc, Δpos).
+For horizontal dimers, r_b = (c + 0.5, pos) so Δr = (Δc, Δpos).
+
+# Arguments
+- `X_samples`, `Z_samples`, `Y_samples`: Measurement outcome vectors
+- `row`: Cylinder circumference
+- `q`: Momentum vector (qx, qy)
+- `dimer_orientation`: `:vertical` or `:horizontal`
+- `max_separation`: Maximum column separation
+
+# Returns
+- Real-valued structure factor S_D(q)
+"""
+function dimer_structure_factor(X_samples::Vector{Float64},
+                                Z_samples::Vector{Float64},
+                                Y_samples::Vector{Float64},
+                                row::Int, q::Tuple{Real,Real};
+                                dimer_orientation::Symbol=:vertical,
+                                max_separation::Int=20)
+    qx, qy = Float64(q[1]), Float64(q[2])
+    all_samples = (X_samples, Y_samples, Z_samples)
+    ncols = _n_cols(Z_samples, row)
+
+    # Build dimer values for ALL row positions: dimer_vals[pos, col]
+    if dimer_orientation == :vertical
+        # Vertical dimer at (pos, col) connects pos and pos%row+1
+        dimer_vals = zeros(row, ncols)
+        for S in all_samples
+            for c in 1:ncols, pos in 1:row
+                pos2 = pos % row + 1
+                i1 = row * (c - 1) + pos
+                i2 = row * (c - 1) + pos2
+                dimer_vals[pos, c] += S[i1] * S[i2] / 4.0
+            end
+        end
+        n_pos = row
+        n_cols_d = ncols
+    elseif dimer_orientation == :horizontal
+        # Horizontal dimer at (pos, col) connects (pos,col) and (pos,col+1)
+        dimer_vals = zeros(row, ncols - 1)
+        for S in all_samples
+            for c in 1:(ncols - 1), pos in 1:row
+                i1 = row * (c - 1) + pos
+                i2 = row * c + pos
+                dimer_vals[pos, c] += S[i1] * S[i2] / 4.0
+            end
+        end
+        n_pos = row
+        n_cols_d = ncols - 1
+    else
+        error("dimer_orientation must be :vertical or :horizontal, got $dimer_orientation")
+    end
+
+    max_sep = min(max_separation, n_cols_d - 1)
+
+    # Fourier transform: S(q) = (1/N_d) Σ_{pos1,pos2,Δc} C(pos1,pos2,Δc) cos(qx Δc + qy Δpos)
+    # where C = ⟨D_{pos1,c} D_{pos2,c+Δc}⟩ - ⟨D_{pos1}⟩⟨D_{pos2}⟩
+    μ = vec(mean(dimer_vals, dims=2))  # mean dimer value per row position
+
+    SD = 0.0
+    # Δc = 0 terms
+    for p1 in 1:n_pos, p2 in 1:n_pos
+        Δp = p2 - p1
+        corr = mean(dimer_vals[p1, c] * dimer_vals[p2, c] for c in 1:n_cols_d)
+        SD += cos(qy * Δp) * (corr - μ[p1] * μ[p2])
+    end
+
+    # Δc > 0 terms
+    for Δc in 1:max_sep
+        for p1 in 1:n_pos, p2 in 1:n_pos
+            Δp = p2 - p1
+            corr = mean(dimer_vals[p1, c] * dimer_vals[p2, c + Δc] for c in 1:(n_cols_d - Δc))
+            SD += 2.0 * cos(qx * Δc + qy * Δp) * (corr - μ[p1] * μ[p2])
+        end
+    end
+
+    N_d = n_pos * (2 * max_sep + 1)
+    return SD / N_d
+end
+
+"""
+    plaquette_structure_factor(X_samples, Z_samples, Y_samples, row, q;
+                               max_separation::Int=20)
+
+Plaquette static structure factor on a cylinder:
+
+    S_P(q) = (1/N_p) Σ_{□,□'} [⟨Q_□ Q_{□'}⟩ - ⟨Q_□⟩⟨Q_{□'}⟩] e^{iq·(r_□ - r_{□'})}
+
+where Q_□ = S_1·S_2 + S_2·S_3 + S_3·S_4 + S_4·S_1 is the plaquette operator
+on a 2×2 square, and positions are indexed by (pos, col) of the top-left corner.
+
+# Arguments
+- `X_samples`, `Z_samples`, `Y_samples`: Measurement outcome vectors
+- `row`: Cylinder circumference
+- `q`: Momentum vector (qx, qy)
+- `max_separation`: Maximum column separation
+
+# Returns
+- Real-valued structure factor S_P(q)
+"""
+function plaquette_structure_factor(X_samples::Vector{Float64},
+                                    Z_samples::Vector{Float64},
+                                    Y_samples::Vector{Float64},
+                                    row::Int, q::Tuple{Real,Real};
+                                    max_separation::Int=20)
+    qx, qy = Float64(q[1]), Float64(q[2])
+    all_samples = (X_samples, Y_samples, Z_samples)
+    ncols = _n_cols(Z_samples, row)
+    n_plaq_cols = ncols - 1  # plaquettes between consecutive columns
+
+    # Build plaquette values for ALL row positions: plaq_vals[pos, col]
+    # Plaquette at (pos, c) has corners: (pos,c), (pos2,c), (pos2,c+1), (pos,c+1)
+    plaq_vals = zeros(row, n_plaq_cols)
+    for S in all_samples
+        for c in 1:n_plaq_cols, pos in 1:row
+            pos2 = pos % row + 1
+            tl = row * (c - 1) + pos
+            bl = row * (c - 1) + pos2
+            br = row * c + pos2
+            tr = row * c + pos
+            plaq_vals[pos, c] += (S[tl]*S[bl] + S[bl]*S[br] + S[br]*S[tr] + S[tr]*S[tl]) / 4.0
+        end
+    end
+
+    max_sep = min(max_separation, n_plaq_cols - 1)
+    μ = vec(mean(plaq_vals, dims=2))  # mean per row position
+
+    SP = 0.0
+    # Δc = 0 terms
+    for p1 in 1:row, p2 in 1:row
+        Δp = p2 - p1
+        corr = mean(plaq_vals[p1, c] * plaq_vals[p2, c] for c in 1:n_plaq_cols)
+        SP += cos(qy * Δp) * (corr - μ[p1] * μ[p2])
+    end
+
+    # Δc > 0 terms
+    for Δc in 1:max_sep
+        for p1 in 1:row, p2 in 1:row
+            Δp = p2 - p1
+            corr = mean(plaq_vals[p1, c] * plaq_vals[p2, c + Δc] for c in 1:(n_plaq_cols - Δc))
+            SP += 2.0 * cos(qx * Δc + qy * Δp) * (corr - μ[p1] * μ[p2])
+        end
+    end
+
+    N_p = row * (2 * max_sep + 1)
+    return SP / N_p
 end
 
 # =============================================================================

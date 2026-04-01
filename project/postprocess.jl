@@ -952,11 +952,22 @@ end
 # Analyze a single result
 J=1.0;g = 1.0; row=4 ; nqubits=3; p=3; virtual_qubits=1;D=2
 data_dir = joinpath(@__DIR__, "results")
-datafile = joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J)_J2=0.0_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json")
+datafile = joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J)_J2=1.0_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile)
+
+fig, data = plot_M2_vs_J2(                                                                                                                    
+      data_dir,           # directory with saved JSON result files
+      [0.0, 0.1, 0.2, 0.3, 0.5];   # J2 values to scan                                                                                          
+      J1=1.0, row=4, nqubits=3, p=3,                    
+      samples=1000000,
+      max_separation=10,
+      save_path="project/results/figures/M2_vs_J2.pdf"  # optional
+  )
+display(fig)
+
 # Reconstruct gates and analyze
-plot_energy_error_vs_g("project/results", [0.0, 0.1,0.2, 0.3, 0.4, 0.5, 0.6,0.7, 0.8,0.9, 1.0];                            
+plot_energy_error_vs_g("project/results", [0.0, 0.1,0.2, 0.3, 0.4, 0.5];                            
       model="heisenberg_j1j2",                                              
       J1=1.0, row=4, p=3, nqubits=3,                        
       dmrg_file="project/results/dmrg_j1j2_100x4_D=2.json",save_path="project/results/figures/heisenberg_energy_vs_j2.pdf")

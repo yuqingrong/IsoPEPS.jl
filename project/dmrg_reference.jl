@@ -252,25 +252,146 @@ end
 
 # ==================== Example usage ====================
 Ly = 4
-D = 4
+D = 16
 model_choice = "heisenberg_j1j2"
-Lx1 = 100
-Lx2 =  200
+Lx1 = 200
+Lx2 = 300
+J2_values = collect(0.0:0.1:1.0)
 
 if model_choice == "heisenberg_j1j2"
-    J2 = 0.5
+    scan_results = Dict(
+        "parameters" => Dict(
+            "model"   => model_choice,
+            "Ly"      => Ly,
+            "Lx1"     => Lx1,
+            "Lx2"     => Lx2,
+            "D"       => D,
+            "J1"      => 1.0,
+            "cutoff1" => 1e-10,
+            "cutoff2" => 1e-10,
+            "nsweeps" => 20
+        ),
+        "J2_values"            => J2_values,
+        "Lx1_energies"         => Float64[],
+        "Lx1_energies_per_site"=> Float64[],
+        "Lx2_energies"         => Float64[],
+        "Lx2_energies_per_site"=> Float64[],
+        "e_bulk_values"        => Float64[],
+        "M2_neel_Lx1"         => Float64[],
+        "M2_neel_Lx2"         => Float64[],
+        "M2_stripe_Lx1"       => Float64[],
+        "M2_stripe_Lx2"       => Float64[],
+        "M2_0pi_Lx1"          => Float64[],
+        "M2_0pi_Lx2"          => Float64[]
+    )
+    output_file = "dmrg_bulk_$(model_choice)_Ly$(Ly)_D$(D)_J2scan.json"
 
-    result1 = dmrg_ground_state_2d(Lx1, Ly;
-        model="heisenberg_j1j2", J1=1.0, J2=J2,
-        maxdim=D, cutoff=1e-20, nsweeps=10)
+    println("=" ^ 60)
+    println("J2 scan: $(J2_values)")
+    println("=" ^ 60)
 
-    result2 = dmrg_ground_state_2d(Lx2, Ly;
-        model="heisenberg_j1j2", J1=1.0, J2=J2,
-        maxdim=D, cutoff=1e-10, nsweeps=10)
+    prev_psi1 = nothing  # warm-start from previous J2
+    prev_psi2 = nothing
 
-    e_bulk = compute_bulk_energy_density(Ly, Lx1, result1.energy, Lx2, result2.energy)
-    println("Bulk energy density e_bulk = $e_bulk")
-    println("  E(Lx=$Lx1) = $(result1.energy), E/N = $(result1.energy_per_site)")
-    println("  E(Lx=$Lx2) = $(result2.energy), E/N = $(result2.energy_per_site)")
+    for (i, J2) in enumerate(J2_values)
+        println("\n[$i/$(length(J2_values))] J2 = $J2")
+
+        result1 = dmrg_ground_state_2d(Lx1, Ly;
+            model="heisenberg_j1j2", J1=1.0, J2=J2,
+            maxdim=D, cutoff=1e-10, nsweeps=20,
+            noise=[1e-1, 1e-2, 1e-3, 1e-4, fill(0.0, 16)...],
+            psi0=prev_psi1)
+
+        result2 = dmrg_ground_state_2d(Lx2, Ly;
+            model="heisenberg_j1j2", J1=1.0, J2=J2,
+            maxdim=D, cutoff=1e-10, nsweeps=20,
+            noise=[1e-1, 1e-2, 1e-3, 1e-4, fill(0.0, 16)...],
+            psi0=prev_psi2)
+
+        prev_psi1 = result1.psi
+        prev_psi2 = result2.psi
+
+        e_bulk = compute_bulk_energy_density(Ly, Lx1, result1.energy, Lx2, result2.energy)
+
+        # Compute M² order parameters
+        M2_neel1 = compute_M2_dmrg(result1, (pi, pi))
+        M2_neel2 = compute_M2_dmrg(result2, (pi, pi))
+        M2_stripe1 = compute_M2_dmrg(result1, (pi, 0.0))
+        M2_stripe2 = compute_M2_dmrg(result2, (pi, 0.0))
+        M2_0pi1 = compute_M2_dmrg(result1, (0.0, pi))
+        M2_0pi2 = compute_M2_dmrg(result2, (0.0, pi))
+
+        println("  e_bulk = $e_bulk")
+        println("  E(Lx=$Lx1) = $(result1.energy), E/N = $(result1.energy_per_site)")
+        println("  E(Lx=$Lx2) = $(result2.energy), E/N = $(result2.energy_per_site)")
+        println("  M²(π,π) Lx1=$(M2_neel1), Lx2=$(M2_neel2)")
+        println("  M²(π,0) Lx1=$(M2_stripe1), Lx2=$(M2_stripe2)")
+        println("  M²(0,π) Lx1=$(M2_0pi1), Lx2=$(M2_0pi2)")
+
+        push!(scan_results["Lx1_energies"],          result1.energy)
+        push!(scan_results["Lx1_energies_per_site"], result1.energy_per_site)
+        push!(scan_results["Lx2_energies"],          result2.energy)
+        push!(scan_results["Lx2_energies_per_site"], result2.energy_per_site)
+        push!(scan_results["e_bulk_values"],         e_bulk)
+        push!(scan_results["M2_neel_Lx1"],          M2_neel1)
+        push!(scan_results["M2_neel_Lx2"],          M2_neel2)
+        push!(scan_results["M2_stripe_Lx1"],        M2_stripe1)
+        push!(scan_results["M2_stripe_Lx2"],        M2_stripe2)
+        push!(scan_results["M2_0pi_Lx1"],           M2_0pi1)
+        push!(scan_results["M2_0pi_Lx2"],           M2_0pi2)
+
+        # Save DMRG states for later analysis
+        state_dir = "states"
+        mkpath(state_dir)
+        save_dmrg_state(result1, joinpath(state_dir, "dmrg_$(model_choice)_Ly$(Ly)_Lx$(Lx1)_D$(D)_J2$(J2).jls"); J1=1.0, J2=J2)
+        save_dmrg_state(result2, joinpath(state_dir, "dmrg_$(model_choice)_Ly$(Ly)_Lx$(Lx2)_D$(D)_J2$(J2).jls"); J1=1.0, J2=J2)
+
+        open(output_file, "w") do io
+            JSON3.pretty(io, scan_results)
+        end
+        println("  Saved to $output_file")
+    end
+
+    println("\n" * "=" ^ 60)
+    println("Scan complete! Results saved to $output_file")
+    println("=" ^ 60)
 end
+# ==================== Plot M² vs J2 ====================
+data = JSON3.read(read(output_file, String))
+J2_vals = Float64.(data.J2_values)
+
+fig = Figure(size=(900, 500))
+ax = Axis(fig[1, 1],
+            xlabel="J₂ / J₁",
+            ylabel="M²(q)",
+            title="DMRG M²(q) vs J₂  (Ly=$Ly, D=$D)")
+
+# Use longer system (Lx2) for better bulk approximation
+    scatterlines!(ax, J2_vals, Float64.(data.M2_neel_Lx2),
+                  label="M²(π,π) Néel  Lx=$Lx2", color=:blue,
+                  marker=:circle, markersize=10, linewidth=2)
+    scatterlines!(ax, J2_vals, Float64.(data.M2_stripe_Lx2),
+                  label="M²(π,0) Stripe  Lx=$Lx2", color=:red,
+                  marker=:diamond, markersize=10, linewidth=2)
+    scatterlines!(ax, J2_vals, Float64.(data.M2_0pi_Lx2),
+                  label="M²(0,π) Stripe  Lx=$Lx2", color=:green,
+                  marker=:rect, markersize=10, linewidth=2)
+
+    # Also show shorter system for comparison
+    scatterlines!(ax, J2_vals, Float64.(data.M2_neel_Lx1),
+                  label="M²(π,π) Néel  Lx=$Lx1", color=:blue,
+                  linestyle=:dash, marker=:utriangle, markersize=8, linewidth=1.5)
+    scatterlines!(ax, J2_vals, Float64.(data.M2_stripe_Lx1),
+                  label="M²(π,0) Stripe  Lx=$Lx1", color=:red,
+                  linestyle=:dash, marker=:utriangle, markersize=8, linewidth=1.5)
+    scatterlines!(ax, J2_vals, Float64.(data.M2_0pi_Lx1),
+                  label="M²(0,π) Stripe  Lx=$Lx1", color=:green,
+                  linestyle=:dash, marker=:utriangle, markersize=8, linewidth=1.5)
+
+    axislegend(ax, position=:rt)
+
+    fig_path = "dmrg_M2_vs_J2_Ly$(Ly)_D$(D).pdf"
+    save(fig_path, fig)
+    println("M² plot saved to $fig_path")
+
 

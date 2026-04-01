@@ -186,7 +186,7 @@ end
      scan_param=:J2,
      scan_values=[0.5],
      J1=1.0,
-     row=2, p=3, nqubits=5,
+     row=4, p=3, nqubits=5,
      maxiter=500,
      seed=123,
      verbose=true,

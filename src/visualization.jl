@@ -630,9 +630,14 @@ function plot_expectation_values(result::CircuitOptimizationResult;
                 horiz_val = mean(horiz_pairs)
                 horiz_err = std(horiz_pairs) / sqrt(length(horiz_pairs))
             else
+                n_cols = div(N_s, row)
+                # Open vertical bonds within each column: (pos, pos+1)
                 vert_pairs = [S[i] * S[i+1] for i in 1:N_s-1 if i % row != 0]
-                vert_val = mean(vert_pairs)
-                vert_err = std(vert_pairs) / sqrt(length(vert_pairs))
+                # Periodic wrap bonds: (row, col) <-> (1, col)
+                wrap_pairs = [S[c*row] * S[(c-1)*row+1] for c in 1:n_cols]
+                all_vert = vcat(vert_pairs, wrap_pairs)
+                vert_val = mean(all_vert)
+                vert_err = std(all_vert) / sqrt(length(all_vert))
                 horiz_pairs = [S[i] * S[i+row] for i in 1:N_s-row]
                 horiz_val = mean(horiz_pairs)
                 horiz_err = std(horiz_pairs) / sqrt(length(horiz_pairs))
@@ -643,12 +648,19 @@ function plot_expectation_values(result::CircuitOptimizationResult;
         # Helper: compute NNN diagonal and anti-diagonal correlations separately
         function _diag_correlations(S, row)
             N_s = length(S)
-            # Diagonal ↘: (pos, col) -> (pos+1, col+1)
+            n_cols = div(N_s, row)
+            # Diagonal-down ↘: (pos, col) -> (pos+1, col+1), open vertical
             diag1 = [S[i] * S[i+row+1] for i in 1:N_s-row-1 if i % row != 0]
-            # Anti-diagonal ↗: (pos, col) -> (pos-1, col+1)
+            # Periodic wrap ↘: (row, col) -> (1, col+1)
+            wrap1 = [S[c*row] * S[c*row+1] for c in 1:n_cols-1]
+            all_diag1 = vcat(diag1, wrap1)
+            d1_val = mean(all_diag1); d1_err = std(all_diag1) / sqrt(length(all_diag1))
+            # Diagonal-up ↗: (pos, col) -> (pos-1, col+1), open vertical
             diag2 = [S[i] * S[i+row-1] for i in 1:N_s-row+1 if (i-1) % row != 0]
-            d1_val = mean(diag1); d1_err = std(diag1) / sqrt(length(diag1))
-            d2_val = mean(diag2); d2_err = std(diag2) / sqrt(length(diag2))
+            # Periodic wrap ↗: (1, col) -> (row, col+1)
+            wrap2 = [S[(c-1)*row+1] * S[(c+1)*row] for c in 1:n_cols-1]
+            all_diag2 = vcat(diag2, wrap2)
+            d2_val = mean(all_diag2); d2_err = std(all_diag2) / sqrt(length(all_diag2))
             return (d1_val, d1_err, d2_val, d2_err)
         end
 
@@ -683,12 +695,13 @@ function plot_expectation_values(result::CircuitOptimizationResult;
             for (si, σ) in enumerate(pauli_mats)
                 sym = pauli_syms[si]
 
-                # Vertical: open boundary (row-1 bonds), all columns
+                # Vertical: periodic boundary (row bonds), all columns
                 if row > 1
                     vert_vals = Float64[]
-                    for c in 1:N_cols, i in 1:row-1
+                    for c in 1:N_cols, i in 1:row
+                        j = i % row + 1
                         E_OO = get_transfer_matrix_with_operator(
-                            op.columns[c], row, vq, Dict(i => σ, i+1 => σ);
+                            op.columns[c], row, vq, Dict(i => σ, j => σ);
                             optimizer=GreedyMethod())
                         push!(vert_vals, real(dot(l_pre[c], E_OO * r_suf[c]) / nf))
                     end
@@ -715,9 +728,9 @@ function plot_expectation_values(result::CircuitOptimizationResult;
                     diag_down_vals = Float64[]
                     diag_up_vals = Float64[]
 
-                    # Diagonal-down ↘: (i, c) → (i+1, c+1), open vertical boundary
-                    for i in 1:row-1
-                        j_down = i + 1
+                    # Diagonal-down ↘: (i, c) → (i%row+1, c+1), periodic vertical
+                    for i in 1:row
+                        j_down = i % row + 1
                         for c in 1:(N_cols-1)
                             val_d = dot(l_pre[c],
                                         E_O[(c, si, i)] * E_O[(c+1, si, j_down)] * r_suf[c+1]) / nf
@@ -729,9 +742,9 @@ function plot_expectation_values(result::CircuitOptimizationResult;
                         push!(diag_down_vals, real(val_d))
                     end
 
-                    # Diagonal-up ↗: (i, c) → (i-1, c+1), open vertical boundary
-                    for i in 2:row
-                        j_up = i - 1
+                    # Diagonal-up ↗: (i, c) → ((i-2+row)%row+1, c+1), periodic vertical
+                    for i in 1:row
+                        j_up = (i - 2 + row) % row + 1
                         for c in 1:(N_cols-1)
                             val_u = dot(l_pre[c],
                                         E_O[(c, si, i)] * E_O[(c+1, si, j_up)] * r_suf[c+1]) / nf
@@ -812,9 +825,14 @@ function plot_expectation_values(result::CircuitOptimizationResult;
 
         N = length(Z_samples)
         if !isnothing(row) && row > 1 && N > 1
+            n_cols = div(N, row)
+            # Open vertical bonds within each column
             ZZ_vert_pairs = [Z_samples[i] * Z_samples[i+1] for i in 1:N-1 if i % row != 0]
-            ZZ_vert_sample = mean(ZZ_vert_pairs)
-            ZZ_vert_stderr = std(ZZ_vert_pairs) / sqrt(length(ZZ_vert_pairs))
+            # Periodic wrap bonds: (row, col) <-> (1, col)
+            ZZ_wrap_pairs = [Z_samples[c*row] * Z_samples[(c-1)*row+1] for c in 1:n_cols]
+            ZZ_all_vert = vcat(ZZ_vert_pairs, ZZ_wrap_pairs)
+            ZZ_vert_sample = mean(ZZ_all_vert)
+            ZZ_vert_stderr = std(ZZ_all_vert) / sqrt(length(ZZ_all_vert))
         end
         if !isnothing(row) && N > row
             ZZ_horiz_pairs = [Z_samples[i] * Z_samples[i+row] for i in 1:N-row]
@@ -1470,7 +1488,7 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
             X_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, :X; position=i)) for i in 1:row)
 
             if row > 1
-                ZZ_vert_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, Dict(i => :Z, i+1 => :Z))) for i in 1:row-1)
+                ZZ_vert_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, Dict(i => :Z, i % row + 1 => :Z))) for i in 1:row)
             else
                 ZZ_vert_exact = 0.0
             end
@@ -2020,9 +2038,9 @@ end
 
 Plot magnetic order parameter squared M²(q) vs J2 for the Heisenberg J1-J2 model.
 
-Computes and plots M²(q0) with q0=(π,π) (Néel order) and M²(q1) with q1=(π,0)
-(stripe order) as functions of J2. The crossing/transition between the two
-order parameters signals the phase boundary.
+Computes and plots M²(q0) with q0=(π,π) (Néel order), M²(q1) with q1=(π,0)
+(stripe order), and M²(q2) with q2=(0,π) (stripe order) as functions of J2.
+The crossing/transition between the order parameters signals the phase boundary.
 
 # Arguments
 - `data_dir`: Directory containing result JSON files
@@ -2047,14 +2065,16 @@ function plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
                        save_path=nothing)
 
     q0 = (Float64(π), Float64(π))   # Néel
-    q1 = (Float64(π), 0.0)          # Stripe
+    q1 = (Float64(π), 0.0)          # Stripe (π,0)
+    q2 = (0.0, Float64(π))          # Stripe (0,π)
 
     J2_found = Float64[]
     M2_neel = Float64[]
     M2_stripe = Float64[]
+    M2_stripe_0pi = Float64[]
 
     println("=== M²(q) vs J2 ===")
-    println("q0 = (π,π) [Néel],  q1 = (π,0) [Stripe]")
+    println("q0 = (π,π) [Néel],  q1 = (π,0) [Stripe],  q2 = (0,π) [Stripe]")
     println("row=$row, nqubits=$nqubits, p=$p, max_sep=$max_separation")
 
     for val in J2_values
@@ -2093,12 +2113,15 @@ function plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
                                            max_separation=max_separation)
         m2_stripe = magnetic_order_squared(X_vec, Z_vec, Y_vec, row, q1;
                                            max_separation=max_separation)
+        m2_stripe_0pi = magnetic_order_squared(X_vec, Z_vec, Y_vec, row, q2;
+                                               max_separation=max_separation)
 
         push!(J2_found, val)
         push!(M2_neel, m2_neel)
         push!(M2_stripe, m2_stripe)
+        push!(M2_stripe_0pi, m2_stripe_0pi)
 
-        println("  M²(π,π) = $(round(m2_neel, digits=6)),  M²(π,0) = $(round(m2_stripe, digits=6))")
+        println("  M²(π,π) = $(round(m2_neel, digits=6)),  M²(π,0) = $(round(m2_stripe, digits=6)),  M²(0,π) = $(round(m2_stripe_0pi, digits=6))")
     end
 
     if isempty(J2_found)
@@ -2116,6 +2139,8 @@ function plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
                   label="M²(π,π) Néel", color=:blue, marker=:circle, markersize=10, linewidth=2)
     scatterlines!(ax, J2_found, M2_stripe,
                   label="M²(π,0) Stripe", color=:red, marker=:diamond, markersize=10, linewidth=2)
+    scatterlines!(ax, J2_found, M2_stripe_0pi,
+                  label="M²(0,π) Stripe", color=:green, marker=:rect, markersize=10, linewidth=2)
 
     # Overlay DMRG reference if provided
     if dmrg_file !== nothing && isfile(dmrg_file)
@@ -2134,6 +2159,13 @@ function plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
                           label="DMRG M²(π,0)", color=:red, linestyle=:dash,
                           marker=:utriangle, markersize=8, linewidth=1.5)
         end
+        if haskey(dmrg_data, :J2_values) && haskey(dmrg_data, :M2_stripe_0pi)
+            dmrg_J2 = Float64.(dmrg_data[:J2_values])
+            dmrg_stripe_0pi = Float64.(dmrg_data[:M2_stripe_0pi])
+            scatterlines!(ax, dmrg_J2, dmrg_stripe_0pi,
+                          label="DMRG M²(0,π)", color=:green, linestyle=:dash,
+                          marker=:utriangle, markersize=8, linewidth=1.5)
+        end
     elseif dmrg_file !== nothing
         @warn "DMRG file not found: $dmrg_file"
     end
@@ -2150,6 +2182,7 @@ function plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
         J2_values = J2_found,
         M2_neel = M2_neel,
         M2_stripe = M2_stripe,
+        M2_stripe_0pi = M2_stripe_0pi,
         row = row, nqubits = nqubits, p = p
     )
 

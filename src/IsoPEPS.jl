@@ -109,6 +109,11 @@ function build_hamiltonian end
 function dmrg_ground_state_2d end
 function compute_magnetization end
 function compute_correlation_length_dmrg end
+function compute_spin_spin_correlation_dmrg end
+function compute_structure_factor_dmrg end
+function compute_M2_dmrg end
+function save_dmrg_state end
+function load_dmrg_state end
 
 # =============================================================================
 # Exports
@@ -146,6 +151,8 @@ export reshape_to_mps, spectrum_MPSKit, transfer_matrix_ITensor
 export compute_X_expectation, compute_Z_expectation, compute_ZZ_expectation, compute_single_expectation
 export compute_exact_energy, compute_exact_heisenberg_energy, compute_exact_heisenberg_energy_2x2, intercolumn_correlation
 export correlation_function, expect, structure_factor, magnetic_order_squared
+export spin_spin_correlation, dimer_dimer_correlation, plaquette_plaquette_correlation
+export spin_spin_structure_factor, dimer_structure_factor, plaquette_structure_factor
 
 # Reference Implementations (loaded via extensions)
 export mpskit_ground_state, mpskit_ground_state_1d, mpskit_ground_state_j1j2, pepskit_ground_state
@@ -154,6 +161,8 @@ export mpskit_ground_state, mpskit_ground_state_1d, mpskit_ground_state_j1j2, pe
 export dmrg_ground_state_2d, build_hamiltonian
 export build_2d_tfim_hamiltonian, build_2d_heisenberg_j1j2_hamiltonian
 export compute_magnetization, compute_correlation_length_dmrg
+export compute_spin_spin_correlation_dmrg, compute_structure_factor_dmrg, compute_M2_dmrg
+export save_dmrg_state, load_dmrg_state
 
 # Data I/O
 export save_result, load_result, save_results, load_results, resample_circuit
