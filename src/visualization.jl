@@ -1130,7 +1130,7 @@ function plot_correlation_function(filename::String;
     println("Mean |exact - sample| error (full): $(round(mean_error_full, digits=6))")
     println("Mean |exact - sample| error (connected): $(round(mean_error_connected, digits=6))")
 
-    fig = Figure(size=(800, is_heisenberg ? 1000 : 700))
+    fig = Figure(size=(800, 700))
     min_val = 1e-15
 
     if is_heisenberg
@@ -1224,69 +1224,6 @@ function plot_correlation_function(filename::String;
 
     axislegend(ax2, position=:rt)
 
-    # Fit power-law decay: C(r) = A * r^(-η)
-    η_fitted = nothing
-    A_power_fitted = nothing
-
-    if is_heisenberg
-        # Heisenberg: power-law fit on a separate log-log panel
-        ax3 = Axis(fig[3, 1],
-                   xlabel="Separation r",
-                   ylabel="|⟨Z_i Z_{i+r}⟩_c|",
-                   title="Connected Correlation (power-law fit)",
-                   xscale=log10, yscale=log10)
-
-        lines!(ax3, separations, exact_connected_abs, label="Exact contraction", color=:blue, linewidth=2)
-        scatter!(ax3, separations, exact_connected_abs, color=:blue, markersize=8)
-        scatter!(ax3, collect(sample_seps), sample_connected_abs,
-                 label="Sampling ± std err", color=:red, markersize=8, marker=:diamond)
-        errorbars!(ax3, collect(sample_seps), sample_connected_abs, err_low_conn, err_high_conn,
-                   color=:red, whiskerwidth=6)
-
-        try
-            println("\nFitting connected correlation to A*r^(-η)...")
-            power_fit_range = (1, min(max_separation, max(5, ceil(Int, 2 * correlation_length))))
-            power_params = fit_acf_power(separations, exact_connected_vals; include_zero=false, fit_range=power_fit_range)
-            η_fitted = power_params.η
-            A_power_fitted = power_params.A
-            println("Fitted exponent η = $(round(η_fitted, digits=3))")
-            println("Fitted amplitude A = $(round(A_power_fitted, digits=4))")
-
-            r_fit = range(1, max_separation, length=100)
-            power_curve = abs(A_power_fitted) .* r_fit .^ (-η_fitted)
-            power_curve_plot = max.(power_curve, min_val)
-            lines!(ax3, r_fit, power_curve_plot,
-                   label="Fit: |A|*r^(-$(round(η_fitted, digits=2)))",
-                   color=:purple, linewidth=3, linestyle=:dot)
-        catch e
-            @warn "Power-law fitting failed: $e"
-            println("Skipping power-law fit overlay")
-        end
-
-        axislegend(ax3, position=:rt)
-    else
-        # TFIM: power-law fit on the same panel as exponential
-        try
-            println("\nFitting connected correlation to A*r^(-η)...")
-            power_fit_range = (1, min(max_separation, max(5, ceil(Int, 2 * correlation_length))))
-            power_params = fit_acf_power(separations, exact_connected_vals; include_zero=false, fit_range=power_fit_range)
-            η_fitted = power_params.η
-            A_power_fitted = power_params.A
-            println("Fitted exponent η = $(round(η_fitted, digits=3))")
-            println("Fitted amplitude A = $(round(A_power_fitted, digits=4))")
-
-            r_fit = range(1, max_separation, length=100)
-            power_curve = abs(A_power_fitted) .* r_fit .^ (-η_fitted)
-            power_curve_plot = max.(power_curve, min_val)
-            lines!(ax2, r_fit, power_curve_plot,
-                   label="Fit: |A|*r^(-$(round(η_fitted, digits=2)))",
-                   color=:purple, linewidth=3, linestyle=:dot)
-        catch e
-            @warn "Power-law fitting failed: $e"
-            println("Skipping power-law fit overlay")
-        end
-    end
-
     if !isnothing(save_path)
         mkpath(dirname(save_path))
         save(save_path, fig)
@@ -1309,8 +1246,6 @@ function plot_correlation_function(filename::String;
         correlation_length = correlation_length,
         correlation_length_fitted = ξ_fitted,
         fitted_amplitude = A_fitted,
-        power_law_exponent = η_fitted,
-        power_law_amplitude = A_power_fitted,
         g = g, row = row, nqubits = nqubits
     )
 
