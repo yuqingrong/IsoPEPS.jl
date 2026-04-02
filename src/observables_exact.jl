@@ -510,18 +510,18 @@ end
 
 """
     spin_spin_correlation(op::TransferOperator, separations;
+                          col1::Int=1, col2::Int=1,
                           pos1::Int=1, pos2::Int=1,
                           connected::Bool=false,
                           optimizer=GreedyMethod())
 
-Exact spin-spin correlation ⟨S_{pos1}(0) · S_{pos2}(r)⟩ = Σ_α ⟨σ^α_{pos1} σ^α_{pos2}⟩/4
+Exact spin-spin correlation ⟨S_{col1,pos1}(0) · S_{col2,pos2}(r)⟩ = Σ_α ⟨σ^α σ^α⟩/4
 for an N-column unit cell. Separations are in units of full unit-cell periods.
-
-Both operators are placed in column 1 of their respective periods.
 
 # Arguments
 - `op`: TransferOperator wrapping the unit cell
 - `separations`: Period separations (integer or collection)
+- `col1`, `col2`: Column indices (1:N_cols) within the unit cell for each operator
 - `pos1`, `pos2`: Row positions of the two spins
 - `connected`: If true, subtract ⟨S⟩·⟨S⟩
 
@@ -529,6 +529,7 @@ Both operators are placed in column 1 of their respective periods.
 - `Dict{Int, ComplexF64}` mapping separation → ⟨S·S⟩
 """
 function spin_spin_correlation(op::TransferOperator, separations;
+                               col1::Int=1, col2::Int=1,
                                pos1::Int=1, pos2::Int=1,
                                connected::Bool=false,
                                optimizer=GreedyMethod())
@@ -536,44 +537,35 @@ function spin_spin_correlation(op::TransferOperator, separations;
     seps = separations isa Integer ? [separations] : collect(separations)
     isempty(seps) && return Dict{Int, ComplexF64}()
 
-    N   = length(op.columns)
-    row = op.row
-    vq  = op.virtual_qubits
-
     T_cols     = _column_transfer_matrices(op)
     T_combined = reduce(*, T_cols)
     l_vec, r_vec, nf, _ = _fixed_points(T_combined)
 
-    # Build per-Pauli "period with σ at pos" transfer matrices
-    # T_σ1[si] = E_O(col1, σ_si, pos1) * T[2] * ... * T[N]
-    # T_σ2[si] = E_O(col1, σ_si, pos2) * T[2] * ... * T[N]
+    # Build per-Pauli period transfer matrices with operator at (col, pos)
     T_σ1 = Vector{Matrix{ComplexF64}}(undef, 3)
     T_σ2 = Vector{Matrix{ComplexF64}}(undef, 3)
-    T_tail = N > 1 ? reduce(*, T_cols[2:end]) : Matrix{ComplexF64}(I, size(T_cols[1]))
     for (si, σ) in enumerate(paulis)
-        E1 = get_transfer_matrix_with_operator(op.columns[1], row, vq, σ;
-                                                position=pos1, optimizer=optimizer)
-        E2 = get_transfer_matrix_with_operator(op.columns[1], row, vq, σ;
-                                                position=pos2, optimizer=optimizer)
-        T_σ1[si] = E1 * T_tail
-        T_σ2[si] = E2 * T_tail
+        T_σ1[si] = get_transfer_matrix_with_operator(
+            op, Dict((col1, pos1) => σ); optimizer=optimizer)
+        T_σ2[si] = get_transfer_matrix_with_operator(
+            op, Dict((col2, pos2) => σ); optimizer=optimizer)
     end
 
     correlations = Dict{Int, ComplexF64}()
     for sep in sort(seps)
         val = zero(ComplexF64)
         for si in 1:3
-            if sep == 0 && pos1 == pos2
+            if sep == 0 && col1 == col2 && pos1 == pos2
                 # σ_a² = I → ⟨I⟩ = 1 (trace of identity in fixed-point basis)
                 val += dot(l_vec, T_combined * r_vec) / nf
             elseif sep == 0
-                # Same period, different positions: two-operator insertion in col 1
-                E_OO = get_transfer_matrix_with_operator(
-                    op.columns[1], row, vq, Dict(pos1 => paulis[si], pos2 => paulis[si]);
+                # Same period: insert both operators in their respective columns
+                T_both = get_transfer_matrix_with_operator(
+                    op, Dict((col1, pos1) => paulis[si], (col2, pos2) => paulis[si]);
                     optimizer=optimizer)
-                val += dot(l_vec, E_OO * T_tail * r_vec) / nf
+                val += dot(l_vec, T_both * r_vec) / nf
             else
-                # l† T_σ1 T^{sep-1} T_σ2 r / nf
+                # l† T̃_1 T^{sep-1} T̃_2 r / nf
                 current = T_σ2[si] * r_vec
                 for _ in 1:(sep - 1)
                     current = T_combined * current
@@ -806,10 +798,11 @@ end
 
 Exact spin-spin static structure factor on a cylinder:
 
-    S_SS(q) = (1/N) Σ_{i,j} ⟨S_i · S_j⟩ e^{iq·(r_i - r_j)}
+    S_SS(q) = (1/N) Σ_{i,j} ⟨Sᵢ · Sⱼ⟩ e^{iq·(rᵢ - rⱼ)}
 
-Sums over all row-position pairs (pos1, pos2) and column separations Δc.
-Both operators are placed in column 1 of their respective periods.
+Sums over all column pairs (c1, c2) within the unit cell, all row-position
+pairs (pos1, pos2), and period separations Δp_sep. Physical x-distance is
+`Δp_sep * N_cols + (c2 - c1)` where N_cols = length(op.columns).
 
 Common choices: q = (π,π) Néel, q = (π,0) stripe.
 """
@@ -818,24 +811,51 @@ function spin_spin_structure_factor(op::TransferOperator, q::Tuple{Real,Real};
                                     optimizer=GreedyMethod())
     qx, qy = Float64(q[1]), Float64(q[2])
     row = op.row
+    N_cols = length(op.columns)
 
     S = 0.0
-    for pos1 in 1:row, pos2 in 1:row
-        Δp = pos2 - pos1
-        corrs = spin_spin_correlation(op, 0:max_separation;
-                                      pos1=pos1, pos2=pos2, connected=false,
-                                      optimizer=optimizer)
-        # Δc = 0
-        S += cos(qy * Δp) * real(corrs[0])
-        # Δc > 0 (±Δc combined via cosine)
-        for Δc in 1:max_separation
-            haskey(corrs, Δc) || continue
-            S += 2.0 * cos(qx * Δc + qy * Δp) * real(corrs[Δc])
+    for c1 in 1:N_cols, c2 in 1:N_cols
+        Δc_intra = c2 - c1   # intra-period column offset
+        for pos1 in 1:row, pos2 in 1:row
+            Δp = pos2 - pos1  # row displacement
+            corrs = spin_spin_correlation(op, 0:max_separation;
+                                          col1=c1, col2=c2,
+                                          pos1=pos1, pos2=pos2, connected=false,
+                                          optimizer=optimizer)
+            # Period separation Δ = 0
+            x_phys = Δc_intra
+            S += cos(qx * x_phys + qy * Δp) * real(corrs[0])
+            # Period separation Δ > 0 (±Δ combined via cosine)
+            for Δ in 1:max_separation
+                haskey(corrs, Δ) || continue
+                x_phys_fwd = Δ * N_cols + Δc_intra   # forward
+                x_phys_bwd = -Δ * N_cols + Δc_intra   # backward
+                S += cos(qx * x_phys_fwd + qy * Δp) * real(corrs[Δ])
+                S += cos(qx * x_phys_bwd + qy * Δp) * real(corrs[Δ])
+            end
         end
     end
 
-    N = row * (2 * max_separation + 1)
-    return S / N
+    N_uc = row * N_cols
+    N_norm = N_uc^2 * (2 * max_separation + 1)
+    return S / N_norm
+end
+
+"""
+    magnetic_order_squared(op::TransferOperator, q::Tuple{Real,Real};
+                           max_separation::Int=20, optimizer=GreedyMethod())
+
+Exact magnetic order parameter squared M²(q) via transfer matrix contraction.
+
+Equivalent to `spin_spin_structure_factor(op, q)`, providing a unified interface
+with the sampling-based `magnetic_order_squared` dispatch.
+
+Common choices: q = (π,π) Néel, q = (π,0) stripe.
+"""
+function magnetic_order_squared(op::TransferOperator, q::Tuple{Real,Real};
+                                max_separation::Int=20,
+                                optimizer=GreedyMethod())
+    return spin_spin_structure_factor(op, q; max_separation=max_separation, optimizer=optimizer)
 end
 
 """

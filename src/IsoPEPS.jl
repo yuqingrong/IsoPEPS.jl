@@ -174,4 +174,5 @@ export plot_training_history, plot_variance_vs_samples, plot_expectation_values
 export plot_corr_scale
 export plot_eigenvalue_spectrum, plot_correlation_function
 export plot_energy_error_vs_g, plot_correlation_vs_g, plot_correlation_vs_J2, plot_M2_vs_J2
+export save_M2_vs_J2, plot_M2_comparison
 end

@@ -163,8 +163,8 @@ output = run_idmrg_reference(;
     J1=1.0,
     row=4,
     unit_cell_cols=2,
-    J2_values=collect(0.0:0.1:1.0),
-    D_values=[16, 32, 64, 128, 256],
+    J2_values=collect(0.0:0.1:0.1),
+    D_values=[2],
     convergence_tol=1e-6,
     output_file=joinpath(@__DIR__, "results", "idmrg_reference_j1j2_Ly=4.json")
 )

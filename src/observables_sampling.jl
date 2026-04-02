@@ -134,8 +134,8 @@ function structure_factor(samples::Vector{Float64}, row::Int, q::Tuple{Real,Real
     end
 
     # N = row × (2·max_sep + 1) effective sites in the summation window
-    N = row * (2 * max_sep + 1)
-    return S 
+    N = row*row * (2 * max_sep + 1)
+    return S /N
 end
 
 """
@@ -158,7 +158,7 @@ function magnetic_order_squared(X_samples::Vector{Float64},
                                 max_separation::Int=20)
     return (structure_factor(X_samples, row, q; max_separation=max_separation) +
             structure_factor(Y_samples, row, q; max_separation=max_separation) +
-            structure_factor(Z_samples, row, q; max_separation=max_separation)) / 4/N
+            structure_factor(Z_samples, row, q; max_separation=max_separation)) / 4
 end
 
 # =============================================================================

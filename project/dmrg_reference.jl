@@ -252,10 +252,10 @@ end
 
 # ==================== Example usage ====================
 Ly = 4
-D = 16
+D = 2
 model_choice = "heisenberg_j1j2"
-Lx1 = 200
-Lx2 = 300
+Lx1 = 100
+Lx2 = 200
 J2_values = collect(0.0:0.1:1.0)
 
 if model_choice == "heisenberg_j1j2"

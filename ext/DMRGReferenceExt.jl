@@ -420,11 +420,12 @@ function IsoPEPS.compute_structure_factor_dmrg(result, q::Tuple{Real,Real};
 end
 
 """
-    compute_M2_dmrg(result, q::Tuple{Real,Real}; bulk_fraction=0.5)
+    compute_M2_dmrg(result, q::Tuple{Real,Real}; bulk_fraction=0.5, max_separation=20)
 
-Compute the squared magnetic order parameter M²(q) = S(q)/N_bulk
-= (1/N_bulk²) Σ_{i,j ∈ bulk} ⟨S_i·S_j⟩ exp(iq·(r_i-r_j)).
+Compute the squared magnetic order parameter M²(q) = (1/N_pairs) Σ_{i,j} ⟨S_i·S_j⟩ exp(iq·(r_i-r_j)).
 
+Only includes pairs with |Δx| ≤ `max_separation` columns, matching the
+truncation used by the IsoPEPS exact/sampling structure factor.
 Only the middle `bulk_fraction` of the cylinder is used (default 0.5).
 
 Common q values:
@@ -433,15 +434,46 @@ Common q values:
 - (0, 0): Ferromagnetic order
 """
 function IsoPEPS.compute_M2_dmrg(result, q::Tuple{Real,Real};
-                                 bulk_fraction::Float64=0.5)
+                                 bulk_fraction::Float64=0.5,
+                                 max_separation::Int=20)
+    psi = result.psi
     Lx = result.Lx
     Ly = result.Ly
+    N = Lx * Ly
+
     margin = round(Int, Lx * (1 - bulk_fraction) / 2)
     col_lo = max(1, margin + 1)
     col_hi = min(Lx, Lx - margin)
-    N_bulk = (col_hi - col_lo + 1) * Ly
-    Sq = IsoPEPS.compute_structure_factor_dmrg(result, q; bulk_fraction=bulk_fraction)
-    return Sq / N_bulk
+
+    Cpm = correlation_matrix(psi, "S+", "S-"; ishermitian=false)
+    Cmp = correlation_matrix(psi, "S-", "S+"; ishermitian=false)
+    Czz = correlation_matrix(psi, "Sz", "Sz"; ishermitian=false)
+    SdotS = real.(Cpm .+ Cmp) ./ 2 .+ real.(Czz)
+
+    coords = site_to_2d(Lx, Ly)
+    qx, qy = q
+
+    bulk_sites = Int[]
+    for s in 1:N
+        col, _ = coords[s]
+        if col_lo <= col <= col_hi
+            push!(bulk_sites, s)
+        end
+    end
+
+    Sq = 0.0
+    n_pairs = 0
+    for s1 in bulk_sites, s2 in bulk_sites
+        i1, j1 = coords[s1]
+        i2, j2 = coords[s2]
+        dx = i2 - i1
+        abs(dx) > max_separation && continue
+        dy = j2 - j1
+        Sq += SdotS[s1, s2] * cos(qx * dx + qy * dy)
+        n_pairs += 1
+    end
+
+    return Sq / n_pairs
 end
 
 """

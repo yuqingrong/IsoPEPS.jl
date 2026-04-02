@@ -958,7 +958,7 @@ result, args = analyze_result(datafile; pepskit_results_file=referfile)
 
 fig, data = plot_M2_vs_J2(                                                                                                                    
       data_dir,           # directory with saved JSON result files
-      [0.0, 0.1, 0.2, 0.3, 0.5];   # J2 values to scan                                                                                          
+      [0.0];   # J2 values to scan                                                                                          
       J1=1.0, row=4, nqubits=3, p=3,                    
       samples=1000000,
       max_separation=10,
@@ -966,6 +966,20 @@ fig, data = plot_M2_vs_J2(
   )
 display(fig)
 
+save_M2_vs_J2("project/results", [0.0, 0.1, 0.2, 0.3, 0.4, 0.5];                                                                              
+                method=:exact, output_file="project/results/M2_exact.json",                                                                     
+                row=4, nqubits=3, p=3, max_separation=20) 
+
+save_M2_vs_J2("project/results", [0.0, 0.1, 0.2, 0.3, 0.4, 0.5];                                                                              
+                method=:sampling, output_file="project/results/M2_sampling.json",
+                row=4, nqubits=3, p=3, max_separation=20) 
+
+plot_M2_comparison(exact_file="project/results/M2_exact.json",                                                                                
+                sampling_file="project/results/M2_sampling.json",                                                                          
+                dmrg_file="project/results/dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json",                                                  
+                save_path="project/results/figures/M2_comparison.pdf")   
+                
+            
 # Reconstruct gates and analyze
 plot_energy_error_vs_g("project/results", [0.0, 0.1,0.2, 0.3, 0.4, 0.5];                            
       model="heisenberg_j1j2",                                              

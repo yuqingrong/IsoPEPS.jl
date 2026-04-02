@@ -2031,6 +2031,7 @@ end
 """
     plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
                   J1=1.0, row=3, nqubits=3, p=3,
+                  use_exact=true,
                   conv_step=100, samples=1000000,
                   max_separation=20,
                   dmrg_file=nothing,
@@ -2047,8 +2048,10 @@ The crossing/transition between the order parameters signals the phase boundary.
 - `J2_values`: Vector of J2 values to scan
 - `J1`: Nearest-neighbor coupling (default: 1.0)
 - `row`, `nqubits`, `p`: Circuit parameters
-- `conv_step`: Burn-in steps for the quantum channel Markov chain
-- `samples`: Number of measurement samples
+- `use_exact`: If true (default), compute M² via exact transfer matrix contraction;
+  if false, use sampling-based computation
+- `conv_step`: Burn-in steps for sampling (only used when `use_exact=false`)
+- `samples`: Number of measurement samples (only used when `use_exact=false`)
 - `max_separation`: Max column separation for structure factor sum
 - `dmrg_file`: Optional JSON file with DMRG reference M² data
   (expected keys: `J2_values`, `M2_neel`, `M2_stripe`)
@@ -2059,6 +2062,7 @@ The crossing/transition between the order parameters signals the phase boundary.
 """
 function plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
                        J1=1.0, row=3, nqubits=3, p=3,
+                       use_exact::Bool=false,
                        conv_step=100, samples=1000000,
                        max_separation::Int=20,
                        dmrg_file=nothing,
@@ -2073,7 +2077,8 @@ function plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
     M2_stripe = Float64[]
     M2_stripe_0pi = Float64[]
 
-    println("=== M²(q) vs J2 ===")
+    method_str = use_exact ? "exact (transfer matrix)" : "sampling"
+    println("=== M²(q) vs J2 [$method_str] ===")
     println("q0 = (π,π) [Néel],  q1 = (π,0) [Stripe],  q2 = (0,π) [Stripe]")
     println("row=$row, nqubits=$nqubits, p=$p, max_sep=$max_separation")
 
@@ -2098,23 +2103,47 @@ function plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
 
         println("\nJ2=$val  →  $(basename(filename))")
 
-        resample_result = resample_circuit(filename; conv_step=conv_step,
-                                           samples=samples, measure_y=true)
-        if isnothing(resample_result)
-            @warn "Resampling failed for J2=$val, skipping"
-            continue
-        end
-        _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
-        Z_vec = Z_samples[conv_step+1:end]
-        X_vec = X_samples[conv_step+1:end]
-        Y_vec = Y_samples[conv_step+1:end]
+        local m2_neel, m2_stripe, m2_stripe_0pi
 
-        m2_neel   = magnetic_order_squared(X_vec, Z_vec, Y_vec, row, q0;
-                                           max_separation=max_separation)
-        m2_stripe = magnetic_order_squared(X_vec, Z_vec, Y_vec, row, q1;
-                                           max_separation=max_separation)
-        m2_stripe_0pi = magnetic_order_squared(X_vec, Z_vec, Y_vec, row, q2;
-                                               max_separation=max_separation)
+        if use_exact
+            result, input_args = load_result(filename)
+            params = result isa ExactOptimizationResult ? result.params : result.final_params
+            _p = input_args[:p]
+            _row = input_args[:row]
+            _nqubits = input_args[:nqubits]
+            share_params = get(input_args, :share_params, true)
+
+            is_2x2 = endswith(filename, "_2x2.json")
+            if is_2x2
+                gates_odd, gates_even = build_unitary_gate_2x2(params, _p, _row, _nqubits)
+                op = TransferOperator(gates_odd, gates_even, _row, _nqubits)
+            else
+                gates = build_unitary_gate(params, _p, _row, _nqubits; share_params=share_params)
+                op = TransferOperator(gates, _row, _nqubits)
+            end
+
+            m2_neel       = magnetic_order_squared(op, q0; max_separation=max_separation)
+            m2_stripe     = magnetic_order_squared(op, q1; max_separation=max_separation)
+            m2_stripe_0pi = magnetic_order_squared(op, q2; max_separation=max_separation)
+        else
+            resample_result = resample_circuit(filename; conv_step=conv_step,
+                                               samples=samples, measure_y=true)
+            if isnothing(resample_result)
+                @warn "Resampling failed for J2=$val, skipping"
+                continue
+            end
+            _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
+            Z_vec = Z_samples[conv_step+1:end]
+            X_vec = X_samples[conv_step+1:end]
+            Y_vec = Y_samples[conv_step+1:end]
+
+            m2_neel       = magnetic_order_squared(X_vec, Z_vec, Y_vec, row, q0;
+                                                   max_separation=max_separation)
+            m2_stripe     = magnetic_order_squared(X_vec, Z_vec, Y_vec, row, q1;
+                                                   max_separation=max_separation)
+            m2_stripe_0pi = magnetic_order_squared(X_vec, Z_vec, Y_vec, row, q2;
+                                                   max_separation=max_separation)
+        end
 
         push!(J2_found, val)
         push!(M2_neel, m2_neel)
@@ -2133,7 +2162,7 @@ function plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
     ax = Axis(fig[1, 1],
               xlabel="J₂ / J₁",
               ylabel="M²(q)",
-              title="Magnetic Order: row=$row, nqubits=$nqubits, p=$p")
+              title="Magnetic Order [$method_str]: row=$row, nqubits=$nqubits, p=$p")
 
     scatterlines!(ax, J2_found, M2_neel,
                   label="M²(π,π) Néel", color=:blue, marker=:circle, markersize=10, linewidth=2)
@@ -2187,5 +2216,211 @@ function plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
     )
 
     return fig, data
+end
+
+# ============================================================================
+# save_M2_vs_J2 — compute and save M² data to JSON
+# ============================================================================
+
+"""
+    save_M2_vs_J2(data_dir, J2_values; method=:exact, output_file, ...)
+
+Compute M²(q) for each J2 value and save results to a JSON file.
+
+# Arguments
+- `data_dir`: Directory containing circuit result JSON files
+- `J2_values`: Vector of J2 values to scan
+- `method`: `:exact` (transfer matrix) or `:sampling` (Monte Carlo)
+- `output_file`: Path to save the JSON results
+- `J1, row, nqubits, p`: Circuit/model parameters
+- `max_separation`: Max column separation for structure factor (default: 20)
+- `conv_step, samples`: Sampling parameters (only for `method=:sampling`)
+"""
+function save_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
+                       method::Symbol=:exact,
+                       output_file::String,
+                       J1=1.0, row=3, nqubits=3, p=3,
+                       max_separation::Int=20,
+                       conv_step=100, samples=1000000)
+    method in (:exact, :sampling) || error("method must be :exact or :sampling")
+
+    q0 = (Float64(π), Float64(π))
+    q1 = (Float64(π), 0.0)
+    q2 = (0.0, Float64(π))
+
+    J2_found = Float64[]
+    M2_neel = Float64[]
+    M2_stripe = Float64[]
+    M2_stripe_0pi = Float64[]
+
+    println("=== Computing M²(q) vs J2 [$(method)] ===")
+
+    for val in J2_values
+        candidates = [
+            joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json"),
+            joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
+            joinpath(data_dir, "circuit_heisenberg_j1j2_J=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
+        ]
+        filename = ""
+        for c in candidates
+            isfile(c) && (filename = c; break)
+        end
+        if isempty(filename)
+            @warn "No file found for J2=$val, skipping"
+            continue
+        end
+
+        println("\nJ2=$val  →  $(basename(filename))")
+
+        local m2_neel, m2_stripe, m2_stripe_0pi
+
+        if method == :exact
+            result, input_args = load_result(filename)
+            params = result isa ExactOptimizationResult ? result.params : result.final_params
+            _p = input_args[:p]
+            _row = input_args[:row]
+            _nqubits = input_args[:nqubits]
+            share_params = get(input_args, :share_params, true)
+
+            is_2x2 = endswith(filename, "_2x2.json")
+            if is_2x2
+                gates_odd, gates_even = build_unitary_gate_2x2(params, _p, _row, _nqubits)
+                op = TransferOperator(gates_odd, gates_even, _row, _nqubits)
+            else
+                gates = build_unitary_gate(params, _p, _row, _nqubits; share_params=share_params)
+                op = TransferOperator(gates, _row, _nqubits)
+            end
+
+            m2_neel       = magnetic_order_squared(op, q0; max_separation=max_separation)
+            m2_stripe     = magnetic_order_squared(op, q1; max_separation=max_separation)
+            m2_stripe_0pi = magnetic_order_squared(op, q2; max_separation=max_separation)
+        else
+            resample_result = resample_circuit(filename; conv_step=conv_step,
+                                               samples=samples, measure_y=true)
+            if isnothing(resample_result)
+                @warn "Resampling failed for J2=$val, skipping"
+                continue
+            end
+            _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
+            Z_vec = Z_samples[conv_step+1:end]
+            X_vec = X_samples[conv_step+1:end]
+            Y_vec = Y_samples[conv_step+1:end]
+
+            m2_neel       = magnetic_order_squared(X_vec, Z_vec, Y_vec, row, q0;
+                                                   max_separation=max_separation)
+            m2_stripe     = magnetic_order_squared(X_vec, Z_vec, Y_vec, row, q1;
+                                                   max_separation=max_separation)
+            m2_stripe_0pi = magnetic_order_squared(X_vec, Z_vec, Y_vec, row, q2;
+                                                   max_separation=max_separation)
+        end
+
+        push!(J2_found, val)
+        push!(M2_neel, m2_neel)
+        push!(M2_stripe, m2_stripe)
+        push!(M2_stripe_0pi, m2_stripe_0pi)
+
+        println("  M²(π,π) = $(round(m2_neel, digits=6)),  M²(π,0) = $(round(m2_stripe, digits=6)),  M²(0,π) = $(round(m2_stripe_0pi, digits=6))")
+    end
+
+    if isempty(J2_found)
+        error("No data found for any J2 value")
+    end
+
+    save_results(output_file;
+                 method=String(method),
+                 J2_values=J2_found,
+                 M2_neel=M2_neel,
+                 M2_stripe=M2_stripe,
+                 M2_stripe_0pi=M2_stripe_0pi,
+                 row=row, nqubits=nqubits, p=p,
+                 max_separation=max_separation)
+    println("\nSaved to: $output_file")
+    return (J2_values=J2_found, M2_neel=M2_neel, M2_stripe=M2_stripe, M2_stripe_0pi=M2_stripe_0pi)
+end
+
+# ============================================================================
+# plot_M2_comparison — overlay exact, sampling, DMRG on one figure
+# ============================================================================
+
+"""
+    plot_M2_comparison(; exact_file="", sampling_file="", dmrg_file="",
+                        save_path=nothing, dmrg_Lx_key="Lx2")
+
+Plot M²(q) vs J2 comparing up to three methods on the same figure.
+
+Each file is a JSON produced by `save_M2_vs_J2` (for exact/sampling) or
+`dmrg_reference.jl` (for DMRG). Pass empty string to skip a method.
+
+# Arguments
+- `exact_file`: JSON from `save_M2_vs_J2(...; method=:exact)`
+- `sampling_file`: JSON from `save_M2_vs_J2(...; method=:sampling)`
+- `dmrg_file`: JSON from DMRG J2 scan (keys: `J2_values`, `M2_neel_Lx2`, etc.)
+- `dmrg_Lx_key`: suffix for DMRG keys — `"Lx1"` or `"Lx2"` (default: `"Lx2"`)
+- `save_path`: Optional path to save the figure
+"""
+function plot_M2_comparison(; exact_file::String="",
+                              sampling_file::String="",
+                              dmrg_file::String="",
+                              dmrg_Lx_key::String="Lx2",
+                              save_path=nothing)
+    q_labels = ["M²(π,π) Néel", "M²(π,0) Stripe", "M²(0,π) Stripe"]
+    q_keys_standard = ["M2_neel", "M2_stripe", "M2_stripe_0pi"]
+    q_keys_dmrg_suffixed = ["M2_neel_$dmrg_Lx_key",
+                            "M2_stripe_$dmrg_Lx_key",
+                            "M2_0pi_$dmrg_Lx_key"]
+
+    fig = Figure(size=(1200, 400))
+
+    axes = [Axis(fig[1, i], xlabel="J₂ / J₁", ylabel="M²(q)", title=q_labels[i])
+            for i in 1:3]
+
+    function _load(file)
+        isempty(file) && return nothing
+        !isfile(file) && (@warn "File not found: $file"; return nothing)
+        return load_results(file)
+    end
+
+    exact_data    = _load(exact_file)
+    sampling_data = _load(sampling_file)
+    dmrg_data     = _load(dmrg_file)
+
+    for (i, (qk_std, qk_dmrg)) in enumerate(zip(q_keys_standard, q_keys_dmrg_suffixed))
+        ax = axes[i]
+
+        if exact_data !== nothing && haskey(exact_data, qk_std)
+            J2 = Float64.(exact_data["J2_values"])
+            M2 = Float64.(exact_data[qk_std])
+            scatterlines!(ax, J2, M2, label="Exact", color=:blue,
+                          marker=:circle, markersize=10, linewidth=2)
+        end
+
+        if sampling_data !== nothing && haskey(sampling_data, qk_std)
+            J2 = Float64.(sampling_data["J2_values"])
+            M2 = Float64.(sampling_data[qk_std])
+            scatterlines!(ax, J2, M2, label="Sampling", color=:orange,
+                          marker=:rect, markersize=9, linewidth=2, linestyle=:dash)
+        end
+
+        if dmrg_data !== nothing
+            dmrg_key = haskey(dmrg_data, qk_dmrg) ? qk_dmrg :
+                       haskey(dmrg_data, qk_std) ? qk_std : nothing
+            if dmrg_key !== nothing && haskey(dmrg_data, "J2_values")
+                J2 = Float64.(dmrg_data["J2_values"])
+                M2 = Float64.(dmrg_data[dmrg_key])
+                scatterlines!(ax, J2, M2, label="DMRG", color=:red,
+                              marker=:utriangle, markersize=9, linewidth=2, linestyle=:dot)
+            end
+        end
+
+        axislegend(ax, position=:rt)
+    end
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        println("Figure saved to: $save_path")
+    end
+
+    return fig
 end
 
