@@ -698,6 +698,75 @@ function dimer_dimer_correlation(op::TransferOperator, separations;
 end
 
 """
+    bond_expectation(op::TransferOperator; orientation=:vertical, pos=1,
+                     col=1, optimizer=GreedyMethod())
+
+Compute the bond energy ⟨S_i · S_j⟩ = ⟨Σ_α σ^α_i σ^α_j⟩/4 for a single
+nearest-neighbour bond within one unit-cell period.
+
+# Arguments
+- `orientation`: `:vertical` (same column, rows `pos` and `pos%row+1`) or
+  `:horizontal` (same row `pos`, columns `col` and `col+1`)
+- `pos`: Row position (1-based)
+- `col`: Column within the unit cell (1-based, relevant for vertical bonds in 2×2 cells)
+
+# Returns
+- `Float64` bond energy
+"""
+function bond_expectation(op::TransferOperator;
+                          orientation::Symbol=:vertical,
+                          pos::Int=1, col::Int=1,
+                          optimizer=GreedyMethod())
+    paulis = [_resolve_op(:X), _resolve_op(:Y), _resolve_op(:Z)]
+    row = op.row
+    val = zero(ComplexF64)
+    if orientation == :vertical
+        pos2 = pos % row + 1
+        for σ in paulis
+            val += expect(op, Dict((col, pos) => σ, (col, pos2) => σ); optimizer=optimizer)
+        end
+    elseif orientation == :horizontal
+        N = length(op.columns)
+        col2 = col + 1
+        col2 <= N || error("Horizontal bond at col=$col requires col+1=$col2 ≤ N=$N")
+        for σ in paulis
+            val += expect(op, Dict((col, pos) => σ, (col2, pos) => σ); optimizer=optimizer)
+        end
+    else
+        error("orientation must be :vertical or :horizontal, got $orientation")
+    end
+    return real(val) / 4.0
+end
+
+"""
+    all_bond_expectations(op::TransferOperator; optimizer=GreedyMethod())
+
+Compute ⟨S_i · S_j⟩ for every distinct nearest-neighbour bond in the unit cell.
+
+# Returns
+- `(vert, horiz)` where:
+  - `vert[pos, col]`: vertical bond energy at row `pos`, unit-cell column `col`
+  - `horiz[pos, col]`: horizontal bond energy at row `pos`, between columns `col` and `col+1`
+  - For a 1×1 unit cell (N=1): `vert` is `row × 1`, `horiz` is `row × 0`
+  - For a 2×2 unit cell (N=2): `vert` is `row × 2`, `horiz` is `row × 1`
+"""
+function all_bond_expectations(op::TransferOperator; optimizer=GreedyMethod())
+    row = op.row
+    N = length(op.columns)
+    vert = zeros(Float64, row, N)
+    for c in 1:N, pos in 1:row
+        vert[pos, c] = bond_expectation(op; orientation=:vertical, pos=pos, col=c,
+                                        optimizer=optimizer)
+    end
+    horiz = zeros(Float64, row, max(N - 1, 0))
+    for c in 1:(N - 1), pos in 1:row
+        horiz[pos, c] = bond_expectation(op; orientation=:horizontal, pos=pos, col=c,
+                                         optimizer=optimizer)
+    end
+    return (vert, horiz)
+end
+
+"""
     plaquette_plaquette_correlation(op::TransferOperator, separations;
                                     pos::Int=1, connected::Bool=true,
                                     optimizer=GreedyMethod())
@@ -984,6 +1053,78 @@ function _dimer_cross_correlation(op::TransferOperator, separations,
     end
 
     # ⟨D_{pos1}(0) D_{pos2}(r)⟩ - ⟨D_{pos1}⟩⟨D_{pos2}⟩
+    μ1 = dot(l_vec, T_D1 * r_vec) / nf
+    μ2 = dot(l_vec, T_D2 * r_vec) / nf
+    l_TD1 = T_D1' * l_vec
+
+    correlations = Dict{Int, ComplexF64}()
+    for sep in sort(seps)
+        current = T_D2 * r_vec
+        for _ in 1:max(sep - 1, 0)
+            current = T_combined * current
+        end
+        correlations[sep] = dot(l_TD1, current) / nf - μ1 * μ2
+    end
+    return correlations
+end
+
+"""Generalized dimer-dimer correlation allowing different orientations for ref and target."""
+function _dimer_general_correlation(op::TransferOperator, separations,
+                                     orient1::Symbol, pos1::Int,
+                                     orient2::Symbol, pos2::Int;
+                                     optimizer=GreedyMethod())
+    # Delegate to existing same-orientation helpers when possible
+    if orient1 == orient2
+        if pos1 == pos2
+            return dimer_dimer_correlation(op, separations;
+                        dimer_orientation=orient1, pos=pos1, connected=true, optimizer=optimizer)
+        else
+            return _dimer_cross_correlation(op, separations,
+                        orient1, pos1, pos2; optimizer=optimizer)
+        end
+    end
+
+    paulis = [_resolve_op(:X), _resolve_op(:Y), _resolve_op(:Z)]
+    seps = separations isa Integer ? [separations] : collect(separations)
+    N   = length(op.columns)
+    row = op.row
+    vq  = op.virtual_qubits
+
+    T_cols     = _column_transfer_matrices(op)
+    T_combined = reduce(*, T_cols)
+    l_vec, r_vec, nf, _ = _fixed_points(T_combined)
+
+    # Build T_D for a dimer with given orientation and position
+    function _build_T_D(orient, pos)
+        if orient == :vertical
+            pos2 = pos % row + 1
+            T_D_col = zeros(ComplexF64, size(T_cols[1]))
+            for σ in paulis
+                E = get_transfer_matrix_with_operator(
+                    op.columns[1], row, vq, Dict(pos => σ, pos2 => σ); optimizer=optimizer)
+                T_D_col .+= E
+            end
+            T_D_col ./= 4.0
+            T_tail = N > 1 ? reduce(*, T_cols[2:end]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+            return T_D_col * T_tail
+        else  # :horizontal
+            T_D_2col = zeros(ComplexF64, size(T_cols[1]))
+            for σ in paulis
+                E1 = get_transfer_matrix_with_operator(
+                    op.columns[1], row, vq, σ; position=pos, optimizer=optimizer)
+                E2 = get_transfer_matrix_with_operator(
+                    op.columns[min(2, N)], row, vq, σ; position=pos, optimizer=optimizer)
+                T_D_2col .+= E1 * E2
+            end
+            T_D_2col ./= 4.0
+            T_tail = N > 2 ? reduce(*, T_cols[3:end]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+            return T_D_2col * T_tail
+        end
+    end
+
+    T_D1 = _build_T_D(orient1, pos1)
+    T_D2 = _build_T_D(orient2, pos2)
+
     μ1 = dot(l_vec, T_D1 * r_vec) / nf
     μ2 = dot(l_vec, T_D2 * r_vec) / nf
     l_TD1 = T_D1' * l_vec

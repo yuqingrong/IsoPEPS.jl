@@ -2399,7 +2399,7 @@ function plot_dimer_structure_factor(filename::String;
     share_params = get(input_args, :share_params, true)
     is_2x2 = endswith(filename, "_2x2.json")
 
-    qvals = range(-Float64(π), Float64(π), length=nq)
+    qvals = range(0.0, 2Float64(π), length=nq)
     SD = zeros(nq, nq)
 
     method_str = use_exact ? "exact" : "sampling"
@@ -2450,7 +2450,9 @@ function plot_dimer_structure_factor(filename::String;
               xlabel="qₓ",
               ylabel="qᵧ",
               title="Dimer Structure Factor S_D(q) [$dimer_orientation]",
-              aspect=DataAspect())
+              aspect=DataAspect(),
+              xticks=([0, π, 2π], ["0", "π", "2π"]),
+              yticks=([0, π, 2π], ["0", "π", "2π"]))
 
     hm = heatmap!(ax, qvals, qvals, SD, colormap=:viridis)
     Colorbar(fig[1, 2], hm, label="S_D(q)")
@@ -2664,17 +2666,14 @@ end
 
 """
     plot_dimer_bond_pattern(filename; max_cols=10, ref_pos=1, ref_col=1,
-                            ref_orientation=:vertical, save_path=nothing)
+                            ref_orientation=:vertical, use_exact=true,
+                            conv_step=1000, samples=100000, save_path=nothing)
 
 Real-space bond pattern of connected dimer-dimer correlations on the cylinder lattice.
 
 Picks a reference dimer at `(ref_pos, ref_col)` with the given orientation and colors
-every same-orientation bond by its connected correlation C_D(ref, bond) with the reference.
-Cross-orientation bonds are drawn in gray.
-
-Useful for detecting VBS order:
-- Columnar VBS: staggered (alternating sign) pattern along columns
-- Plaquette VBS: 2×2 checkerboard pattern
+every bond (both vertical and horizontal) by its connected correlation C_D(ref, bond)
+with the reference.
 
 # Arguments
 - `filename`: Path to a saved optimization result JSON
@@ -2682,6 +2681,9 @@ Useful for detecting VBS order:
 - `ref_pos`: Row position of the reference dimer (1-based)
 - `ref_col`: Column of the reference dimer (1-based)
 - `ref_orientation`: `:vertical` or `:horizontal`
+- `use_exact`: If true, use exact transfer matrix; if false, use sampling
+- `conv_step`: Burn-in steps for sampling (only when `use_exact=false`)
+- `samples`: Number of measurement samples (only when `use_exact=false`)
 - `save_path`: Optional path to save the figure
 
 # Returns
@@ -2694,6 +2696,9 @@ function plot_dimer_bond_pattern(filename::String;
                                  ref_pos::Int=1,
                                  ref_col::Int=1,
                                  ref_orientation::Symbol=:vertical,
+                                 use_exact::Bool=true,
+                                 conv_step::Int=1000,
+                                 samples::Int=100000,
                                  save_path=nothing)
 
     result, input_args = load_result(filename)
@@ -2704,56 +2709,145 @@ function plot_dimer_bond_pattern(filename::String;
     share_params = get(input_args, :share_params, true)
     is_2x2 = endswith(filename, "_2x2.json")
 
-    if is_2x2
-        gates_odd, gates_even = build_unitary_gate_2x2(params, _p, _row, _nqubits)
-        op = TransferOperator(gates_odd, gates_even, _row, _nqubits)
-    else
-        gates = build_unitary_gate(params, _p, _row, _nqubits; share_params=share_params)
-        op = TransferOperator(gates, _row, _nqubits)
-    end
-
-    println("=== Dimer Bond Pattern (ref: $ref_orientation at pos=$ref_pos, col=$ref_col) ===")
+    method_str = use_exact ? "exact" : "sampling"
+    println("=== Dimer Bond Pattern [$method_str] (ref: $ref_orientation at pos=$ref_pos, col=$ref_col) ===")
     println("row=$_row, nqubits=$_nqubits, p=$_p, max_cols=$max_cols")
 
-    # Compute correlations for same-orientation bonds
-    # Column separations needed: from -(ref_col-1) to (max_cols - ref_col)
-    # Transfer matrix gives separation >= 0, so we use symmetry for negative separations
     max_sep = max_cols - 1
-    ref_orient = ref_orientation
-    other_orient = ref_orient == :vertical ? :horizontal : :vertical
 
-    # Same-orientation: C_D(ref_pos@col0, target_pos@col_sep)
-    # For each target row position, compute cross-correlation
-    same_orient_corr = zeros(Float64, _row, max_cols)  # [pos, col]
-    for target_pos in 1:_row
-        if target_pos == ref_pos
-            corrs = dimer_dimer_correlation(op, 0:max_sep;
-                        dimer_orientation=ref_orient, pos=ref_pos,
-                        connected=true)
+    if use_exact
+        # --- Exact branch (unchanged) ---
+        if is_2x2
+            gates_odd, gates_even = build_unitary_gate_2x2(params, _p, _row, _nqubits)
+            op = TransferOperator(gates_odd, gates_even, _row, _nqubits)
         else
-            corrs = _dimer_cross_correlation(op, 0:max_sep,
-                        ref_orient, ref_pos, target_pos)
+            gates = build_unitary_gate(params, _p, _row, _nqubits; share_params=share_params)
+            op = TransferOperator(gates, _row, _nqubits)
         end
-        for col in 1:max_cols
-            sep = col - ref_col
-            if sep >= 0 && haskey(corrs, sep)
-                same_orient_corr[target_pos, col] = real(corrs[sep])
-            elseif sep < 0 && haskey(corrs, -sep)
-                # Use symmetry: C(r) = C(-r) for connected correlations
-                same_orient_corr[target_pos, col] = real(corrs[-sep])
+        # Compute correlations for ALL bonds (both orientations) using generalized helper
+        vert_corr = zeros(Float64, _row, max_cols)
+        for target_pos in 1:_row
+            corrs = _dimer_general_correlation(op, 0:max_sep,
+                        ref_orientation, ref_pos, :vertical, target_pos)
+            for col in 1:max_cols
+                sep = col - ref_col
+                if sep >= 0 && haskey(corrs, sep)
+                    vert_corr[target_pos, col] = real(corrs[sep])
+                elseif sep < 0 && haskey(corrs, -sep)
+                    vert_corr[target_pos, col] = real(corrs[-sep])
+                end
+            end
+            print("\r  vertical pos $target_pos/$_row")
+        end
+        println()
+
+        horiz_corr = zeros(Float64, _row, max_cols - 1)
+        for target_pos in 1:_row
+            corrs = _dimer_general_correlation(op, 0:max_sep,
+                        ref_orientation, ref_pos, :horizontal, target_pos)
+            for col in 1:(max_cols - 1)
+                sep = col - ref_col
+                if sep >= 0 && haskey(corrs, sep)
+                    horiz_corr[target_pos, col] = real(corrs[sep])
+                elseif sep < 0 && haskey(corrs, -sep)
+                    horiz_corr[target_pos, col] = real(corrs[-sep])
+                end
+            end
+            print("\r  horizontal pos $target_pos/$_row")
+        end
+        println()
+
+    else
+        # --- Sampling branch ---
+        resample_result = resample_circuit(filename; conv_step=conv_step,
+                                            samples=samples)
+        isnothing(resample_result) && error("Resampling failed for $filename")
+        if length(resample_result) == 6
+            _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
+        else
+            _rho, Z_samples, X_samples, _params, _gates = resample_result
+            Y_samples = zeros(length(X_samples))
+        end
+        Z_vec = Z_samples[conv_step+1:end]
+        X_vec = X_samples[conv_step+1:end]
+        Y_vec = length(resample_result) == 6 ? Y_samples[conv_step+1:end] : zeros(length(Z_vec))
+
+        dimer_vals_v, dimer_vals_h = _build_all_dimer_values(X_vec, Z_vec, Y_vec, _row)
+        ncols_v = size(dimer_vals_v, 2)
+        ncols_h = size(dimer_vals_h, 2)
+
+        # Reference bond dimer values (1D vector over columns)
+        if ref_orientation == :vertical
+            ref_dv = vec(dimer_vals_v[ref_pos, :])
+            n_ref = ncols_v
+        else
+            ref_dv = vec(dimer_vals_h[ref_pos, :])
+            n_ref = ncols_h
+        end
+        μ_ref = mean(ref_dv)
+
+        # Compute connected correlations: C(Δcol) = ⟨D_ref(c) D_target(c+Δcol)⟩ - μ_ref * μ_target
+        vert_corr = zeros(Float64, _row, max_cols)
+        for target_pos in 1:_row
+            target_dv = vec(dimer_vals_v[target_pos, :])
+            μ_target = mean(target_dv)
+            for col in 1:max_cols
+                sep = col - ref_col
+                # Use both directions for averaging (symmetry), avoid double-counting sep=0
+                seps_to_try = sep == 0 ? [0] : [sep, -sep]
+                total = 0.0
+                count = 0
+                for s in seps_to_try
+                    s < 0 && continue
+                    n_pairs = min(n_ref, ncols_v) - s
+                    n_pairs < 1 && continue
+                    for c in 1:n_pairs
+                        total += ref_dv[c] * target_dv[c + s]
+                    end
+                    count += n_pairs
+                end
+                if count > 0
+                    vert_corr[target_pos, col] = total / count - μ_ref * μ_target
+                end
             end
         end
-        print("\r  pos $target_pos/$_row")
-    end
-    println()
 
-    # Prepare output data
-    if ref_orient == :vertical
-        vert_corr = same_orient_corr  # [pos, col] for vertical bonds
-        horiz_corr = fill(NaN, _row, max_cols - 1)  # cross-orientation: no data
-    else
-        vert_corr = fill(NaN, _row, max_cols)  # cross-orientation: no data
-        horiz_corr = same_orient_corr[:, 1:max_cols-1]  # [pos, col] for horizontal bonds
+        horiz_corr = zeros(Float64, _row, max_cols - 1)
+        for target_pos in 1:_row
+            target_dv = vec(dimer_vals_h[target_pos, :])
+            μ_target = mean(target_dv)
+            for col in 1:(max_cols - 1)
+                sep = col - ref_col
+                seps_to_try = sep == 0 ? [0] : [sep, -sep]
+                total = 0.0
+                count = 0
+                for s in seps_to_try
+                    s < 0 && continue
+                    n_pairs = min(n_ref, ncols_h) - s
+                    n_pairs < 1 && continue
+                    for c in 1:n_pairs
+                        total += ref_dv[c] * target_dv[c + s]
+                    end
+                    count += n_pairs
+                end
+                if count > 0
+                    horiz_corr[target_pos, col] = total / count - μ_ref * μ_target
+                end
+            end
+        end
+        println("  Sampling correlations computed.")
+    end
+
+    # For sampling: exclude ref bond from color scale (its variance is noise-dominated).
+    # For exact: keep it (⟨D²⟩-⟨D⟩² is a physical quantity that sets the natural scale).
+    if !use_exact
+        if ref_orientation == :vertical
+            vert_corr[ref_pos, ref_col] = NaN
+        else
+            if ref_col <= max_cols - 1
+                horiz_corr[ref_pos, ref_col] = NaN
+            end
+        end
     end
 
     correlation_data = Dict(:vertical => vert_corr, :horizontal => horiz_corr)
@@ -2763,7 +2857,7 @@ function plot_dimer_bond_pattern(filename::String;
 
     model_str = get(input_args, :model, "")
     J2_str = haskey(input_args, :J2) ? ", J₂=$(input_args[:J2])" : ""
-    title_str = "Dimer-Dimer Correlation (ref: $ref_orient, pos=$ref_pos, col=$ref_col)$J2_str"
+    title_str = "Dimer-Dimer Correlation [$method_str] (ref: $ref_orientation, pos=$ref_pos, col=$ref_col)$J2_str"
 
     ax = Axis(fig[1, 1],
               xlabel="Column",
@@ -2847,7 +2941,7 @@ function plot_dimer_bond_pattern(filename::String;
     end
 
     # Highlight reference bond
-    if ref_orient == :vertical
+    if ref_orientation == :vertical
         rp2 = ref_pos % _row + 1
         if rp2 < ref_pos
             linesegments!(ax, [Float64(ref_col), Float64(ref_col)],
@@ -2878,6 +2972,241 @@ function plot_dimer_bond_pattern(filename::String;
     end
 
     return (fig, correlation_data)
+end
+
+"""
+    plot_bond_energy_pattern(filename; max_cols=10, use_exact=true,
+                             conv_step=1000, samples=100000, title="",
+                             save_path=nothing)
+
+Visualize bond energies ⟨S_i · S_j⟩ on every nearest-neighbour bond of the
+cylinder lattice. Strong/weak bond alternation directly reveals VBS order.
+
+# Arguments
+- `filename`: Path to a saved optimization result JSON
+- `max_cols`: Number of columns to display
+- `use_exact`: If true, use exact transfer matrix; if false, use sampling
+- `conv_step`: Burn-in steps for sampling (only when `use_exact=false`)
+- `samples`: Number of measurement samples (only when `use_exact=false`)
+- `title`: Optional figure title
+- `save_path`: Optional path to save the figure
+
+# Returns
+- `(fig, bond_data)` where `bond_data` is a Dict with keys
+  `:vertical => Matrix{Float64}(row, max_cols)` and
+  `:horizontal => Matrix{Float64}(row, max_cols-1)`
+"""
+function plot_bond_energy_pattern(filename::String;
+                                  max_cols::Int=10,
+                                  use_exact::Bool=true,
+                                  conv_step::Int=1000,
+                                  samples::Int=100000,
+                                  title::String="",
+                                  save_path=nothing)
+
+    result, input_args = load_result(filename)
+    params = result isa ExactOptimizationResult ? result.params : result.final_params
+    _p = input_args[:p]
+    _row = input_args[:row]
+    _nqubits = input_args[:nqubits]
+    share_params = get(input_args, :share_params, true)
+    is_2x2 = endswith(filename, "_2x2.json")
+
+    method_str = use_exact ? "exact" : "sampling"
+    println("=== Bond Energy Pattern [$method_str] ===")
+    println("row=$_row, nqubits=$_nqubits, p=$_p, max_cols=$max_cols")
+
+    # Unit-cell bond expectations: vert_uc[pos, col], horiz_uc[pos, col]
+    if use_exact
+        if is_2x2
+            gates_odd, gates_even = build_unitary_gate_2x2(params, _p, _row, _nqubits)
+            op = TransferOperator(gates_odd, gates_even, _row, _nqubits)
+        else
+            gates = build_unitary_gate(params, _p, _row, _nqubits; share_params=share_params)
+            op = TransferOperator(gates, _row, _nqubits)
+        end
+        vert_uc, horiz_uc = all_bond_expectations(op)
+        N_uc = length(op.columns)
+        println("  Unit cell columns: $N_uc")
+        println("  Vertical bond expectations:")
+        for pos in 1:_row, c in 1:N_uc
+            pos2 = pos % _row + 1
+            println("    ($pos↔$pos2, col=$c): $(vert_uc[pos, c])")
+        end
+        if size(horiz_uc, 2) > 0
+            println("  Horizontal bond expectations (intra-cell):")
+            for pos in 1:_row, c in 1:size(horiz_uc, 2)
+                println("    (pos=$pos, col=$c↔$(c+1)): $(horiz_uc[pos, c])")
+            end
+        end
+        # Inter-period horizontal bond = horizontal bond spanning last col of period to first of next
+        # This is the same as bond_expectation with orientation=:horizontal across period boundary
+        # For 1x1 UC, ALL horizontal bonds are inter-period (computed via transfer matrix)
+        # We compute it via: ⟨σ^α_{N,pos}(period k) σ^α_{1,pos}(period k+1)⟩ / 4
+        # This requires the correlation function approach
+        horiz_inter = zeros(Float64, _row)
+        for pos in 1:_row
+            corr = spin_spin_correlation(op, [1]; col1=N_uc, col2=1, pos1=pos, pos2=pos)
+            horiz_inter[pos] = real(corr[1])
+        end
+        println("  Inter-period horizontal bond expectations:")
+        for pos in 1:_row
+            println("    (pos=$pos, across period): $(horiz_inter[pos])")
+        end
+
+    else
+        # Sampling branch
+        resample_result = resample_circuit(filename; conv_step=conv_step, samples=samples)
+        isnothing(resample_result) && error("Resampling failed for $filename")
+        if length(resample_result) == 6
+            _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
+        else
+            _rho, Z_samples, X_samples, _params, _gates = resample_result
+            Y_samples = zeros(length(X_samples))
+        end
+        Z_vec = Z_samples[conv_step+1:end]
+        X_vec = X_samples[conv_step+1:end]
+        Y_vec = length(resample_result) == 6 ? Y_samples[conv_step+1:end] : zeros(length(Z_vec))
+
+        dimer_vals_v, dimer_vals_h = _build_all_dimer_values(X_vec, Z_vec, Y_vec, _row)
+
+        # Average over columns to get unit-cell pattern
+        N_uc = is_2x2 ? 2 : 1
+        ncols_v = size(dimer_vals_v, 2)
+        ncols_h = size(dimer_vals_h, 2)
+
+        vert_uc = zeros(Float64, _row, N_uc)
+        for pos in 1:_row, c in 1:N_uc
+            cols = c:N_uc:ncols_v
+            vert_uc[pos, c] = mean(dimer_vals_v[pos, cols])
+        end
+
+        # Horizontal bonds: for 1x1 UC, all horizontal bonds are equivalent
+        # For 2x2 UC, separate intra-cell and inter-cell
+        if N_uc == 1
+            horiz_uc = zeros(Float64, _row, 0)
+            horiz_inter = zeros(Float64, _row)
+            for pos in 1:_row
+                horiz_inter[pos] = mean(dimer_vals_h[pos, :])
+            end
+        else
+            horiz_uc = zeros(Float64, _row, N_uc - 1)
+            for pos in 1:_row
+                # Intra-cell: odd-indexed horizontal bonds (col 1→2)
+                intra_cols = 1:2:ncols_h
+                horiz_uc[pos, 1] = mean(dimer_vals_h[pos, intra_cols])
+            end
+            horiz_inter = zeros(Float64, _row)
+            for pos in 1:_row
+                # Inter-cell: even-indexed horizontal bonds (col 2→3, i.e., period boundary)
+                inter_cols = 2:2:ncols_h
+                horiz_inter[pos] = mean(dimer_vals_h[pos, inter_cols])
+            end
+        end
+
+        println("  Vertical bond expectations (column-averaged):")
+        for pos in 1:_row, c in 1:N_uc
+            pos2 = pos % _row + 1
+            println("    ($pos↔$pos2, col=$c): $(vert_uc[pos, c])")
+        end
+        if size(horiz_uc, 2) > 0
+            println("  Horizontal bond expectations (intra-cell, averaged):")
+            for pos in 1:_row
+                println("    (pos=$pos): $(horiz_uc[pos, 1])")
+            end
+        end
+        println("  Inter-period horizontal bond expectations (averaged):")
+        for pos in 1:_row
+            println("    (pos=$pos): $(horiz_inter[pos])")
+        end
+    end
+
+    # Tile unit-cell pattern over max_cols columns
+    vert_tiled = zeros(Float64, _row, max_cols)
+    for col in 1:max_cols, pos in 1:_row
+        c_uc = ((col - 1) % N_uc) + 1
+        vert_tiled[pos, col] = vert_uc[pos, c_uc]
+    end
+
+    horiz_tiled = zeros(Float64, _row, max_cols - 1)
+    for col in 1:(max_cols - 1), pos in 1:_row
+        c_uc = ((col - 1) % N_uc) + 1
+        c_next_uc = (col % N_uc) + 1
+        if c_next_uc > c_uc && size(horiz_uc, 2) >= c_uc
+            # Intra-cell horizontal bond
+            horiz_tiled[pos, col] = horiz_uc[pos, c_uc]
+        else
+            # Inter-period horizontal bond
+            horiz_tiled[pos, col] = horiz_inter[pos]
+        end
+    end
+
+    # --- Drawing ---
+    all_vals = vcat(vec(vert_tiled), vec(horiz_tiled))
+    cmax = isempty(all_vals) ? 1.0 : max(maximum(abs, all_vals), 1e-10)
+
+    if isempty(title)
+        model_str = is_2x2 ? "2×2" : "1×1"
+        title = "Bond Energy ⟨Sᵢ·Sⱼ⟩ ($model_str, $method_str)"
+    end
+
+    fig = Figure(size=(max(600, 100 * max_cols), max(400, 100 * _row)))
+    ax = Axis(fig[1, 1], title=title,
+              xlabel="Column", ylabel="Row",
+              aspect=DataAspect())
+
+    # Vertical bonds
+    for col in 1:max_cols
+        for pos in 1:_row
+            pos2 = pos % _row + 1
+            val = vert_tiled[pos, col]
+            y1, y2 = Float64(pos), Float64(pos2)
+            lw = 1.0 + 4.0 * abs(val) / cmax
+            c = val / cmax
+            if pos2 < pos
+                linesegments!(ax, [Float64(col), Float64(col)], [y1, y1 + 0.5],
+                              color=[c, c], colorrange=(-1, 1), colormap=:RdBu,
+                              linewidth=lw)
+                linesegments!(ax, [Float64(col), Float64(col)], [y2 - 0.5, y2],
+                              color=[c, c], colorrange=(-1, 1), colormap=:RdBu,
+                              linewidth=lw)
+            else
+                linesegments!(ax, [Float64(col), Float64(col)], [y1, y2],
+                              color=[c, c], colorrange=(-1, 1), colormap=:RdBu,
+                              linewidth=lw)
+            end
+        end
+    end
+
+    # Horizontal bonds
+    for col in 1:(max_cols - 1)
+        for pos in 1:_row
+            val = horiz_tiled[pos, col]
+            lw = 1.0 + 4.0 * abs(val) / cmax
+            c = val / cmax
+            linesegments!(ax, [Float64(col), Float64(col + 1)], [Float64(pos), Float64(pos)],
+                          color=[c, c], colorrange=(-1, 1), colormap=:RdBu,
+                          linewidth=lw)
+        end
+    end
+
+    # Draw sites
+    for col in 1:max_cols, pos in 1:_row
+        scatter!(ax, [Float64(col)], [Float64(pos)], color=:gray40, markersize=6)
+    end
+
+    # Colorbar
+    Colorbar(fig[1, 2], colormap=:RdBu, limits=(-cmax, cmax),
+             label="⟨Sᵢ · Sⱼ⟩")
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        println("Figure saved to: $save_path")
+    end
+
+    bond_data = Dict(:vertical => vert_tiled, :horizontal => horiz_tiled)
+    return (fig, bond_data)
 end
 
 # =============================================================================
@@ -3017,7 +3346,7 @@ function plot_dmrg_dimer_structure_factor(result;
     C_conn = DD .- D_exp * D_exp'
 
     println("Fourier transforming over $nq × $nq q-grid...")
-    qvals = range(-Float64(π), Float64(π), length=nq)
+    qvals = range(0.0, 2Float64(π), length=nq)
     SD = zeros(nq, nq)
 
     for (i, qx) in enumerate(qvals)
@@ -3037,7 +3366,9 @@ function plot_dmrg_dimer_structure_factor(result;
     fig = Figure(size=(700, 600))
     ax = Axis(fig[1, 1], xlabel="qₓ", ylabel="qᵧ",
               title="DMRG Dimer Structure Factor S_D(q) [$dimer_orientation]",
-              aspect=DataAspect())
+              aspect=DataAspect(),
+              xticks=([0, π, 2π], ["0", "π", "2π"]),
+              yticks=([0, π, 2π], ["0", "π", "2π"]))
     hm = heatmap!(ax, qvals, qvals, SD, colormap=:viridis)
     Colorbar(fig[1, 2], hm, label="S_D(q)")
 
@@ -3213,3 +3544,125 @@ function plot_dmrg_dimer_bond_pattern(result;
     return (fig, corr_data)
 end
 
+"""
+    plot_dmrg_bond_energy_pattern(result; bulk_cols=20, title="", save_path=nothing)
+
+Visualize bond energies ⟨S_i · S_j⟩ on every nearest-neighbour bond of the
+DMRG ground state on an open cylinder. Strong/weak bond alternation directly
+reveals VBS order.
+
+# Arguments
+- `result`: DMRG result (from `dmrg_ground_state_2d`)
+- `bulk_cols`: Number of bulk columns to display (centered, avoiding boundaries)
+- `title`: Custom figure title
+- `save_path`: Optional path to save the figure
+
+# Returns
+- `(fig, bond_data)` where `bond_data` is a NamedTuple with fields
+  `SdotS_matrix`, `bonds_v`, `bonds_h`, `D_v`, `D_h`
+"""
+function plot_dmrg_bond_energy_pattern(result;
+                                       bulk_cols::Int=20,
+                                       title::String="",
+                                       save_path=nothing)
+    Lx = result.Lx
+    Ly = result.Ly
+
+    # Get full S·S matrix
+    SdotS = compute_SdotS_matrix(result)
+
+    # Determine bulk region
+    bulk_cols = min(bulk_cols, Lx)
+    margin = div(Lx - bulk_cols, 2)
+    col_lo = max(1, margin + 1)
+    col_hi = min(Lx, col_lo + bulk_cols - 1)
+
+    # Build bond lists and extract ⟨S_i · S_j⟩
+    # Vertical bonds: (col, row) ↔ (col, row%Ly+1)
+    bonds_v = Tuple{Int,Int,Int,Int}[]  # (si, sj, col, row)
+    for col in col_lo:col_hi, row in 1:Ly
+        row2 = row % Ly + 1
+        si = (col - 1) * Ly + row
+        sj = (col - 1) * Ly + row2
+        push!(bonds_v, (si, sj, col, row))
+    end
+
+    # Horizontal bonds: (col, row) ↔ (col+1, row)
+    bonds_h = Tuple{Int,Int,Int,Int}[]
+    for col in col_lo:(col_hi - 1), row in 1:Ly
+        si = (col - 1) * Ly + row
+        sj = col * Ly + row
+        push!(bonds_h, (si, sj, col, row))
+    end
+
+    D_v = Float64[SdotS[si, sj] for (si, sj, _, _) in bonds_v]
+    D_h = Float64[SdotS[si, sj] for (si, sj, _, _) in bonds_h]
+
+    all_vals = vcat(D_v, D_h)
+    cmax = isempty(all_vals) ? 1.0 : max(maximum(abs, all_vals), 1e-10)
+
+    println("=== DMRG Bond Energy Pattern ===")
+    println("Lx=$Lx, Ly=$Ly, bulk cols=$col_lo:$col_hi")
+    println("  Vertical bonds: $(length(D_v)), range [$(minimum(D_v)), $(maximum(D_v))]")
+    println("  Horizontal bonds: $(length(D_h)), range [$(minimum(D_h)), $(maximum(D_h))]")
+    println("  Color scale: ±$cmax")
+
+    plot_title = isempty(title) ?
+        "DMRG Bond Energy ⟨Sᵢ·Sⱼ⟩ (Lx=$Lx, Ly=$Ly)" : title
+
+    fig = Figure(size=(max(800, (col_hi - col_lo + 2) * 60), max(400, Ly * 100 + 100)))
+    ax = Axis(fig[1, 1], xlabel="Column", ylabel="Row",
+              title=plot_title, aspect=DataAspect(), yticks=1:Ly)
+
+    # Draw vertical bonds
+    for (idx, (_, _, col, row)) in enumerate(bonds_v)
+        row2 = row % Ly + 1
+        val = D_v[idx]
+        c_norm = val / cmax
+        lw = 1.0 + 4.0 * abs(val) / cmax
+        if row2 < row
+            linesegments!(ax, [Float64(col), Float64(col)],
+                          [Float64(row), Float64(row) + 0.5],
+                          color=[c_norm, c_norm], colorrange=(-1, 1),
+                          colormap=:RdBu, linewidth=lw)
+            linesegments!(ax, [Float64(col), Float64(col)],
+                          [Float64(row2) - 0.5, Float64(row2)],
+                          color=[c_norm, c_norm], colorrange=(-1, 1),
+                          colormap=:RdBu, linewidth=lw)
+        else
+            linesegments!(ax, [Float64(col), Float64(col)],
+                          [Float64(row), Float64(row2)],
+                          color=[c_norm, c_norm], colorrange=(-1, 1),
+                          colormap=:RdBu, linewidth=lw)
+        end
+    end
+
+    # Draw horizontal bonds
+    for (idx, (_, _, col, row)) in enumerate(bonds_h)
+        val = D_h[idx]
+        c_norm = val / cmax
+        lw = 1.0 + 4.0 * abs(val) / cmax
+        linesegments!(ax, [Float64(col), Float64(col + 1)],
+                      [Float64(row), Float64(row)],
+                      color=[c_norm, c_norm], colorrange=(-1, 1),
+                      colormap=:RdBu, linewidth=lw)
+    end
+
+    # Draw sites
+    for col in col_lo:col_hi, row in 1:Ly
+        scatter!(ax, [Float64(col)], [Float64(row)], color=:gray40, markersize=6)
+    end
+
+    Colorbar(fig[1, 2], colormap=:RdBu, limits=(-cmax, cmax),
+             label="⟨Sᵢ · Sⱼ⟩")
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        println("Figure saved to: $save_path")
+    end
+
+    bond_data = (SdotS_matrix=SdotS, bonds_v=bonds_v, bonds_h=bonds_h,
+                 D_v=D_v, D_h=D_h)
+    return (fig, bond_data)
+end

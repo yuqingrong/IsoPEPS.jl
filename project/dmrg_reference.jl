@@ -417,3 +417,18 @@ ref_bond_idx=1,
 title="DMRG Dimer Correlation (J₂=0.5, D=2)",
 save_path="project/results/figures/dmrg_dimer_bond.pdf"
 )
+
+# Bond energy pattern: ⟨S_i · S_j⟩ on each bond (reveals VBS strong/weak bonds)
+
+fig, bond_data = plot_dmrg_bond_energy_pattern(result;
+bulk_cols=20,
+title="DMRG Bond Energy ⟨Sᵢ·Sⱼ⟩ (J₂=0.5, D=2)",
+save_path="project/results/figures/dmrg_bond_energy.pdf"
+)
+
+# dimer structure factor
+fig, SD = plot_dmrg_dimer_structure_factor(result;
+nq=50,              # resolution in BZ
+bulk_cols=20,       # use middle 20 columns to avoid edges
+save_path="project/results/figures/dimer_SF_heatmap.pdf"
+)

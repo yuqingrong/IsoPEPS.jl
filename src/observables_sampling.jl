@@ -353,6 +353,46 @@ function spin_spin_correlation(X_samples::Vector{Float64},
 end
 
 """
+    _build_all_dimer_values(X_samples, Z_samples, Y_samples, row)
+
+Build per-column dimer values for all row positions and both orientations.
+
+Returns `(dimer_vals_v, dimer_vals_h)`:
+- `dimer_vals_v[pos, col]`: vertical dimer D connecting (pos, col) ↔ (pos%row+1, col)
+- `dimer_vals_h[pos, col]`: horizontal dimer D connecting (pos, col) ↔ (pos, col+1)
+"""
+function _build_all_dimer_values(X_samples::Vector{Float64},
+                                  Z_samples::Vector{Float64},
+                                  Y_samples::Vector{Float64},
+                                  row::Int)
+    all_samples = (X_samples, Y_samples, Z_samples)
+    ncols = _n_cols(Z_samples, row)
+
+    # Vertical dimers: row × ncols
+    dimer_vals_v = zeros(row, ncols)
+    for S in all_samples
+        for c in 1:ncols, pos in 1:row
+            pos2 = pos % row + 1
+            i1 = row * (c - 1) + pos
+            i2 = row * (c - 1) + pos2
+            dimer_vals_v[pos, c] += S[i1] * S[i2] / 4.0
+        end
+    end
+
+    # Horizontal dimers: row × (ncols - 1)
+    dimer_vals_h = zeros(row, ncols - 1)
+    for S in all_samples
+        for c in 1:(ncols - 1), pos in 1:row
+            i1 = row * (c - 1) + pos
+            i2 = row * c + pos
+            dimer_vals_h[pos, c] += S[i1] * S[i2] / 4.0
+        end
+    end
+
+    return (dimer_vals_v, dimer_vals_h)
+end
+
+"""
     dimer_dimer_correlation(X_samples, Z_samples, Y_samples, row, separations;
                             dimer_orientation::Symbol=:vertical, pos::Int=1,
                             connected::Bool=true)
