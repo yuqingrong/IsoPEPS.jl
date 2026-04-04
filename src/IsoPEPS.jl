@@ -112,6 +112,10 @@ function compute_correlation_length_dmrg end
 function compute_spin_spin_correlation_dmrg end
 function compute_structure_factor_dmrg end
 function compute_M2_dmrg end
+function compute_dimer_structure_factor_dmrg end
+function compute_plaquette_structure_factor_dmrg end
+function compute_dimer_dimer_correlation_dmrg end
+function compute_SdotS_matrix end
 function save_dmrg_state end
 function load_dmrg_state end
 
@@ -162,6 +166,8 @@ export dmrg_ground_state_2d, build_hamiltonian
 export build_2d_tfim_hamiltonian, build_2d_heisenberg_j1j2_hamiltonian
 export compute_magnetization, compute_correlation_length_dmrg
 export compute_spin_spin_correlation_dmrg, compute_structure_factor_dmrg, compute_M2_dmrg
+export compute_dimer_structure_factor_dmrg, compute_plaquette_structure_factor_dmrg
+export compute_dimer_dimer_correlation_dmrg
 export save_dmrg_state, load_dmrg_state
 
 # Data I/O
@@ -175,4 +181,8 @@ export plot_corr_scale
 export plot_eigenvalue_spectrum, plot_correlation_function
 export plot_energy_error_vs_g, plot_correlation_vs_g, plot_correlation_vs_J2, plot_M2_vs_J2
 export save_M2_vs_J2, plot_M2_comparison
+export plot_dimer_structure_factor, plot_spin_structure_factor, plot_plaquette_structure_factor
+export plot_dimer_bond_pattern
+export plot_dmrg_spin_structure_factor, plot_dmrg_dimer_structure_factor
+export plot_dmrg_plaquette_structure_factor, plot_dmrg_dimer_bond_pattern
 end

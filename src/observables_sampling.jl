@@ -133,19 +133,17 @@ function structure_factor(samples::Vector{Float64}, row::Int, q::Tuple{Real,Real
         end
     end
 
-    # N = row × (2·max_sep + 1) effective sites in the summation window
-    N = row*row * (2 * max_sep + 1)
-    return S /N
+    # Standard convention: S(q) = (1/N_uc) Σ_{i∈uc} Σ_j ⟨Si Sj⟩ e^{iq·(ri-rj)}
+    return S / row
 end
 
 """
     magnetic_order_squared(X_samples, Z_samples, Y_samples, row, q; max_separation=20)
 
-Full-spin magnetic order parameter squared M²(q) = (1/4)[S_X(q) + S_Y(q) + S_Z(q)].
+Full-spin magnetic order parameter squared M²(q) = (1/N²) Σ_{i,j} ⟨Sᵢ·Sⱼ⟩ e^{iq·(rᵢ-rⱼ)}.
 
-Computes M²(q) = (1/N²) Σ_{i,j} ⟨Sᵢ·Sⱼ⟩ e^{iq·(rᵢ-rⱼ)} where Sᵅ = σᵅ/2
-are spin-1/2 operators. The factor 1/4 converts from Pauli (σ = ±1) to
-spin-1/2 (S = ±1/2) convention.
+This is the intensive order parameter: M²(q) = S_SS(q) / N_eff, where S_SS(q) is the
+structure factor and N_eff = row × (2·max_sep + 1) is the effective system size.
 
 Common choices:
 - q = (π, π): Néel antiferromagnetic order
@@ -156,9 +154,12 @@ function magnetic_order_squared(X_samples::Vector{Float64},
                                 Y_samples::Vector{Float64},
                                 row::Int, q::Tuple{Real,Real};
                                 max_separation::Int=20)
-    return (structure_factor(X_samples, row, q; max_separation=max_separation) +
-            structure_factor(Y_samples, row, q; max_separation=max_separation) +
-            structure_factor(Z_samples, row, q; max_separation=max_separation)) / 4
+    ncols = _n_cols(X_samples, row)
+    max_sep = min(max_separation, ncols - 1)
+    N_eff = row * (2 * max_sep + 1)
+    S_SS = spin_spin_structure_factor(X_samples, Z_samples, Y_samples, row, q;
+                                      max_separation=max_separation)
+    return S_SS / N_eff
 end
 
 # =============================================================================
@@ -519,8 +520,8 @@ Spin-spin static structure factor on a cylinder:
 
     S_SS(q) = (1/N) Σ_{i,j} ⟨S_i · S_j⟩ e^{iq·(r_i - r_j)}
 
-where S_i · S_j = (X_iX_j + Y_iY_j + Z_iZ_j)/4. This equals `magnetic_order_squared`
-and is provided as an alias with a consistent naming convention.
+where S_i · S_j = (X_iX_j + Y_iY_j + Z_iZ_j)/4. For the intensive order parameter
+M²(q) = S_SS(q)/N, use `magnetic_order_squared` instead.
 
 Common choices:
 - q = (π, π): Néel order parameter
@@ -531,8 +532,9 @@ function spin_spin_structure_factor(X_samples::Vector{Float64},
                                     Y_samples::Vector{Float64},
                                     row::Int, q::Tuple{Real,Real};
                                     max_separation::Int=20)
-    return magnetic_order_squared(X_samples, Z_samples, Y_samples, row, q;
-                                  max_separation=max_separation)
+    return (structure_factor(X_samples, row, q; max_separation=max_separation) +
+            structure_factor(Y_samples, row, q; max_separation=max_separation) +
+            structure_factor(Z_samples, row, q; max_separation=max_separation)) / 4
 end
 
 """

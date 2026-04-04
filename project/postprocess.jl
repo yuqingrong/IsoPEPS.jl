@@ -966,20 +966,31 @@ fig, data = plot_M2_vs_J2(
   )
 display(fig)
 
-save_M2_vs_J2("project/results", [0.0, 0.1, 0.2, 0.3, 0.4, 0.5];                                                                              
+save_M2_vs_J2("project/results", [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6,0.7,0.8,0.9,1.0];                                                                              
                 method=:exact, output_file="project/results/M2_exact.json",                                                                     
                 row=4, nqubits=3, p=3, max_separation=20) 
 
-save_M2_vs_J2("project/results", [0.0, 0.1, 0.2, 0.3, 0.4, 0.5];                                                                              
+save_M2_vs_J2("project/results", [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6,0.7,0.8,0.9,1.0];                                                                              
                 method=:sampling, output_file="project/results/M2_sampling.json",
                 row=4, nqubits=3, p=3, max_separation=20) 
 
-plot_M2_comparison(exact_file="project/results/M2_exact.json",                                                                                
-                sampling_file="project/results/M2_sampling.json",                                                                          
-                dmrg_file="project/results/dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json",                                                  
+plot_M2_comparison(exact_file="project/results/M2_exact.json",
+                sampling_file="project/results/M2_sampling.json",
+                dmrg_file="dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json",
                 save_path="project/results/figures/M2_comparison.pdf")   
-                
-            
+ 
+fig, SSS = plot_spin_structure_factor("project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.0_row=4_p=3_nqubits=3_2x2.json";                                                                             
+                nq=50,                                                                                                                                    
+                max_separation=10,
+                use_exact=false,       # sampling method                                                                                                  
+                conv_step=1000,        # burn-in steps                
+                samples=100000,        # measurement samples
+                save_path="project/results/figures/spin_SF_sampling.pdf"
+            )
+display(fig)
+
+
+
 # Reconstruct gates and analyze
 plot_energy_error_vs_g("project/results", [0.0, 0.1,0.2, 0.3, 0.4, 0.5];                            
       model="heisenberg_j1j2",                                              

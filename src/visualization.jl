@@ -2281,7 +2281,8 @@ end
     plot_M2_comparison(; exact_file="", sampling_file="", dmrg_file="",
                         save_path=nothing, dmrg_Lx_key="Lx2")
 
-Plot M²(q) vs J2 comparing up to three methods on the same figure.
+Plot M²(π,π) (Néel) and M²(0,π) together vs J₂/J₁, comparing exact, sampling,
+and DMRG methods on a single axis.
 
 Each file is a JSON produced by `save_M2_vs_J2` (for exact/sampling) or
 `dmrg_reference.jl` (for DMRG). Pass empty string to skip a method.
@@ -2298,16 +2299,18 @@ function plot_M2_comparison(; exact_file::String="",
                               dmrg_file::String="",
                               dmrg_Lx_key::String="Lx2",
                               save_path=nothing)
-    q_labels = ["M²(π,π) Néel", "M²(π,0) Stripe", "M²(0,π) Stripe"]
-    q_keys_standard = ["M2_neel", "M2_stripe", "M2_stripe_0pi"]
-    q_keys_dmrg_suffixed = ["M2_neel_$dmrg_Lx_key",
-                            "M2_stripe_$dmrg_Lx_key",
-                            "M2_0pi_$dmrg_Lx_key"]
+    # M²(π,π) = Néel, M²(0,π) uses key M2_0pi / M2_stripe_0pi
+    q_info = [
+        (label="M²(π,π)", std_key="M2_neel",       dmrg_key="M2_neel_$dmrg_Lx_key"),
+        (label="M²(0,π)", std_key="M2_stripe_0pi",  dmrg_key="M2_0pi_$dmrg_Lx_key"),
+    ]
 
-    fig = Figure(size=(1200, 400))
+    # Colors: blue/orange for (π,π)/(0,π); solid/dash/dot for exact/sampling/DMRG
+    q_colors = [:blue, :orange]
 
-    axes = [Axis(fig[1, i], xlabel="J₂ / J₁", ylabel="M²(q)", title=q_labels[i])
-            for i in 1:3]
+    fig = Figure(size=(600, 400))
+    ax = Axis(fig[1, 1], xlabel="J₂ / J₁", ylabel="M²(q)",
+              title="M²(π,π) and M²(0,π) vs J₂")
 
     function _load(file)
         isempty(file) && return nothing
@@ -2319,36 +2322,36 @@ function plot_M2_comparison(; exact_file::String="",
     sampling_data = _load(sampling_file)
     dmrg_data     = _load(dmrg_file)
 
-    for (i, (qk_std, qk_dmrg)) in enumerate(zip(q_keys_standard, q_keys_dmrg_suffixed))
-        ax = axes[i]
+    for (iq, qi) in enumerate(q_info)
+        color = q_colors[iq]
 
-        if exact_data !== nothing && haskey(exact_data, qk_std)
+        if exact_data !== nothing && haskey(exact_data, qi.std_key)
             J2 = Float64.(exact_data["J2_values"])
-            M2 = Float64.(exact_data[qk_std])
-            scatterlines!(ax, J2, M2, label="Exact", color=:blue,
+            M2 = Float64.(exact_data[qi.std_key])
+            scatterlines!(ax, J2, M2, label="$(qi.label) TNcontraction", color=color,
                           marker=:circle, markersize=10, linewidth=2)
         end
 
-        if sampling_data !== nothing && haskey(sampling_data, qk_std)
+        if sampling_data !== nothing && haskey(sampling_data, qi.std_key)
             J2 = Float64.(sampling_data["J2_values"])
-            M2 = Float64.(sampling_data[qk_std])
-            scatterlines!(ax, J2, M2, label="Sampling", color=:orange,
+            M2 = Float64.(sampling_data[qi.std_key])
+            scatterlines!(ax, J2, M2, label="$(qi.label) Sampling", color=color,
                           marker=:rect, markersize=9, linewidth=2, linestyle=:dash)
         end
 
         if dmrg_data !== nothing
-            dmrg_key = haskey(dmrg_data, qk_dmrg) ? qk_dmrg :
-                       haskey(dmrg_data, qk_std) ? qk_std : nothing
+            dmrg_key = haskey(dmrg_data, qi.dmrg_key) ? qi.dmrg_key :
+                       haskey(dmrg_data, qi.std_key) ? qi.std_key : nothing
             if dmrg_key !== nothing && haskey(dmrg_data, "J2_values")
                 J2 = Float64.(dmrg_data["J2_values"])
                 M2 = Float64.(dmrg_data[dmrg_key])
-                scatterlines!(ax, J2, M2, label="DMRG", color=:red,
+                scatterlines!(ax, J2, M2, label="$(qi.label) DMRG", color=color,
                               marker=:utriangle, markersize=9, linewidth=2, linestyle=:dot)
             end
         end
-
-        axislegend(ax, position=:rt)
     end
+
+    Legend(fig[1, 2], ax, framevisible=false, labelsize=10, rowgap=2, patchsize=(15, 8))
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))
@@ -2357,5 +2360,856 @@ function plot_M2_comparison(; exact_file::String="",
     end
 
     return fig
+end
+
+"""
+    plot_dimer_structure_factor(filename; nq=50, dimer_orientation=:vertical,
+                                max_separation=20, use_exact=true,
+                                conv_step=1000, samples=100000, save_path=nothing)
+
+Brillouin-zone heatmap of the dimer static structure factor S_D(qx, qy).
+
+# Arguments
+- `filename`: Path to a saved optimization result JSON
+- `nq`: Number of q-points along each axis (total grid: nq × nq)
+- `dimer_orientation`: `:vertical` or `:horizontal`
+- `max_separation`: Max column separation in the structure factor sum
+- `use_exact`: If true, use exact transfer matrix; if false, use sampling
+- `conv_step`: Burn-in steps for sampling (only when `use_exact=false`)
+- `samples`: Number of measurement samples (only when `use_exact=false`)
+- `save_path`: Optional path to save the figure
+
+# Returns
+- `(fig, SD)` where `SD` is the nq × nq matrix of S_D values
+"""
+function plot_dimer_structure_factor(filename::String;
+                                     nq::Int=50,
+                                     dimer_orientation::Symbol=:vertical,
+                                     max_separation::Int=20,
+                                     use_exact::Bool=true,
+                                     conv_step::Int=1000,
+                                     samples::Int=100000,
+                                     save_path=nothing)
+
+    result, input_args = load_result(filename)
+    params = result isa ExactOptimizationResult ? result.params : result.final_params
+    _p = input_args[:p]
+    _row = input_args[:row]
+    _nqubits = input_args[:nqubits]
+    share_params = get(input_args, :share_params, true)
+    is_2x2 = endswith(filename, "_2x2.json")
+
+    qvals = range(-Float64(π), Float64(π), length=nq)
+    SD = zeros(nq, nq)
+
+    method_str = use_exact ? "exact" : "sampling"
+    println("=== Dimer Structure Factor S_D(q) [$method_str, $dimer_orientation] ===")
+    println("row=$_row, nqubits=$_nqubits, p=$_p, nq=$nq, max_sep=$max_separation")
+
+    if use_exact
+        if is_2x2
+            gates_odd, gates_even = build_unitary_gate_2x2(params, _p, _row, _nqubits)
+            op = TransferOperator(gates_odd, gates_even, _row, _nqubits)
+        else
+            gates = build_unitary_gate(params, _p, _row, _nqubits; share_params=share_params)
+            op = TransferOperator(gates, _row, _nqubits)
+        end
+
+        for (i, qx) in enumerate(qvals)
+            for (j, qy) in enumerate(qvals)
+                SD[i, j] = dimer_structure_factor(op, (qx, qy);
+                                dimer_orientation=dimer_orientation,
+                                max_separation=max_separation)
+            end
+            print("\r  qx $i/$nq")
+        end
+        println()
+    else
+        resample_result = resample_circuit(filename; conv_step=conv_step,
+                                            samples=samples, measure_y=true)
+        isnothing(resample_result) && error("Resampling failed for $filename")
+        _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
+        Z_vec = Z_samples[conv_step+1:end]
+        X_vec = X_samples[conv_step+1:end]
+        Y_vec = Y_samples[conv_step+1:end]
+
+        for (i, qx) in enumerate(qvals)
+            for (j, qy) in enumerate(qvals)
+                SD[i, j] = dimer_structure_factor(X_vec, Z_vec, Y_vec, _row, (qx, qy);
+                                dimer_orientation=dimer_orientation,
+                                max_separation=max_separation)
+            end
+            print("\r  qx $i/$nq")
+        end
+        println()
+    end
+
+    # --- Plot ---
+    fig = Figure(size=(700, 600))
+    ax = Axis(fig[1, 1],
+              xlabel="qₓ",
+              ylabel="qᵧ",
+              title="Dimer Structure Factor S_D(q) [$dimer_orientation]",
+              aspect=DataAspect())
+
+    hm = heatmap!(ax, qvals, qvals, SD, colormap=:viridis)
+    Colorbar(fig[1, 2], hm, label="S_D(q)")
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        println("Figure saved to: $save_path")
+    end
+
+    return (fig, SD)
+end
+
+"""
+    plot_spin_structure_factor(filename; nq=50, max_separation=20, use_exact=true,
+                               conv_step=1000, samples=100000, save_path=nothing)
+
+Brillouin-zone heatmap of the spin-spin static structure factor S_SS(qx, qy).
+
+# Arguments
+- `filename`: Path to a saved optimization result JSON
+- `nq`: Number of q-points along each axis (total grid: nq × nq)
+- `max_separation`: Max column separation in the structure factor sum
+- `use_exact`: If true, use exact transfer matrix; if false, use sampling
+- `conv_step`: Burn-in steps for sampling (only when `use_exact=false`)
+- `samples`: Number of measurement samples (only when `use_exact=false`)
+- `save_path`: Optional path to save the figure
+
+# Returns
+- `(fig, SSS)` where `SSS` is the nq × nq matrix of S_SS values
+"""
+function plot_spin_structure_factor(filename::String;
+                                    nq::Int=50,
+                                    max_separation::Int=10,
+                                    use_exact::Bool=true,
+                                    conv_step::Int=1000,
+                                    samples::Int=100000,
+                                    J2::Float64=0.0,
+                                    D::Int=2,
+                                    save_path=nothing)
+
+    result, input_args = load_result(filename)
+    params = result isa ExactOptimizationResult ? result.params : result.final_params
+    _p = input_args[:p]
+    _row = input_args[:row]
+    _nqubits = input_args[:nqubits]
+    share_params = get(input_args, :share_params, true)
+    is_2x2 = endswith(filename, "_2x2.json")
+
+    qvals = range(0.0, 2Float64(π), length=nq)
+    SSS = zeros(nq, nq)
+
+    method_str = use_exact ? "exact" : "sampling"
+    println("=== Spin Structure Factor S_SS(q) [$method_str] ===")
+    println("row=$_row, nqubits=$_nqubits, p=$_p, nq=$nq, max_sep=$max_separation")
+
+    if use_exact
+        if is_2x2
+            gates_odd, gates_even = build_unitary_gate_2x2(params, _p, _row, _nqubits)
+            op = TransferOperator(gates_odd, gates_even, _row, _nqubits)
+        else
+            gates = build_unitary_gate(params, _p, _row, _nqubits; share_params=share_params)
+            op = TransferOperator(gates, _row, _nqubits)
+        end
+
+        for (i, qx) in enumerate(qvals)
+            for (j, qy) in enumerate(qvals)
+                SSS[i, j] = spin_spin_structure_factor(op, (qx, qy);
+                                max_separation=max_separation)
+            end
+            print("\r  qx $i/$nq")
+        end
+        println()
+    else
+        resample_result = resample_circuit(filename; conv_step=conv_step,
+                                            samples=samples, measure_y=true)
+        isnothing(resample_result) && error("Resampling failed for $filename")
+        _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
+        Z_vec = Z_samples[conv_step+1:end]
+        X_vec = X_samples[conv_step+1:end]
+        Y_vec = Y_samples[conv_step+1:end]
+
+        for (i, qx) in enumerate(qvals)
+            for (j, qy) in enumerate(qvals)
+                SSS[i, j] = spin_spin_structure_factor(X_vec, Z_vec, Y_vec, _row, (qx, qy);
+                                max_separation=max_separation)
+            end
+            print("\r  qx $i/$nq")
+        end
+        println()
+    end
+
+    # --- Plot ---
+    fig = Figure(size=(700, 600))
+    ax = Axis(fig[1, 1],
+              xlabel="qₓ",
+              ylabel="qᵧ",
+              title="S_SS(q)  J₂=$J2, D=$D",
+              aspect=DataAspect(),
+              xticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]),
+              yticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]))
+
+    hm = heatmap!(ax, qvals, qvals, SSS, colormap=:viridis)
+    Colorbar(fig[1, 2], hm, label="S_SS(q)")
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        println("Figure saved to: $save_path")
+    end
+
+    return (fig, SSS)
+end
+
+"""
+    plot_plaquette_structure_factor(filename; nq=50, max_separation=20, use_exact=true,
+                                    conv_step=1000, samples=100000, save_path=nothing)
+
+Brillouin-zone heatmap of the plaquette static structure factor S_P(qx, qy).
+
+# Arguments
+- `filename`: Path to a saved optimization result JSON
+- `nq`: Number of q-points along each axis (total grid: nq × nq)
+- `max_separation`: Max column separation in the structure factor sum
+- `use_exact`: If true, use exact transfer matrix; if false, use sampling
+- `conv_step`: Burn-in steps for sampling (only when `use_exact=false`)
+- `samples`: Number of measurement samples (only when `use_exact=false`)
+- `save_path`: Optional path to save the figure
+
+# Returns
+- `(fig, SP)` where `SP` is the nq × nq matrix of S_P values
+"""
+function plot_plaquette_structure_factor(filename::String;
+                                         nq::Int=50,
+                                         max_separation::Int=20,
+                                         use_exact::Bool=true,
+                                         conv_step::Int=1000,
+                                         samples::Int=100000,
+                                         save_path=nothing)
+
+    result, input_args = load_result(filename)
+    params = result isa ExactOptimizationResult ? result.params : result.final_params
+    _p = input_args[:p]
+    _row = input_args[:row]
+    _nqubits = input_args[:nqubits]
+    share_params = get(input_args, :share_params, true)
+    is_2x2 = endswith(filename, "_2x2.json")
+
+    qvals = range(-Float64(π), Float64(π), length=nq)
+    SP = zeros(nq, nq)
+
+    method_str = use_exact ? "exact" : "sampling"
+    println("=== Plaquette Structure Factor S_P(q) [$method_str] ===")
+    println("row=$_row, nqubits=$_nqubits, p=$_p, nq=$nq, max_sep=$max_separation")
+
+    if use_exact
+        if is_2x2
+            gates_odd, gates_even = build_unitary_gate_2x2(params, _p, _row, _nqubits)
+            op = TransferOperator(gates_odd, gates_even, _row, _nqubits)
+        else
+            gates = build_unitary_gate(params, _p, _row, _nqubits; share_params=share_params)
+            op = TransferOperator(gates, _row, _nqubits)
+        end
+
+        for (i, qx) in enumerate(qvals)
+            for (j, qy) in enumerate(qvals)
+                SP[i, j] = plaquette_structure_factor(op, (qx, qy);
+                                max_separation=max_separation)
+            end
+            print("\r  qx $i/$nq")
+        end
+        println()
+    else
+        resample_result = resample_circuit(filename; conv_step=conv_step,
+                                            samples=samples, measure_y=true)
+        isnothing(resample_result) && error("Resampling failed for $filename")
+        _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
+        Z_vec = Z_samples[conv_step+1:end]
+        X_vec = X_samples[conv_step+1:end]
+        Y_vec = Y_samples[conv_step+1:end]
+
+        for (i, qx) in enumerate(qvals)
+            for (j, qy) in enumerate(qvals)
+                SP[i, j] = plaquette_structure_factor(X_vec, Z_vec, Y_vec, _row, (qx, qy);
+                                max_separation=max_separation)
+            end
+            print("\r  qx $i/$nq")
+        end
+        println()
+    end
+
+    # --- Plot ---
+    fig = Figure(size=(700, 600))
+    ax = Axis(fig[1, 1],
+              xlabel="qₓ",
+              ylabel="qᵧ",
+              title="Plaquette Structure Factor S_P(q)",
+              aspect=DataAspect())
+
+    hm = heatmap!(ax, qvals, qvals, SP, colormap=:viridis)
+    Colorbar(fig[1, 2], hm, label="S_P(q)")
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        println("Figure saved to: $save_path")
+    end
+
+    return (fig, SP)
+end
+
+"""
+    plot_dimer_bond_pattern(filename; max_cols=10, ref_pos=1, ref_col=1,
+                            ref_orientation=:vertical, save_path=nothing)
+
+Real-space bond pattern of connected dimer-dimer correlations on the cylinder lattice.
+
+Picks a reference dimer at `(ref_pos, ref_col)` with the given orientation and colors
+every same-orientation bond by its connected correlation C_D(ref, bond) with the reference.
+Cross-orientation bonds are drawn in gray.
+
+Useful for detecting VBS order:
+- Columnar VBS: staggered (alternating sign) pattern along columns
+- Plaquette VBS: 2×2 checkerboard pattern
+
+# Arguments
+- `filename`: Path to a saved optimization result JSON
+- `max_cols`: Number of columns to display
+- `ref_pos`: Row position of the reference dimer (1-based)
+- `ref_col`: Column of the reference dimer (1-based)
+- `ref_orientation`: `:vertical` or `:horizontal`
+- `save_path`: Optional path to save the figure
+
+# Returns
+- `(fig, correlation_data)` where `correlation_data` is a Dict with keys
+  `:vertical => Matrix{Float64}(row, max_cols)` and
+  `:horizontal => Matrix{Float64}(row, max_cols-1)`
+"""
+function plot_dimer_bond_pattern(filename::String;
+                                 max_cols::Int=10,
+                                 ref_pos::Int=1,
+                                 ref_col::Int=1,
+                                 ref_orientation::Symbol=:vertical,
+                                 save_path=nothing)
+
+    result, input_args = load_result(filename)
+    params = result isa ExactOptimizationResult ? result.params : result.final_params
+    _p = input_args[:p]
+    _row = input_args[:row]
+    _nqubits = input_args[:nqubits]
+    share_params = get(input_args, :share_params, true)
+    is_2x2 = endswith(filename, "_2x2.json")
+
+    if is_2x2
+        gates_odd, gates_even = build_unitary_gate_2x2(params, _p, _row, _nqubits)
+        op = TransferOperator(gates_odd, gates_even, _row, _nqubits)
+    else
+        gates = build_unitary_gate(params, _p, _row, _nqubits; share_params=share_params)
+        op = TransferOperator(gates, _row, _nqubits)
+    end
+
+    println("=== Dimer Bond Pattern (ref: $ref_orientation at pos=$ref_pos, col=$ref_col) ===")
+    println("row=$_row, nqubits=$_nqubits, p=$_p, max_cols=$max_cols")
+
+    # Compute correlations for same-orientation bonds
+    # Column separations needed: from -(ref_col-1) to (max_cols - ref_col)
+    # Transfer matrix gives separation >= 0, so we use symmetry for negative separations
+    max_sep = max_cols - 1
+    ref_orient = ref_orientation
+    other_orient = ref_orient == :vertical ? :horizontal : :vertical
+
+    # Same-orientation: C_D(ref_pos@col0, target_pos@col_sep)
+    # For each target row position, compute cross-correlation
+    same_orient_corr = zeros(Float64, _row, max_cols)  # [pos, col]
+    for target_pos in 1:_row
+        if target_pos == ref_pos
+            corrs = dimer_dimer_correlation(op, 0:max_sep;
+                        dimer_orientation=ref_orient, pos=ref_pos,
+                        connected=true)
+        else
+            corrs = _dimer_cross_correlation(op, 0:max_sep,
+                        ref_orient, ref_pos, target_pos)
+        end
+        for col in 1:max_cols
+            sep = col - ref_col
+            if sep >= 0 && haskey(corrs, sep)
+                same_orient_corr[target_pos, col] = real(corrs[sep])
+            elseif sep < 0 && haskey(corrs, -sep)
+                # Use symmetry: C(r) = C(-r) for connected correlations
+                same_orient_corr[target_pos, col] = real(corrs[-sep])
+            end
+        end
+        print("\r  pos $target_pos/$_row")
+    end
+    println()
+
+    # Prepare output data
+    if ref_orient == :vertical
+        vert_corr = same_orient_corr  # [pos, col] for vertical bonds
+        horiz_corr = fill(NaN, _row, max_cols - 1)  # cross-orientation: no data
+    else
+        vert_corr = fill(NaN, _row, max_cols)  # cross-orientation: no data
+        horiz_corr = same_orient_corr[:, 1:max_cols-1]  # [pos, col] for horizontal bonds
+    end
+
+    correlation_data = Dict(:vertical => vert_corr, :horizontal => horiz_corr)
+
+    # --- Plot ---
+    fig = Figure(size=(max(800, max_cols * 80), max(400, _row * 100 + 100)))
+
+    model_str = get(input_args, :model, "")
+    J2_str = haskey(input_args, :J2) ? ", J₂=$(input_args[:J2])" : ""
+    title_str = "Dimer-Dimer Correlation (ref: $ref_orient, pos=$ref_pos, col=$ref_col)$J2_str"
+
+    ax = Axis(fig[1, 1],
+              xlabel="Column",
+              ylabel="Row",
+              title=title_str,
+              aspect=DataAspect(),
+              yticks=1:_row,
+              xticks=1:max_cols)
+
+    # Determine color range (symmetric around zero)
+    all_vals = filter(!isnan, vcat(vec(vert_corr), vec(horiz_corr)))
+    if !isempty(all_vals)
+        cmax = maximum(abs, all_vals)
+        cmax = max(cmax, 1e-10)  # avoid zero range
+    else
+        cmax = 1.0
+    end
+
+    # Draw bonds
+    # Vertical bonds: between (pos, col) and (pos%row+1, col)
+    for col in 1:max_cols
+        for pos in 1:_row
+            pos2 = pos % _row + 1
+            val = vert_corr[pos, col]
+            y1, y2 = Float64(pos), Float64(pos2)
+            # Handle wrap-around: if pos=row, pos2=1, draw to row+1 position
+            if pos2 < pos
+                # Draw two half-segments for the periodic wrap
+                # Bottom half: pos -> row + 0.5 (visual)
+                # Top half: 0.5 -> pos2
+                if isnan(val)
+                    linesegments!(ax, [Float64(col), Float64(col)], [y1, y1 + 0.5],
+                                  color=:gray80, linewidth=1, linestyle=:dash)
+                    linesegments!(ax, [Float64(col), Float64(col)], [y2 - 0.5, y2],
+                                  color=:gray80, linewidth=1, linestyle=:dash)
+                else
+                    lw = 1.0 + 4.0 * abs(val) / cmax
+                    c = val / cmax  # normalized to [-1, 1]
+                    linesegments!(ax, [Float64(col), Float64(col)], [y1, y1 + 0.5],
+                                  color=[c, c], colorrange=(-1, 1), colormap=:RdBu,
+                                  linewidth=lw)
+                    linesegments!(ax, [Float64(col), Float64(col)], [y2 - 0.5, y2],
+                                  color=[c, c], colorrange=(-1, 1), colormap=:RdBu,
+                                  linewidth=lw)
+                end
+            else
+                if isnan(val)
+                    linesegments!(ax, [Float64(col), Float64(col)], [y1, y2],
+                                  color=:gray80, linewidth=1, linestyle=:dash)
+                else
+                    lw = 1.0 + 4.0 * abs(val) / cmax
+                    c = val / cmax
+                    linesegments!(ax, [Float64(col), Float64(col)], [y1, y2],
+                                  color=[c, c], colorrange=(-1, 1), colormap=:RdBu,
+                                  linewidth=lw)
+                end
+            end
+        end
+    end
+
+    # Horizontal bonds: between (pos, col) and (pos, col+1)
+    for col in 1:(max_cols - 1)
+        for pos in 1:_row
+            val = horiz_corr[pos, col]
+            if isnan(val)
+                linesegments!(ax, [Float64(col), Float64(col + 1)], [Float64(pos), Float64(pos)],
+                              color=:gray80, linewidth=1, linestyle=:dash)
+            else
+                lw = 1.0 + 4.0 * abs(val) / cmax
+                c = val / cmax
+                linesegments!(ax, [Float64(col), Float64(col + 1)], [Float64(pos), Float64(pos)],
+                              color=[c, c], colorrange=(-1, 1), colormap=:RdBu,
+                              linewidth=lw)
+            end
+        end
+    end
+
+    # Draw sites
+    for col in 1:max_cols, pos in 1:_row
+        scatter!(ax, [Float64(col)], [Float64(pos)], color=:gray40, markersize=6)
+    end
+
+    # Highlight reference bond
+    if ref_orient == :vertical
+        rp2 = ref_pos % _row + 1
+        if rp2 < ref_pos
+            linesegments!(ax, [Float64(ref_col), Float64(ref_col)],
+                          [Float64(ref_pos), Float64(ref_pos) + 0.5],
+                          color=:black, linewidth=4)
+            linesegments!(ax, [Float64(ref_col), Float64(ref_col)],
+                          [Float64(rp2) - 0.5, Float64(rp2)],
+                          color=:black, linewidth=4)
+        else
+            linesegments!(ax, [Float64(ref_col), Float64(ref_col)],
+                          [Float64(ref_pos), Float64(rp2)],
+                          color=:black, linewidth=4)
+        end
+    else
+        linesegments!(ax, [Float64(ref_col), Float64(ref_col + 1)],
+                      [Float64(ref_pos), Float64(ref_pos)],
+                      color=:black, linewidth=4)
+    end
+
+    # Colorbar
+    Colorbar(fig[1, 2], colormap=:RdBu, limits=(-cmax, cmax),
+             label="C_D(ref, bond)")
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        println("Figure saved to: $save_path")
+    end
+
+    return (fig, correlation_data)
+end
+
+# =============================================================================
+# DMRG Structure Factor Heatmaps
+# =============================================================================
+
+"""
+    plot_dmrg_spin_structure_factor(result; nq=50, bulk_fraction=0.5, save_path=nothing)
+
+Brillouin-zone heatmap of spin structure factor S_SS(q) from DMRG ground state.
+
+`result` is the NamedTuple returned by `dmrg_ground_state_2d`.
+"""
+function plot_dmrg_spin_structure_factor(result;
+                                         nq::Int=50,
+                                         max_separation::Int=10,
+                                         J2::Float64=0.0,
+                                         D::Int=2,
+                                         save_path=nothing)
+    qvals = range(0.0, 2Float64(π), length=nq)
+    SSS = zeros(nq, nq)
+
+    Lx = result.Lx
+    Ly = result.Ly
+    N = Lx * Ly
+
+    # Use center 2*max_sep+1 columns as reference region
+    n_bulk_cols = 2 * max_separation + 1
+    center = div(Lx, 2)
+    col_lo = center - max_separation
+    col_hi = center + max_separation
+    col_lo = max(1, col_lo)
+    col_hi = min(Lx, col_hi)
+
+    println("=== DMRG Spin Structure Factor (Lx=$Lx, Ly=$Ly, max_sep=$max_separation) ===")
+    println("  Bulk columns: $col_lo to $col_hi ($(col_hi - col_lo + 1) cols)")
+
+    # Precompute correlation matrix ONCE (the expensive part)
+    println("  Computing correlation matrices...")
+    SdotS = compute_SdotS_matrix(result)
+
+    # site_to_2d: 1D index -> (col, row)
+    coords = Vector{Tuple{Int,Int}}(undef, N)
+    for s in 1:N
+        coords[s] = (div(s - 1, Ly) + 1, mod(s - 1, Ly) + 1)
+    end
+
+    bulk_sites = [s for s in 1:N if col_lo <= coords[s][1] <= col_hi]
+
+    # Precompute dx, dy arrays for bulk site pairs, filtered by max_separation
+    pair_dx = Float64[]
+    pair_dy = Float64[]
+    pair_SS = Float64[]
+    n_ref = 0  # count reference sites (for normalization)
+    for (a, s1) in enumerate(bulk_sites)
+        i1, j1 = coords[s1]
+        n_ref += 1
+        for (b, s2) in enumerate(bulk_sites)
+            i2, j2 = coords[s2]
+            dx = i2 - i1
+            abs(dx) > max_separation && continue
+            push!(pair_dx, dx)
+            push!(pair_dy, j2 - j1)
+            push!(pair_SS, SdotS[s1, s2])
+        end
+    end
+
+    # Fourier transform: S(q) = (1/N_ref) Σ_{pairs} ⟨Si·Sj⟩ cos(q·Δr)
+    println("  Computing Fourier transform on $nq×$nq grid...")
+    for (i, qx) in enumerate(qvals)
+        for (j, qy) in enumerate(qvals)
+            SSS[i, j] = sum(pair_SS .* cos.(qx .* pair_dx .+ qy .* pair_dy)) / n_ref
+        end
+    end
+
+    fig = Figure(size=(700, 600))
+    ax = Axis(fig[1, 1], xlabel="qₓ", ylabel="qᵧ",
+              title="DMRG S_SS(q)  J₂=$J2, D=$D",
+              aspect=DataAspect(),
+              xticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]),
+              yticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]))
+    hm = heatmap!(ax, qvals, qvals, SSS, colormap=:viridis)
+    Colorbar(fig[1, 2], hm, label="S_SS(q)")
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        println("Figure saved to: $save_path")
+    end
+    return (fig, SSS)
+end
+
+"""
+    plot_dmrg_dimer_structure_factor(result; nq=50, bulk_cols=20,
+                                     dimer_orientation=:vertical, save_path=nothing)
+
+Brillouin-zone heatmap of connected dimer structure factor S_D(q) from DMRG ground state.
+
+Precomputes the ⟨D_b D_b'⟩ matrix once (expensive), then Fourier transforms for each q.
+"""
+function plot_dmrg_dimer_structure_factor(result;
+                                          nq::Int=50,
+                                          bulk_cols::Int=20,
+                                          dimer_orientation::Symbol=:vertical,
+                                          save_path=nothing)
+    Lx = result.Lx
+    Ly = result.Ly
+    psi = result.psi
+    sites = result.sites
+
+    println("=== DMRG Dimer Structure Factor (Lx=$Lx, Ly=$Ly, $dimer_orientation) ===")
+
+    # Precompute bonds and correlation data
+    col_lo = max(1, div(Lx - bulk_cols, 2) + 1)
+    col_hi = min(Lx, col_lo + bulk_cols - 1)
+
+    # Use the DMRG correlation function to get precomputed data
+    corr_data = compute_dimer_dimer_correlation_dmrg(result;
+                    dimer_orientation=dimer_orientation, bulk_cols=bulk_cols)
+    bonds = corr_data.bonds
+    D_exp = corr_data.dimer_expectations
+    DD = corr_data.DD_matrix
+    n = length(bonds)
+
+    # Precompute bond center coordinates
+    bond_coords = Vector{Tuple{Float64,Float64}}(undef, n)
+    for bi in 1:n
+        _, _, col, row = bonds[bi]
+        if dimer_orientation == :vertical
+            bond_coords[bi] = (Float64(col), Float64(row) + 0.5)
+        else
+            bond_coords[bi] = (Float64(col) + 0.5, Float64(row))
+        end
+    end
+
+    # Precompute connected correlation matrix
+    C_conn = DD .- D_exp * D_exp'
+
+    println("Fourier transforming over $nq × $nq q-grid...")
+    qvals = range(-Float64(π), Float64(π), length=nq)
+    SD = zeros(nq, nq)
+
+    for (i, qx) in enumerate(qvals)
+        for (j, qy) in enumerate(qvals)
+            val = 0.0
+            for bi in 1:n, bj in 1:n
+                dx = bond_coords[bj][1] - bond_coords[bi][1]
+                dy = bond_coords[bj][2] - bond_coords[bi][2]
+                val += C_conn[bi, bj] * cos(qx * dx + qy * dy)
+            end
+            SD[i, j] = val / n
+        end
+        print("\r  qx $i/$nq")
+    end
+    println()
+
+    fig = Figure(size=(700, 600))
+    ax = Axis(fig[1, 1], xlabel="qₓ", ylabel="qᵧ",
+              title="DMRG Dimer Structure Factor S_D(q) [$dimer_orientation]",
+              aspect=DataAspect())
+    hm = heatmap!(ax, qvals, qvals, SD, colormap=:viridis)
+    Colorbar(fig[1, 2], hm, label="S_D(q)")
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        println("Figure saved to: $save_path")
+    end
+    return (fig, SD)
+end
+
+"""
+    plot_dmrg_plaquette_structure_factor(result; nq=50, bulk_cols=20, save_path=nothing)
+
+Brillouin-zone heatmap of plaquette structure factor S_P(q) from DMRG ground state.
+Uses disconnected approximation (2-point correlators only).
+"""
+function plot_dmrg_plaquette_structure_factor(result;
+                                              nq::Int=50,
+                                              bulk_cols::Int=20,
+                                              save_path=nothing)
+    qvals = range(-Float64(π), Float64(π), length=nq)
+    SP = zeros(nq, nq)
+
+    println("=== DMRG Plaquette Structure Factor (Lx=$(result.Lx), Ly=$(result.Ly)) ===")
+    for (i, qx) in enumerate(qvals)
+        for (j, qy) in enumerate(qvals)
+            SP[i, j] = compute_plaquette_structure_factor_dmrg(result, (qx, qy);
+                            bulk_cols=bulk_cols)
+        end
+        print("\r  qx $i/$nq")
+    end
+    println()
+
+    fig = Figure(size=(700, 600))
+    ax = Axis(fig[1, 1], xlabel="qₓ", ylabel="qᵧ",
+              title="DMRG Plaquette Structure Factor S_P(q) [disconnected]",
+              aspect=DataAspect())
+    hm = heatmap!(ax, qvals, qvals, SP, colormap=:viridis)
+    Colorbar(fig[1, 2], hm, label="S_P(q)")
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        println("Figure saved to: $save_path")
+    end
+    return (fig, SP)
+end
+
+"""
+    plot_dmrg_dimer_bond_pattern(result; bulk_cols=20, ref_bond_idx=1,
+                                 ref_orientation=:vertical, title="", save_path=nothing)
+
+Real-space bond pattern of connected dimer-dimer correlations from DMRG ground state.
+Shows both vertical and horizontal bonds on a single lattice, colored by connected
+correlation C_D(ref, bond) with the reference bond.
+
+- `ref_orientation`: orientation of the reference bond (`:vertical` or `:horizontal`)
+- `ref_bond_idx`: index of the reference bond within bonds of `ref_orientation`
+- `title`: custom figure title (auto-generated if empty)
+"""
+function plot_dmrg_dimer_bond_pattern(result;
+                                      bulk_cols::Int=20,
+                                      ref_bond_idx::Int=1,
+                                      ref_orientation::Symbol=:vertical,
+                                      title::String="",
+                                      save_path=nothing)
+    Lx = result.Lx
+    Ly = result.Ly
+
+    corr_data = compute_dimer_dimer_correlation_dmrg(result;
+                    dimer_orientation=:both, bulk_cols=bulk_cols)
+    bonds = corr_data.bonds
+    orientations = corr_data.orientations
+    D_exp = corr_data.dimer_expectations
+    DD = corr_data.DD_matrix
+    n = length(bonds)
+
+    # Find the reference bond
+    orient_indices = findall(o -> o == ref_orientation, orientations)
+    ref = orient_indices[clamp(ref_bond_idx, 1, length(orient_indices))]
+
+    # Connected correlations relative to reference bond
+    C_ref = Float64[DD[ref, bj] - D_exp[ref] * D_exp[bj] for bj in 1:n]
+    cmax = max(maximum(abs, C_ref), 1e-10)
+
+    # Determine plot bounds
+    col_min = minimum(b[3] for b in bonds)
+    col_max = maximum(b[3] for b in bonds)
+    if any(o == :horizontal for o in orientations)
+        h_col_max = maximum(bonds[i][3] for i in 1:n if orientations[i] == :horizontal)
+        col_max = max(col_max, h_col_max + 1)
+    end
+
+    fig = Figure(size=(max(800, (col_max - col_min + 1) * 60), max(400, Ly * 100 + 100)))
+    ref_col, ref_row = bonds[ref][3], bonds[ref][4]
+    plot_title = isempty(title) ?
+        "DMRG Dimer Correlation (ref: $ref_orientation, pos=$ref_row, col=$ref_col)" :
+        title
+    ax = Axis(fig[1, 1],
+              xlabel="Column", ylabel="Row",
+              title=plot_title,
+              aspect=DataAspect(),
+              yticks=1:Ly)
+
+    # Draw all bonds (both vertical and horizontal)
+    for bi in 1:n
+        _, _, col, row = bonds[bi]
+        val = C_ref[bi]
+        c_norm = val / cmax
+        lw = 1.0 + 4.0 * abs(val) / cmax
+
+        if orientations[bi] == :vertical
+            row2 = row % Ly + 1
+            if row2 < row
+                linesegments!(ax, [Float64(col), Float64(col)],
+                              [Float64(row), Float64(row) + 0.5],
+                              color=[c_norm, c_norm], colorrange=(-1, 1),
+                              colormap=:RdBu, linewidth=lw)
+                linesegments!(ax, [Float64(col), Float64(col)],
+                              [Float64(row2) - 0.5, Float64(row2)],
+                              color=[c_norm, c_norm], colorrange=(-1, 1),
+                              colormap=:RdBu, linewidth=lw)
+            else
+                linesegments!(ax, [Float64(col), Float64(col)],
+                              [Float64(row), Float64(row2)],
+                              color=[c_norm, c_norm], colorrange=(-1, 1),
+                              colormap=:RdBu, linewidth=lw)
+            end
+        else
+            linesegments!(ax, [Float64(col), Float64(col + 1)],
+                          [Float64(row), Float64(row)],
+                          color=[c_norm, c_norm], colorrange=(-1, 1),
+                          colormap=:RdBu, linewidth=lw)
+        end
+    end
+
+    # Highlight reference bond
+    _, _, rc, rr = bonds[ref]
+    if ref_orientation == :vertical
+        rr2 = rr % Ly + 1
+        if rr2 < rr
+            linesegments!(ax, [Float64(rc), Float64(rc)],
+                          [Float64(rr), Float64(rr) + 0.5],
+                          color=:black, linewidth=4)
+            linesegments!(ax, [Float64(rc), Float64(rc)],
+                          [Float64(rr2) - 0.5, Float64(rr2)],
+                          color=:black, linewidth=4)
+        else
+            linesegments!(ax, [Float64(rc), Float64(rc)],
+                          [Float64(rr), Float64(rr2)],
+                          color=:black, linewidth=4)
+        end
+    else
+        linesegments!(ax, [Float64(rc), Float64(rc + 1)],
+                      [Float64(rr), Float64(rr)],
+                      color=:black, linewidth=4)
+    end
+
+    # Draw sites
+    for col in col_min:col_max, row in 1:Ly
+        scatter!(ax, [Float64(col)], [Float64(row)], color=:gray40, markersize=6)
+    end
+
+    Colorbar(fig[1, 2], colormap=:RdBu, limits=(-cmax, cmax),
+             label="C_D(ref, bond)")
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        println("Figure saved to: $save_path")
+    end
+    return (fig, corr_data)
 end
 

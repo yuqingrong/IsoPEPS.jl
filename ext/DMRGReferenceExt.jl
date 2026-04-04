@@ -367,6 +367,20 @@ function IsoPEPS.compute_spin_spin_correlation_dmrg(result; connected::Bool=fals
 end
 
 """
+    compute_SdotS_matrix(result)
+
+Precompute the full ⟨S_i · S_j⟩ correlation matrix from a DMRG result.
+Returns a real N×N matrix where N = Lx * Ly.
+"""
+function IsoPEPS.compute_SdotS_matrix(result)
+    psi = result.psi
+    Cpm = correlation_matrix(psi, "S+", "S-"; ishermitian=false)
+    Cmp = correlation_matrix(psi, "S-", "S+"; ishermitian=false)
+    Czz = correlation_matrix(psi, "Sz", "Sz"; ishermitian=false)
+    return real.(Cpm .+ Cmp) ./ 2 .+ real.(Czz)
+end
+
+"""
     compute_structure_factor_dmrg(result, q::Tuple{Real,Real}; bulk_fraction=0.5)
 
 Compute the spin structure factor S(q) = (1/N_bulk) Σ_{i,j ∈ bulk} ⟨S_i · S_j⟩ exp(iq·(r_i - r_j)).
@@ -579,6 +593,373 @@ function IsoPEPS.load_dmrg_state(filename::String)
 
     return (energy=energy, energy_per_site=energy_per_site,
             psi=psi, sites=sites, H=H, Lx=Lx, Ly=Ly, model=model)
+end
+
+# =============================================================================
+# Helpers for dimer/plaquette structure factors
+# =============================================================================
+
+"""
+    _bulk_col_range(Lx, bulk_cols)
+
+Return the column range (lo, hi) for the middle `bulk_cols` columns of a cylinder
+with `Lx` columns. Clamps to [1, Lx].
+"""
+function _bulk_col_range(Lx::Int, bulk_cols::Int)
+    bulk_cols = min(bulk_cols, Lx)
+    margin = div(Lx - bulk_cols, 2)
+    col_lo = max(1, margin + 1)
+    col_hi = min(Lx, col_lo + bulk_cols - 1)
+    return col_lo, col_hi
+end
+
+"""
+    _bond_list(Lx, Ly, orientation, col_lo, col_hi)
+
+Return a vector of `(site_i, site_j, col, row)` tuples for all bonds of the
+given orientation within columns `col_lo:col_hi`.
+
+Bond center coordinates: vertical at (col, row+0.5), horizontal at (col+0.5, row).
+"""
+function _bond_list(Lx::Int, Ly::Int, orientation::Symbol, col_lo::Int, col_hi::Int)
+    bonds = Tuple{Int,Int,Int,Int}[]  # (site_i, site_j, col, row)
+    if orientation == :vertical
+        for col in col_lo:col_hi, row in 1:Ly
+            row2 = row % Ly + 1
+            si = (col - 1) * Ly + row
+            sj = (col - 1) * Ly + row2
+            push!(bonds, (si, sj, col, row))
+        end
+    elseif orientation == :horizontal
+        for col in col_lo:(col_hi - 1), row in 1:Ly
+            si = (col - 1) * Ly + row
+            sj = col * Ly + row
+            push!(bonds, (si, sj, col, row))
+        end
+    else
+        error("orientation must be :vertical or :horizontal, got $orientation")
+    end
+    return bonds
+end
+
+"""
+    _four_point_inner(psi, sites, op_pairs)
+
+Compute ⟨ψ| O₁(s₁) O₂(s₂) O₃(s₃) O₄(s₄) |ψ⟩ using ITensors inner().
+
+`op_pairs` is a vector of (operator_name::String, site_index::Int) tuples,
+sorted by site index (ascending). All site indices must be distinct.
+"""
+function _four_point_inner(psi, sites, op_pairs::Vector{Tuple{String,Int}})
+    # Sort by site index
+    sorted_ops = sort(op_pairs, by=x -> x[2])
+
+    # Build the operator product as an MPO-like object
+    psi_copy = copy(psi)
+    for (op_name, si) in sorted_ops
+        O = ITensors.op(op_name, sites[si])
+        psi_copy[si] = noprime(O * psi_copy[si])
+    end
+    return real(inner(psi, psi_copy))
+end
+
+"""
+    _compute_dimer_expectations(psi, sites, Lx, Ly, bonds)
+
+Compute ⟨D_b⟩ = Σ_α ⟨σ^α_i σ^α_j⟩ / 4 for each bond using correlation_matrix.
+Returns a vector of Float64 dimer expectations, one per bond.
+"""
+function _compute_dimer_expectations(psi, sites, Lx::Int, Ly::Int,
+                                      bonds::Vector{Tuple{Int,Int,Int,Int}})
+    # Get full correlation matrices
+    Cpm = correlation_matrix(psi, "S+", "S-"; ishermitian=false)
+    Cmp = correlation_matrix(psi, "S-", "S+"; ishermitian=false)
+    Czz = correlation_matrix(psi, "Sz", "Sz"; ishermitian=false)
+    # S·S = (S+S- + S-S+)/2 + SzSz
+    SdotS = real.(Cpm .+ Cmp) ./ 2 .+ real.(Czz)
+
+    dimer_exp = Float64[]
+    for (si, sj, _, _) in bonds
+        push!(dimer_exp, SdotS[si, sj])
+    end
+    return dimer_exp
+end
+
+"""
+    _compute_dimer_dimer_matrix(psi, sites, bonds)
+
+Compute the full ⟨D_b D_b'⟩ matrix for all bond pairs using 4-point MPS contractions.
+Returns a symmetric Matrix{Float64} of size (n_bonds, n_bonds).
+
+D_b D_b' = (Σ_α σ^α_i σ^α_j)(Σ_β σ^β_k σ^β_l) / 16
+"""
+function _compute_dimer_dimer_matrix(psi, sites,
+                                      bonds::Vector{Tuple{Int,Int,Int,Int}})
+    n = length(bonds)
+    DD = zeros(Float64, n, n)
+    pauli_ops = ["Sx", "Sy", "Sz"]
+    total_pairs = div(n * (n + 1), 2)
+    count = 0
+
+    for bi in 1:n, bj in bi:n
+        si1, sj1, _, _ = bonds[bi]
+        si2, sj2, _, _ = bonds[bj]
+
+        val = 0.0
+        for α in pauli_ops, β in pauli_ops
+            # Sites involved: si1, sj1, si2, sj2
+            # They may overlap (e.g., same bond or adjacent bonds sharing a site)
+            all_sites = sort(unique([si1, sj1, si2, sj2]))
+
+            if length(all_sites) == 4
+                # All 4 sites distinct: standard 4-point
+                ops = [(α, si1), (α, sj1), (β, si2), (β, sj2)]
+                val += _four_point_inner(psi, sites, ops)
+            elseif length(all_sites) == 3
+                # One site shared: 3-point with combined operator on shared site
+                # Build operator assignments per site
+                site_ops = Dict{Int, Vector{String}}()
+                for (op_name, s) in [(α, si1), (α, sj1), (β, si2), (β, sj2)]
+                    if !haskey(site_ops, s)
+                        site_ops[s] = String[]
+                    end
+                    push!(site_ops[s], op_name)
+                end
+                # For the shared site, multiply operators
+                psi_copy = copy(psi)
+                for s in sort(collect(keys(site_ops)))
+                    ops_at_s = site_ops[s]
+                    if length(ops_at_s) == 1
+                        O = ITensors.op(ops_at_s[1], sites[s])
+                    else
+                        O = ITensors.op(ops_at_s[1], sites[s]) * ITensors.op(ops_at_s[2], sites[s])
+                        O = mapprime(O, 2 => 1)
+                    end
+                    psi_copy[s] = noprime(O * psi_copy[s])
+                end
+                val += real(inner(psi, psi_copy))
+            elseif length(all_sites) == 2
+                # Same bond or reversed: 2-point with squared operators
+                site_ops = Dict{Int, Vector{String}}()
+                for (op_name, s) in [(α, si1), (α, sj1), (β, si2), (β, sj2)]
+                    if !haskey(site_ops, s)
+                        site_ops[s] = String[]
+                    end
+                    push!(site_ops[s], op_name)
+                end
+                psi_copy = copy(psi)
+                for s in sort(collect(keys(site_ops)))
+                    ops_at_s = site_ops[s]
+                    if length(ops_at_s) == 1
+                        O = ITensors.op(ops_at_s[1], sites[s])
+                    else
+                        O = ITensors.op(ops_at_s[1], sites[s]) * ITensors.op(ops_at_s[2], sites[s])
+                        O = mapprime(O, 2 => 1)
+                    end
+                    psi_copy[s] = noprime(O * psi_copy[s])
+                end
+                val += real(inner(psi, psi_copy))
+            end
+        end
+        DD[bi, bj] = val / 16.0
+        DD[bj, bi] = DD[bi, bj]
+
+        count += 1
+        if count % 1000 == 0
+            print("\r  bond pairs: $count/$total_pairs")
+        end
+    end
+    if total_pairs >= 1000
+        println()
+    end
+    return DD
+end
+
+# =============================================================================
+# Dimer structure factor (DMRG)
+# =============================================================================
+
+"""
+    compute_dimer_structure_factor_dmrg(result, q; bulk_cols=20, dimer_orientation=:vertical)
+
+Connected dimer structure factor from DMRG ground state using 4-point MPS contractions.
+
+S_D(q) = (1/N_b) Σ_{b,b'} [⟨D_b D_b'⟩ - ⟨D_b⟩⟨D_b'⟩] cos(q·(r_b - r_b'))
+
+Only bonds in `bulk_cols` columns centered in the cylinder are included.
+"""
+function IsoPEPS.compute_dimer_structure_factor_dmrg(result, q::Tuple{Real,Real};
+                                                      bulk_cols::Int=20,
+                                                      dimer_orientation::Symbol=:vertical)
+    psi = result.psi
+    Lx = result.Lx
+    Ly = result.Ly
+    sites = result.sites
+
+    col_lo, col_hi = _bulk_col_range(Lx, bulk_cols)
+    bonds = _bond_list(Lx, Ly, dimer_orientation, col_lo, col_hi)
+    n = length(bonds)
+
+    println("Computing dimer structure factor: $(length(bonds)) $dimer_orientation bonds in cols $col_lo:$col_hi")
+
+    # Dimer expectations ⟨D_b⟩
+    D_exp = _compute_dimer_expectations(psi, sites, Lx, Ly, bonds)
+
+    # Dimer-dimer matrix ⟨D_b D_b'⟩
+    DD = _compute_dimer_dimer_matrix(psi, sites, bonds)
+
+    # Connected correlations and Fourier transform
+    qx, qy = Float64(q[1]), Float64(q[2])
+    SD = 0.0
+    for bi in 1:n, bj in 1:n
+        _, _, col_i, row_i = bonds[bi]
+        _, _, col_j, row_j = bonds[bj]
+        if dimer_orientation == :vertical
+            dx = col_j - col_i
+            dy = (row_j + 0.5) - (row_i + 0.5)  # bond center offset
+        else
+            dx = (col_j + 0.5) - (col_i + 0.5)
+            dy = row_j - row_i
+        end
+        C_conn = DD[bi, bj] - D_exp[bi] * D_exp[bj]
+        SD += C_conn * cos(qx * dx + qy * dy)
+    end
+    return SD / n
+end
+
+# =============================================================================
+# Plaquette structure factor (DMRG) — disconnected approximation
+# =============================================================================
+
+"""
+    compute_plaquette_structure_factor_dmrg(result, q; bulk_cols=20)
+
+Disconnected plaquette structure factor from DMRG ground state.
+
+Q_□ = Σ_{bonds in □} S_i · S_j / 4 (sum of 4 bond operators around a plaquette).
+
+Uses 2-point correlators only (disconnected approximation):
+S_P(q) = (1/N_p) Σ_{□,□'} [⟨Q_□⟩⟨Q_□'⟩ - μ_Q²] cos(q·Δr)
+"""
+function IsoPEPS.compute_plaquette_structure_factor_dmrg(result, q::Tuple{Real,Real};
+                                                          bulk_cols::Int=20)
+    psi = result.psi
+    Lx = result.Lx
+    Ly = result.Ly
+    sites = result.sites
+
+    col_lo, col_hi = _bulk_col_range(Lx, bulk_cols)
+
+    # Get S·S correlation matrix
+    Cpm = correlation_matrix(psi, "S+", "S-"; ishermitian=false)
+    Cmp = correlation_matrix(psi, "S-", "S+"; ishermitian=false)
+    Czz = correlation_matrix(psi, "Sz", "Sz"; ishermitian=false)
+    SdotS = real.(Cpm .+ Cmp) ./ 2 .+ real.(Czz)
+
+    # Compute plaquette expectation for each plaquette in bulk
+    # Plaquette at (col, row) has corners: (col,row), (col,row2), (col+1,row2), (col+1,row)
+    plaquettes = Tuple{Float64,Int,Int}[]  # (Q_value, col, row)
+    for col in col_lo:(col_hi - 1), row in 1:Ly
+        row2 = row % Ly + 1
+        tl = (col - 1) * Ly + row      # top-left
+        bl = (col - 1) * Ly + row2     # bottom-left
+        tr = col * Ly + row             # top-right
+        br = col * Ly + row2            # bottom-right
+        Q = (SdotS[tl, bl] + SdotS[bl, br] + SdotS[br, tr] + SdotS[tr, tl]) / 4.0
+        push!(plaquettes, (Q, col, row))
+    end
+
+    n = length(plaquettes)
+    if n == 0
+        return 0.0
+    end
+
+    μ_Q = Statistics.mean(p[1] for p in plaquettes)
+    qx, qy = Float64(q[1]), Float64(q[2])
+
+    SP = 0.0
+    for pi in 1:n, pj in 1:n
+        Q_i, col_i, row_i = plaquettes[pi]
+        Q_j, col_j, row_j = plaquettes[pj]
+        dx = (col_j + 0.5) - (col_i + 0.5)
+        dy = (row_j + 0.5) - (row_i + 0.5)
+        SP += (Q_i * Q_j - μ_Q^2) * cos(qx * dx + qy * dy)
+    end
+    return SP / n
+end
+
+# =============================================================================
+# Dimer-dimer correlation (DMRG)
+# =============================================================================
+
+"""
+    compute_dimer_dimer_correlation_dmrg(result; dimer_orientation=:vertical, bulk_cols=20)
+
+Compute dimer-dimer correlations from DMRG ground state.
+
+`dimer_orientation` can be `:vertical`, `:horizontal`, or `:both`.
+
+Returns a NamedTuple:
+- `distances`: sorted unique 2D distances between bond centers
+- `correlations`: distance-averaged connected dimer-dimer correlations
+- `dimer_expectations`: ⟨D_b⟩ for each bond
+- `bonds`: list of (site_i, site_j, col, row) bond tuples
+- `DD_matrix`: full ⟨D_b D_b'⟩ matrix
+- `orientations`: Vector{Symbol} indicating each bond's orientation (only present when `dimer_orientation=:both`)
+"""
+function IsoPEPS.compute_dimer_dimer_correlation_dmrg(result;
+                                                       dimer_orientation::Symbol=:vertical,
+                                                       bulk_cols::Int=20)
+    psi = result.psi
+    Lx = result.Lx
+    Ly = result.Ly
+    sites = result.sites
+
+    col_lo, col_hi = _bulk_col_range(Lx, bulk_cols)
+
+    if dimer_orientation == :both
+        bonds_v = _bond_list(Lx, Ly, :vertical, col_lo, col_hi)
+        bonds_h = _bond_list(Lx, Ly, :horizontal, col_lo, col_hi)
+        bonds = vcat(bonds_v, bonds_h)
+        orientations = vcat(fill(:vertical, length(bonds_v)),
+                            fill(:horizontal, length(bonds_h)))
+    else
+        bonds = _bond_list(Lx, Ly, dimer_orientation, col_lo, col_hi)
+        orientations = fill(dimer_orientation, length(bonds))
+    end
+    n = length(bonds)
+
+    println("Computing dimer-dimer correlations: $n bonds ($dimer_orientation) in cols $col_lo:$col_hi")
+
+    D_exp = _compute_dimer_expectations(psi, sites, Lx, Ly, bonds)
+    DD = _compute_dimer_dimer_matrix(psi, sites, bonds)
+
+    # Map to distances and average
+    dist_corr = Dict{Float64, Vector{Float64}}()
+    for bi in 1:n, bj in (bi + 1):n
+        _, _, col_i, row_i = bonds[bi]
+        _, _, col_j, row_j = bonds[bj]
+        dx = Float64(col_j - col_i)
+        dy = Float64(row_j - row_i)
+        # Periodic y distance
+        dy_abs = abs(dy)
+        dy_min = min(dy_abs, Ly - dy_abs)
+        d = sqrt(dx^2 + dy_min^2)
+        d_key = round(d, digits=6)
+
+        C_conn = DD[bi, bj] - D_exp[bi] * D_exp[bj]
+        if !haskey(dist_corr, d_key)
+            dist_corr[d_key] = Float64[]
+        end
+        push!(dist_corr[d_key], C_conn)
+    end
+
+    sorted_dists = sort(collect(keys(dist_corr)))
+    avg_corr = [Statistics.mean(dist_corr[d]) for d in sorted_dists]
+
+    return (distances=sorted_dists, correlations=avg_corr,
+            dimer_expectations=D_exp, bonds=bonds, DD_matrix=DD,
+            orientations=orientations)
 end
 
 end # module DMRGReferenceExt

@@ -836,26 +836,28 @@ function spin_spin_structure_factor(op::TransferOperator, q::Tuple{Real,Real};
         end
     end
 
+    # Standard convention: S(q) = (1/N_uc) Σ_{i∈uc} Σ_j ⟨Si Sj⟩ e^{iq·(ri-rj)}
     N_uc = row * N_cols
-    N_norm = N_uc^2 * (2 * max_separation + 1)
-    return S / N_norm
+    return S / N_uc
 end
 
 """
     magnetic_order_squared(op::TransferOperator, q::Tuple{Real,Real};
                            max_separation::Int=20, optimizer=GreedyMethod())
 
-Exact magnetic order parameter squared M²(q) via transfer matrix contraction.
+Exact magnetic order parameter squared M²(q) = S_SS(q) / N_eff via transfer matrix.
 
-Equivalent to `spin_spin_structure_factor(op, q)`, providing a unified interface
-with the sampling-based `magnetic_order_squared` dispatch.
+Returns M²(q) = (1/N²) Σ_{i,j} ⟨Sᵢ·Sⱼ⟩ e^{iq·(rᵢ-rⱼ)}, where N_eff = N_uc × (2·max_sep + 1).
 
 Common choices: q = (π,π) Néel, q = (π,0) stripe.
 """
 function magnetic_order_squared(op::TransferOperator, q::Tuple{Real,Real};
                                 max_separation::Int=20,
                                 optimizer=GreedyMethod())
-    return spin_spin_structure_factor(op, q; max_separation=max_separation, optimizer=optimizer)
+    S = spin_spin_structure_factor(op, q; max_separation=max_separation, optimizer=optimizer)
+    N_uc = op.row * length(op.columns)
+    N_eff = N_uc * (2 * max_separation + 1)
+    return S / N_eff
 end
 
 """

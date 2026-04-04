@@ -395,3 +395,25 @@ ax = Axis(fig[1, 1],
     println("M² plot saved to $fig_path")
 
 
+# 1. Run DMRG to get the ground state                     
+result = dmrg_ground_state_2d(200, 4;
+    model="heisenberg_j1j2",
+    J1=1.0, J2=0.5,
+    nsweeps=20, maxdim=2
+)
+
+# 2. Plot the spin structure factor heatmap
+fig, SSS = plot_dmrg_spin_structure_factor(result;
+nq=50,              # resolution in BZ
+max_separation=10,  # use middle 50% of cylinder to avoid edges
+save_path="project/results/figures/spin_SF_heatmap.pdf"
+)
+
+
+# real space dimer-dimer bond pattern (vertical ref + horizontal ref side by side)
+fig, corr_data = plot_dmrg_dimer_bond_pattern(result;
+bulk_cols=20,
+ref_bond_idx=1,
+title="DMRG Dimer Correlation (J₂=0.5, D=2)",
+save_path="project/results/figures/dmrg_dimer_bond.pdf"
+)
