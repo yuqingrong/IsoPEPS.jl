@@ -2415,15 +2415,42 @@ function plot_dimer_structure_factor(filename::String;
             op = TransferOperator(gates, _row, _nqubits)
         end
 
+        # Precompute all correlations once
+        println("Precomputing dimer-dimer correlations...")
+        seps = 0:max_separation
+        corr_cache = Dict{Tuple{Int,Int}, Dict{Int,ComplexF64}}()
+        for pos1 in 1:_row
+            # Same-position (connected)
+            corr_cache[(pos1, pos1)] = dimer_dimer_correlation(op, seps;
+                dimer_orientation=dimer_orientation, pos=pos1, connected=true)
+            # Cross-position
+            for pos2 in 1:_row
+                pos1 == pos2 && continue
+                corr_cache[(pos1, pos2)] = _dimer_cross_correlation(op, seps,
+                    dimer_orientation, pos1, pos2)
+            end
+            print("\r  pos $pos1/$_row")
+        end
+        println("\nFourier transforming over $nq × $nq q-grid...")
+
+        N_d = _row * (2 * max_separation + 1)
         for (i, qx) in enumerate(qvals)
             for (j, qy) in enumerate(qvals)
-                SD[i, j] = dimer_structure_factor(op, (qx, qy);
-                                dimer_orientation=dimer_orientation,
-                                max_separation=max_separation)
+                val = 0.0
+                for pos1 in 1:_row, pos2 in 1:_row
+                    Δp = pos2 - pos1
+                    corrs = corr_cache[(pos1, pos2)]
+                    for (Δc, cval) in corrs
+                        if Δc == 0
+                            val += cos(qy * Δp) * real(cval)
+                        else
+                            val += 2.0 * cos(qx * Δc + qy * Δp) * real(cval)
+                        end
+                    end
+                end
+                SD[i, j] = val / N_d
             end
-            print("\r  qx $i/$nq")
         end
-        println()
     else
         resample_result = resample_circuit(filename; conv_step=conv_step,
                                             samples=samples, measure_y=true)
@@ -2433,15 +2460,73 @@ function plot_dimer_structure_factor(filename::String;
         X_vec = X_samples[conv_step+1:end]
         Y_vec = Y_samples[conv_step+1:end]
 
+        # Precompute dimer values matrix once
+        println("Precomputing dimer values from samples...")
+        all_samples = (X_vec, Y_vec, Z_vec)
+        ncols = length(Z_vec) ÷ _row
+
+        if dimer_orientation == :vertical
+            dimer_vals = zeros(_row, ncols)
+            for S in all_samples
+                for c in 1:ncols, pos in 1:_row
+                    pos2 = pos % _row + 1
+                    i1 = _row * (c - 1) + pos
+                    i2 = _row * (c - 1) + pos2
+                    dimer_vals[pos, c] += S[i1] * S[i2] / 4.0
+                end
+            end
+            n_cols_d = ncols
+        else  # :horizontal
+            dimer_vals = zeros(_row, ncols - 1)
+            for S in all_samples
+                for c in 1:(ncols - 1), pos in 1:_row
+                    i1 = _row * (c - 1) + pos
+                    i2 = _row * c + pos
+                    dimer_vals[pos, c] += S[i1] * S[i2] / 4.0
+                end
+            end
+            n_cols_d = ncols - 1
+        end
+
+        max_sep = min(max_separation, n_cols_d - 1)
+        n_pos = _row
+        μ = vec(mean(dimer_vals, dims=2))
+
+        # Precompute correlation tables
+        println("Precomputing correlation tables...")
+        # corr0[p1, p2] = mean over c of dimer_vals[p1,c]*dimer_vals[p2,c]
+        corr0 = zeros(n_pos, n_pos)
+        for p1 in 1:n_pos, p2 in 1:n_pos
+            corr0[p1, p2] = mean(dimer_vals[p1, c] * dimer_vals[p2, c] for c in 1:n_cols_d)
+        end
+        # corr_dc[Δc][p1, p2]
+        corr_dc = Vector{Matrix{Float64}}(undef, max_sep)
+        for Δc in 1:max_sep
+            m = zeros(n_pos, n_pos)
+            for p1 in 1:n_pos, p2 in 1:n_pos
+                m[p1, p2] = mean(dimer_vals[p1, c] * dimer_vals[p2, c + Δc] for c in 1:(n_cols_d - Δc))
+            end
+            corr_dc[Δc] = m
+        end
+
+        println("Fourier transforming over $nq × $nq q-grid...")
+        N_d = n_pos * (2 * max_sep + 1)
         for (i, qx) in enumerate(qvals)
             for (j, qy) in enumerate(qvals)
-                SD[i, j] = dimer_structure_factor(X_vec, Z_vec, Y_vec, _row, (qx, qy);
-                                dimer_orientation=dimer_orientation,
-                                max_separation=max_separation)
+                val = 0.0
+                for p1 in 1:n_pos, p2 in 1:n_pos
+                    Δp = p2 - p1
+                    val += cos(qy * Δp) * (corr0[p1, p2] - μ[p1] * μ[p2])
+                end
+                for Δc in 1:max_sep
+                    for p1 in 1:n_pos, p2 in 1:n_pos
+                        Δp = p2 - p1
+                        val += 2.0 * cos(qx * Δc + qy * Δp) * (corr_dc[Δc][p1, p2] - μ[p1] * μ[p2])
+                    end
+                end
+                SD[i, j] = val / N_d
             end
-            print("\r  qx $i/$nq")
         end
-        println()
     end
 
     # --- Plot ---

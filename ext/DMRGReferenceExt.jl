@@ -691,7 +691,7 @@ end
 Compute the full ⟨D_b D_b'⟩ matrix for all bond pairs using 4-point MPS contractions.
 Returns a symmetric Matrix{Float64} of size (n_bonds, n_bonds).
 
-D_b D_b' = (Σ_α σ^α_i σ^α_j)(Σ_β σ^β_k σ^β_l) / 16
+D_b D_b' = (Σ_α S^α_i S^α_j)(Σ_β S^β_k S^β_l)  [ITensors S ops = σ/2]
 """
 function _compute_dimer_dimer_matrix(psi, sites,
                                       bonds::Vector{Tuple{Int,Int,Int,Int}})
@@ -761,7 +761,7 @@ function _compute_dimer_dimer_matrix(psi, sites,
                 val += real(inner(psi, psi_copy))
             end
         end
-        DD[bi, bj] = val / 16.0
+        DD[bi, bj] = val
         DD[bj, bi] = DD[bi, bj]
 
         count += 1

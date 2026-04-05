@@ -1029,8 +1029,7 @@ plot_energy_error_vs_g("project/results", [0.0, 0.1,0.2, 0.3, 0.4, 0.5];
       J1=1.0, row=4, p=3, nqubits=3,                        
       dmrg_file="project/results/dmrg_j1j2_100x4_D=2.json",save_path="project/results/figures/heisenberg_energy_vs_j2.pdf")
 
-plot_energy_error_vs_g(data_dir, [0.0,0.3,0.5,1.0]; pepskit_file=referfile, dmrg_file=joinpath(data_dir,"dmrg_tfim_100x4_D=2.json"), save_path="project/results/figures/energy_error_vs_g.pdf")
-
+ 
 plot_correlation_vs_g(data_dir, [0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0];dmrg_file=joinpath(data_dir,"dmrg_tfim_100x3.json"),pepskit_file=referfile, g_c=3.04,
 save_path="project/results/figures/corr_length_vs_g.pdf")
 
