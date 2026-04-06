@@ -2415,36 +2415,145 @@ function plot_dimer_structure_factor(filename::String;
             op = TransferOperator(gates, _row, _nqubits)
         end
 
-        # Precompute all correlations once
-        println("Precomputing dimer-dimer correlations...")
-        seps = 0:max_separation
-        corr_cache = Dict{Tuple{Int,Int}, Dict{Int,ComplexF64}}()
-        for pos1 in 1:_row
-            # Same-position (connected)
-            corr_cache[(pos1, pos1)] = dimer_dimer_correlation(op, seps;
-                dimer_orientation=dimer_orientation, pos=pos1, connected=true)
-            # Cross-position
-            for pos2 in 1:_row
-                pos1 == pos2 && continue
-                corr_cache[(pos1, pos2)] = _dimer_cross_correlation(op, seps,
-                    dimer_orientation, pos1, pos2)
+        N_uc = length(op.columns)  # columns per unit cell (1 or 2)
+        row = op.row
+        vq  = op.virtual_qubits
+        paulis = [_resolve_op(:X), _resolve_op(:Y), _resolve_op(:Z)]
+
+        T_cols = _column_transfer_matrices(op)
+        T_combined = reduce(*, T_cols)
+        l_vec, r_vec, nf, _ = _fixed_points(T_combined)
+
+        # Build per-(col, pos) single-column dimer TMs and full-period dimer TMs
+        println("Building dimer transfer matrices (N_uc=$N_uc)...")
+        T_D_col_map  = Dict{Tuple{Int,Int}, Matrix{ComplexF64}}()
+        T_D_period_map = Dict{Tuple{Int,Int}, Matrix{ComplexF64}}()
+        μ_map = Dict{Tuple{Int,Int}, ComplexF64}()
+
+        for κ in 1:N_uc, pos in 1:_row
+            pos2 = pos % row + 1
+            T_D_κ = zeros(ComplexF64, size(T_cols[1]))
+            for σ in paulis
+                E = get_transfer_matrix_with_operator(
+                    op.columns[κ], row, vq, Dict(pos => σ, pos2 => σ);
+                    optimizer=GreedyMethod())
+                T_D_κ .+= E
             end
-            print("\r  pos $pos1/$_row")
+            T_D_κ ./= 4.0
+            T_D_col_map[(κ, pos)] = T_D_κ
+
+            T_before = κ > 1 ? reduce(*, T_cols[1:κ-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+            T_after  = κ < N_uc ? reduce(*, T_cols[κ+1:N_uc]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+            T_D = T_before * T_D_κ * T_after
+            T_D_period_map[(κ, pos)] = T_D
+            μ_map[(κ, pos)] = dot(l_vec, T_D * r_vec) / nf
+        end
+
+        # Subtract global mean squared to preserve VBS signal
+        # (bond-specific μ1*μ2 removes the alternation between unit cell columns)
+        D_avg = real(Statistics.mean(collect(values(μ_map))))
+        D_avg_sq = D_avg^2
+
+        # Precompute correlations: corr_cache[(κ1,p1,κ2,p2)][m] = ⟨DD⟩ - D_avg²
+        println("Precomputing dimer-dimer correlations...")
+        corr_cache = Dict{NTuple{4,Int}, Dict{Int,ComplexF64}}()
+
+        for κ1 in 1:N_uc, pos1 in 1:_row, κ2 in 1:N_uc, pos2 in 1:_row
+            corrs = Dict{Int, ComplexF64}()
+            pos1b = pos1 % row + 1
+            pos2b = pos2 % row + 1
+
+            # --- sep=0 (same period): build combined single-period TM ---
+            if κ1 == κ2 && pos1 == pos2
+                # ⟨D²⟩ at same bond: 4-operator insertion
+                val0 = zero(ComplexF64)
+                T_b = κ1 > 1 ? reduce(*, T_cols[1:κ1-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+                T_a = κ1 < N_uc ? reduce(*, T_cols[κ1+1:N_uc]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+                for σa in paulis, σb in paulis
+                    O_p  = σa * σb
+                    O_p2 = σa * σb
+                    E = get_transfer_matrix_with_operator(
+                        op.columns[κ1], row, vq, Dict(pos1 => O_p, pos1b => O_p2);
+                        optimizer=GreedyMethod())
+                    val0 += dot(l_vec, T_b * E * T_a * r_vec) / nf
+                end
+                corrs[0] = val0 / 16.0 - D_avg_sq
+
+            elseif κ1 == κ2
+                # Same column, different positions: 4-operator single-column insertion
+                val0 = zero(ComplexF64)
+                T_b = κ1 > 1 ? reduce(*, T_cols[1:κ1-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+                T_a = κ1 < N_uc ? reduce(*, T_cols[κ1+1:N_uc]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+                for σa in paulis, σb in paulis
+                    ops = Dict{Int, Matrix{ComplexF64}}()
+                    for (p, op_mat) in [(pos1, σa), (pos1b, σa), (pos2, σb), (pos2b, σb)]
+                        if haskey(ops, p)
+                            ops[p] = ops[p] * op_mat
+                        else
+                            ops[p] = copy(op_mat)
+                        end
+                    end
+                    E = get_transfer_matrix_with_operator(
+                        op.columns[κ1], row, vq, ops; optimizer=GreedyMethod())
+                    val0 += dot(l_vec, T_b * E * T_a * r_vec) / nf
+                end
+                corrs[0] = val0 / 16.0 - D_avg_sq
+
+            else
+                # Different columns in same period: compose single-column dimer TMs
+                lo, hi = minmax(κ1, κ2)
+                T_b = lo > 1 ? reduce(*, T_cols[1:lo-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+                T_mid = hi > lo + 1 ? reduce(*, T_cols[lo+1:hi-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+                T_a = hi < N_uc ? reduce(*, T_cols[hi+1:N_uc]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+                if κ1 < κ2
+                    T_DD = T_b * T_D_col_map[(κ1, pos1)] * T_mid * T_D_col_map[(κ2, pos2)] * T_a
+                else
+                    T_DD = T_b * T_D_col_map[(κ2, pos2)] * T_mid * T_D_col_map[(κ1, pos1)] * T_a
+                end
+                corrs[0] = dot(l_vec, T_DD * r_vec) / nf - D_avg_sq
+            end
+
+            # --- sep >= 1 (different periods) ---
+            T_D1 = T_D_period_map[(κ1, pos1)]
+            T_D2 = T_D_period_map[(κ2, pos2)]
+            l_TD1 = T_D1' * l_vec
+            max_period_sep = max(1, max_separation ÷ N_uc)
+            for m in 1:max_period_sep
+                current = T_D2 * r_vec
+                for _ in 1:(m - 1)
+                    current = T_combined * current
+                end
+                corrs[m] = dot(l_TD1, current) / nf - D_avg_sq
+            end
+
+            corr_cache[(κ1, pos1, κ2, pos2)] = corrs
+            print("\r  (κ=$κ1,p=$pos1)→(κ=$κ2,p=$pos2)")
         end
         println("\nFourier transforming over $nq × $nq q-grid...")
 
-        N_d = _row * (2 * max_separation + 1)
+        # Use max_separation as physical columns (not periods) for consistency with sampling
+        max_period = max(1, max_separation ÷ N_uc)
+        max_col_sep = max_period * N_uc + (N_uc - 1)
+        L_eff = Float64(max_col_sep + 1)  # effective finite system length
+        N_d = N_uc * _row
         for (i, qx) in enumerate(qvals)
             for (j, qy) in enumerate(qvals)
                 val = 0.0
-                for pos1 in 1:_row, pos2 in 1:_row
+                for κ1 in 1:N_uc, pos1 in 1:_row, κ2 in 1:N_uc, pos2 in 1:_row
                     Δp = pos2 - pos1
-                    corrs = corr_cache[(pos1, pos2)]
-                    for (Δc, cval) in corrs
-                        if Δc == 0
-                            val += cos(qy * Δp) * real(cval)
+                    corrs = corr_cache[(κ1, pos1, κ2, pos2)]
+                    for (m, cval) in corrs
+                        Δx = m * N_uc + (κ2 - κ1)
+                        if Δx < 0
+                            continue
+                        end
+                        # Bartlett (triangular) window: simulates finite-system weighting
+                        w = 1.0 - abs(Δx) / L_eff
+                        w <= 0.0 && continue
+                        if Δx == 0
+                            val += w * cos(qy * Δp) * real(cval)
                         else
-                            val += 2.0 * cos(qx * Δc + qy * Δp) * real(cval)
+                            val += 2.0 * w * cos(qx * Δx + qy * Δp) * real(cval)
                         end
                     end
                 end
@@ -2510,18 +2619,22 @@ function plot_dimer_structure_factor(filename::String;
         end
 
         println("Fourier transforming over $nq × $nq q-grid...")
-        N_d = n_pos * (2 * max_sep + 1)
+        μ_avg = mean(μ)
+        μ_avg_sq = μ_avg^2
+        L_eff_s = Float64(max_sep + 1)
+        N_d = n_pos
         for (i, qx) in enumerate(qvals)
             for (j, qy) in enumerate(qvals)
                 val = 0.0
                 for p1 in 1:n_pos, p2 in 1:n_pos
                     Δp = p2 - p1
-                    val += cos(qy * Δp) * (corr0[p1, p2] - μ[p1] * μ[p2])
+                    val += cos(qy * Δp) * (corr0[p1, p2] - μ_avg_sq)
                 end
                 for Δc in 1:max_sep
+                    w = 1.0 - Δc / L_eff_s
                     for p1 in 1:n_pos, p2 in 1:n_pos
                         Δp = p2 - p1
-                        val += 2.0 * cos(qx * Δc + qy * Δp) * (corr_dc[Δc][p1, p2] - μ[p1] * μ[p2])
+                        val += 2.0 * w * cos(qx * Δc + qy * Δp) * (corr_dc[Δc][p1, p2] - μ_avg_sq)
                     end
                 end
                 SD[i, j] = val / N_d
@@ -3427,8 +3540,11 @@ function plot_dmrg_dimer_structure_factor(result;
         end
     end
 
-    # Precompute connected correlation matrix
-    C_conn = DD .- D_exp * D_exp'
+    # Subtract global mean squared (not bond-specific product) to preserve VBS signal
+    # On finite DMRG cylinders, ⟨D_b⟩ itself alternates due to pinned VBS order;
+    # subtracting D_exp * D_exp' would remove that signal entirely.
+    D_avg = Statistics.mean(D_exp)
+    C_conn = DD .- D_avg^2
 
     println("Fourier transforming over $nq × $nq q-grid...")
     qvals = range(0.0, 2Float64(π), length=nq)

@@ -979,7 +979,7 @@ plot_M2_comparison(exact_file="project/results/M2_exact.json",
                 dmrg_file="dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json",
                 save_path="project/results/figures/M2_comparison.pdf")   
  
-fig, SSS = plot_spin_structure_factor("project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.0_row=4_p=3_nqubits=3_2x2.json";                                                                             
+fig, SSS = plot_spin_structure_factor("project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json";                                                                             
                 nq=50,                                                                                                                                    
                 max_separation=10,
                 use_exact=false,       # sampling method                                                                                                  
@@ -992,7 +992,7 @@ display(fig)
 fig, data = plot_bond_energy_pattern("project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.0_row=4_p=3_nqubits=3_2x2.json";
       use_exact=true, save_path="project/results/figures/bond_energy——exact.pdf") 
 
-fig, data = plot_bond_energy_pattern("project/results/circuit_heisenberg_j1j2_J1=1.0_J2=1.0_row=4_p=3_nqubits=3_2x2.json";
+fig, data = plot_bond_energy_pattern("project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json";
       use_exact=false,
       samples=1000000,
       conv_step=100,
@@ -1004,17 +1004,17 @@ display(fig)
 fig, SD = plot_dimer_structure_factor("project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json";
       nq=50,
       dimer_orientation=:vertical,
-      max_separation=20,
+      max_separation=10,
       use_exact=true,
       save_path="project/results/figures/dimer_SF_exact.pdf"
   )
 display(fig)
 
 # Dimer structure factor heatmap (sampling)
-fig, SD = plot_dimer_structure_factor("project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json";
+fig, SD = plot_dimer_structure_factor("project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.0_row=4_p=3_nqubits=3_2x2.json";
       nq=50,
       dimer_orientation=:vertical,
-      max_separation=20,
+      max_separation=10,
       use_exact=false,
       conv_step=1000,
       samples=100000,

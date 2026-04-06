@@ -611,6 +611,7 @@ Separations are in units of full unit-cell periods.
 function dimer_dimer_correlation(op::TransferOperator, separations;
                                  dimer_orientation::Symbol=:vertical,
                                  pos::Int=1,
+                                 col::Int=1,
                                  connected::Bool=true,
                                  optimizer=GreedyMethod())
     paulis = [_resolve_op(:X), _resolve_op(:Y), _resolve_op(:Z)]
@@ -627,36 +628,36 @@ function dimer_dimer_correlation(op::TransferOperator, separations;
     l_vec, r_vec, nf, _ = _fixed_points(T_combined)
 
     if dimer_orientation == :vertical
-        # Vertical dimer D = Σ_α σ^α_{pos} σ^α_{pos2} / 4 within a single column
-        # Build T_D_period: period with dimer operator inserted in column 1
-        # T_D_period = (Σ_α E_{σ^α at pos,pos2 in col 1} / 4) * T[2] * ... * T[N]
-        T_D_col1 = zeros(ComplexF64, size(T_cols[1]))
+        # Vertical dimer D = Σ_α σ^α_{pos} σ^α_{pos2} / 4 within column `col`
+        T_D_col = zeros(ComplexF64, size(T_cols[1]))
         for σ in paulis
             E_OO = get_transfer_matrix_with_operator(
-                op.columns[1], row, vq, Dict(pos => σ, pos2 => σ);
+                op.columns[col], row, vq, Dict(pos => σ, pos2 => σ);
                 optimizer=optimizer)
-            T_D_col1 .+= E_OO
+            T_D_col .+= E_OO
         end
-        T_D_col1 ./= 4.0
+        T_D_col ./= 4.0
 
-        T_tail = N > 1 ? reduce(*, T_cols[2:end]) : Matrix{ComplexF64}(I, size(T_cols[1]))
-        T_D_period = T_D_col1 * T_tail
+        T_before = col > 1 ? reduce(*, T_cols[1:col-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_after  = col < N ? reduce(*, T_cols[col+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_D_period = T_before * T_D_col * T_after
 
     elseif dimer_orientation == :horizontal
-        # Horizontal dimer spans 2 columns: D_h = Σ_α σ^α_{pos,c1} σ^α_{pos,c2} / 4
-        # T_D_period = (Σ_α E_O[1,α,pos] * E_O[2,α,pos] / 4) * T[3] * ... * T[N]
+        # Horizontal dimer spans 2 columns: D_h = Σ_α σ^α_{pos,col} σ^α_{pos,col+1} / 4
+        col2 = col < N ? col + 1 : 1  # wrap within unit cell
         T_D_2col = zeros(ComplexF64, size(T_cols[1]))
         for (si, σ) in enumerate(paulis)
             E1 = get_transfer_matrix_with_operator(
-                op.columns[1], row, vq, σ; position=pos, optimizer=optimizer)
+                op.columns[col], row, vq, σ; position=pos, optimizer=optimizer)
             E2 = get_transfer_matrix_with_operator(
-                op.columns[2], row, vq, σ; position=pos, optimizer=optimizer)
+                op.columns[col2], row, vq, σ; position=pos, optimizer=optimizer)
             T_D_2col .+= E1 * E2
         end
         T_D_2col ./= 4.0
 
-        T_tail = N > 2 ? reduce(*, T_cols[3:end]) : Matrix{ComplexF64}(I, size(T_cols[1]))
-        T_D_period = T_D_2col * T_tail
+        T_before = col > 1 ? reduce(*, T_cols[1:col-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_after  = col2 < N ? reduce(*, T_cols[col2+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_D_period = T_before * T_D_2col * T_after
     else
         error("dimer_orientation must be :vertical or :horizontal, got $dimer_orientation")
     end
@@ -674,9 +675,11 @@ function dimer_dimer_correlation(op::TransferOperator, separations;
                 O_pos = σa * σb
                 O_pos2 = σa * σb
                 E_OO = get_transfer_matrix_with_operator(
-                    op.columns[1], row, vq, Dict(pos => O_pos, pos2 => O_pos2);
+                    op.columns[col], row, vq, Dict(pos => O_pos, pos2 => O_pos2);
                     optimizer=optimizer)
-                val += dot(l_vec, E_OO * T_tail * r_vec) / nf
+                T_after_local = col < N ? reduce(*, T_cols[col+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+                T_before_local = col > 1 ? reduce(*, T_cols[1:col-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+                val += dot(l_vec, T_before_local * E_OO * T_after_local * r_vec) / nf
             end
             correlations[sep] = val / 16.0
         else
@@ -992,10 +995,12 @@ function dimer_structure_factor(op::TransferOperator, q::Tuple{Real,Real};
     return SD / N_d
 end
 
-"""Cross-position dimer-dimer correlation (internal helper)."""
+"""Cross-position dimer-dimer correlation (internal helper).
+`col1`/`col2` specify which column within the unit cell each dimer is in."""
 function _dimer_cross_correlation(op::TransferOperator, separations,
                                    dimer_orientation::Symbol,
                                    pos1::Int, pos2::Int;
+                                   col1::Int=1, col2::Int=1,
                                    optimizer=GreedyMethod())
     paulis = [_resolve_op(:X), _resolve_op(:Y), _resolve_op(:Z)]
     seps = separations isa Integer ? [separations] : collect(separations)
@@ -1012,44 +1017,56 @@ function _dimer_cross_correlation(op::TransferOperator, separations,
         pos1b = pos1 % row + 1
         pos2b = pos2 % row + 1
 
-        # T_D1: dimer at pos1 in col 1
+        # T_D1: dimer at (col1, pos1)
         T_D1_col = zeros(ComplexF64, size(T_cols[1]))
         for σ in paulis
             E = get_transfer_matrix_with_operator(
-                op.columns[1], row, vq, Dict(pos1 => σ, pos1b => σ); optimizer=optimizer)
+                op.columns[col1], row, vq, Dict(pos1 => σ, pos1b => σ); optimizer=optimizer)
             T_D1_col .+= E
         end
         T_D1_col ./= 4.0
 
-        # T_D2: dimer at pos2 in col 1
+        # T_D2: dimer at (col2, pos2)
         T_D2_col = zeros(ComplexF64, size(T_cols[1]))
         for σ in paulis
             E = get_transfer_matrix_with_operator(
-                op.columns[1], row, vq, Dict(pos2 => σ, pos2b => σ); optimizer=optimizer)
+                op.columns[col2], row, vq, Dict(pos2 => σ, pos2b => σ); optimizer=optimizer)
             T_D2_col .+= E
         end
         T_D2_col ./= 4.0
 
-        T_tail = N > 1 ? reduce(*, T_cols[2:end]) : Matrix{ComplexF64}(I, size(T_cols[1]))
-        T_D1 = T_D1_col * T_tail
-        T_D2 = T_D2_col * T_tail
+        # Build full-period transfer matrices
+        T_before1 = col1 > 1 ? reduce(*, T_cols[1:col1-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_after1  = col1 < N ? reduce(*, T_cols[col1+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_D1 = T_before1 * T_D1_col * T_after1
+
+        T_before2 = col2 > 1 ? reduce(*, T_cols[1:col2-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_after2  = col2 < N ? reduce(*, T_cols[col2+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_D2 = T_before2 * T_D2_col * T_after2
 
     else  # :horizontal
         T_D1_2col = zeros(ComplexF64, size(T_cols[1]))
         T_D2_2col = zeros(ComplexF64, size(T_cols[1]))
         for (si, σ) in enumerate(paulis)
-            E1_p1 = get_transfer_matrix_with_operator(op.columns[1], row, vq, σ; position=pos1, optimizer=optimizer)
-            E2_p1 = get_transfer_matrix_with_operator(op.columns[2], row, vq, σ; position=pos1, optimizer=optimizer)
+            E1_p1 = get_transfer_matrix_with_operator(op.columns[col1], row, vq, σ; position=pos1, optimizer=optimizer)
+            col1b = col1 < N ? col1 + 1 : 1
+            E2_p1 = get_transfer_matrix_with_operator(op.columns[col1b], row, vq, σ; position=pos1, optimizer=optimizer)
             T_D1_2col .+= E1_p1 * E2_p1
-            E1_p2 = get_transfer_matrix_with_operator(op.columns[1], row, vq, σ; position=pos2, optimizer=optimizer)
-            E2_p2 = get_transfer_matrix_with_operator(op.columns[2], row, vq, σ; position=pos2, optimizer=optimizer)
+            E1_p2 = get_transfer_matrix_with_operator(op.columns[col2], row, vq, σ; position=pos2, optimizer=optimizer)
+            col2b = col2 < N ? col2 + 1 : 1
+            E2_p2 = get_transfer_matrix_with_operator(op.columns[col2b], row, vq, σ; position=pos2, optimizer=optimizer)
             T_D2_2col .+= E1_p2 * E2_p2
         end
         T_D1_2col ./= 4.0
         T_D2_2col ./= 4.0
-        T_tail = N > 2 ? reduce(*, T_cols[3:end]) : Matrix{ComplexF64}(I, size(T_cols[1]))
-        T_D1 = T_D1_2col * T_tail
-        T_D2 = T_D2_2col * T_tail
+        T_before1 = col1 > 1 ? reduce(*, T_cols[1:col1-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        col1b = col1 < N ? col1 + 1 : 1
+        T_after1  = col1b < N ? reduce(*, T_cols[col1b+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_D1 = T_before1 * T_D1_2col * T_after1
+        T_before2 = col2 > 1 ? reduce(*, T_cols[1:col2-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        col2b = col2 < N ? col2 + 1 : 1
+        T_after2  = col2b < N ? reduce(*, T_cols[col2b+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_D2 = T_before2 * T_D2_2col * T_after2
     end
 
     # ⟨D_{pos1}(0) D_{pos2}(r)⟩ - ⟨D_{pos1}⟩⟨D_{pos2}⟩
@@ -1058,9 +1075,42 @@ function _dimer_cross_correlation(op::TransferOperator, separations,
     l_TD1 = T_D1' * l_vec
 
     correlations = Dict{Int, ComplexF64}()
-    for sep in sort(seps)
+
+    # sep=0: both dimers in the same column — requires 4-operator insertion
+    if 0 in seps
+        if dimer_orientation == :vertical
+            # D_{pos1} D_{pos2} = (1/16) Σ_{α,β} σ^α_{pos1} σ^α_{pos1b} σ^β_{pos2} σ^β_{pos2b}
+            val0 = zero(ComplexF64)
+            for σa in paulis, σb in paulis
+                site_ops = Dict{Int, Matrix{ComplexF64}}()
+                for (site, op_mat) in [(pos1, σa), (pos1b, σa), (pos2, σb), (pos2b, σb)]
+                    site_ops[site] = haskey(site_ops, site) ? site_ops[site] * op_mat : op_mat
+                end
+                E = get_transfer_matrix_with_operator(
+                    op.columns[col1], row, vq, site_ops; optimizer=optimizer)
+                val0 += dot(l_vec, T_before1 * E * T_after1 * r_vec) / nf
+            end
+            correlations[0] = val0 / 16.0 - μ1 * μ2
+        else  # :horizontal — both horizontal dimers in same column pair
+            val0 = zero(ComplexF64)
+            col1b_h = col1 < N ? col1 + 1 : 1
+            T_before_h = col1 > 1 ? reduce(*, T_cols[1:col1-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+            T_after_h = col1b_h < N ? reduce(*, T_cols[col1b_h+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+            for σa in paulis, σb in paulis
+                E_col1 = get_transfer_matrix_with_operator(
+                    op.columns[col1], row, vq, Dict(pos1 => σa, pos2 => σb); optimizer=optimizer)
+                E_col2 = get_transfer_matrix_with_operator(
+                    op.columns[col1b_h], row, vq, Dict(pos1 => σa, pos2 => σb); optimizer=optimizer)
+                val0 += dot(l_vec, T_before_h * E_col1 * E_col2 * T_after_h * r_vec) / nf
+            end
+            correlations[0] = val0 / 16.0 - μ1 * μ2
+        end
+    end
+
+    # sep ≥ 1: use full-period transfer matrices (existing formula, correct)
+    for sep in sort(filter(s -> s >= 1, seps))
         current = T_D2 * r_vec
-        for _ in 1:max(sep - 1, 0)
+        for _ in 1:(sep - 1)
             current = T_combined * current
         end
         correlations[sep] = dot(l_TD1, current) / nf - μ1 * μ2

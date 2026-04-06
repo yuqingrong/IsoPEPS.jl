@@ -184,7 +184,7 @@ end
  simulation(;
      model="heisenberg_j1j2",
      scan_param=:J2,
-     scan_values=[0.5],
+     scan_values=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
      J1=1.0,
      row=4, p=3, nqubits=5,
      maxiter=500,

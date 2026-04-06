@@ -250,6 +250,19 @@ function plot_correlation_decay(result; max_distance::Int=60, save_path=nothing)
 end
 
 
+run_dmrg_scan(
+    model      = "heisenberg_j1j2",
+    Lx         = 100,
+    Ly         = 4,
+    scan_param = :J2,
+    scan_values = 0.0:0.1:1.0,    # or 0.0:0.1:1.0 for a full scan
+    maxdim     = 2,
+    cutoff     = 1e-10,
+    nsweeps    = 20,
+    output_file = "project/results/dmrg_j1j2_100x4_D=2.json",
+    J1         = 1.0
+)
+
 # ==================== Example usage ====================
 Ly = 4
 D = 2

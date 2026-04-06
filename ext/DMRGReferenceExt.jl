@@ -43,7 +43,7 @@ end
 """
     build_2d_tfim_hamiltonian(Lx::Int, Ly::Int, J::Float64, g::Float64)
 
-Build 2D Transverse Field Ising Model Hamiltonian mapped to 1D chain.
+Build 2D Transverse Field Ising Model Hamiltonian on a cylinder (periodic in y, open in x).
 
 H = -J Σ_{⟨i,j⟩_2D} Z_i Z_j - g Σ_i X_i
 """
@@ -55,17 +55,17 @@ function IsoPEPS.build_2d_tfim_hamiltonian(Lx::Int, Ly::Int, J::Float64, g::Floa
 
     os = OpSum()
 
-    # Transverse field term: -g Σ_i X_i
-    for j in 1:(Ly-1)
-        for i in 1:(Lx-1)
+    # Transverse field term: -g Σ_i X_i (all sites)
+    for j in 1:Ly
+        for i in 1:Lx
             site = coord_to_site[(i, j)]
             os += -g, "Sx", site
         end
     end
 
     # Ising coupling: -J Σ_{⟨i,j⟩} Z_i Z_j
-    # Horizontal bonds
-    for j in 1:(Ly-1)
+    # Horizontal bonds (open in x)
+    for j in 1:Ly
         for i in 1:(Lx-1)
             site1 = coord_to_site[(i, j)]
             site2 = coord_to_site[(i+1, j)]
@@ -73,11 +73,12 @@ function IsoPEPS.build_2d_tfim_hamiltonian(Lx::Int, Ly::Int, J::Float64, g::Floa
         end
     end
 
-    # Vertical bonds
-    for j in 1:(Ly-1)
-        for i in 1:(Lx-1)
+    # Vertical bonds (periodic in y)
+    for j in 1:Ly
+        j_next = mod1(j + 1, Ly)
+        for i in 1:Lx
             site1 = coord_to_site[(i, j)]
-            site2 = coord_to_site[(i, j+1)]
+            site2 = coord_to_site[(i, j_next)]
             os += -J, "Sz", site1, "Sz", site2
         end
     end
