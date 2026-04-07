@@ -6,36 +6,6 @@ using Yao
 using LinearAlgebra, OMEinsum
 using JSON3
 """
-    simulation(; model, scan_param, scan_values, row, p, nqubits, ...)
-
-Run circuit optimization for multiple parameter values and save results to JSON files.
-
-# Arguments
-- `model::String`: Model type (`"tfim"` or `"heisenberg_j1j2"`)
-- `scan_param::Symbol`: Parameter to scan over (e.g., `:g` for TFIM, `:J2` for Heisenberg)
-- `scan_values::Vector{Float64}`: Values of the scan parameter
-- `row::Int`: Number of rows in the PEPS
-- `p::Int`: Circuit depth
-- `nqubits::Int`: Number of qubits per row
-- `maxiter`: Maximum iterations for optimization
-- `seed`: Random seed for reproducibility
-- `verbose`: Print progress information
-- `output_dir`: Directory to save results (default: "data")
-- `share_params`: Share parameters across circuit layers
-- `model_params...`: Fixed model parameters (e.g., `J=1.0` for TFIM, `J1=1.0` for Heisenberg)
-
-# Example
-```julia
-# TFIM: scan g with fixed J
-simulation(model="tfim", scan_param=:g, scan_values=[1.0, 2.0, 3.0],
-           J=1.0, row=3, p=2, nqubits=3, ...)
-
-# Heisenberg J1-J2: scan J2 with fixed J1
-simulation(model="heisenberg_j1j2", scan_param=:J2, scan_values=[0.0, 0.25, 0.5],
-           J1=1.0, row=3, p=2, nqubits=3, ...)
-```
-"""
-"""
     _find_warm_start_params(output_dir, model, scan_param, scan_value, row, p, nqubits; fixed_params...)
 
 Scan `output_dir` for existing result files matching the model/fixed params pattern,
@@ -89,6 +59,36 @@ function _find_warm_start_params(output_dir, model, scan_param, scan_value, row,
     return best_params, best_val
 end
 
+"""
+    simulation(; model, scan_param, scan_values, row, p, nqubits, ...)
+
+Run circuit optimization for multiple parameter values and save results to JSON files.
+
+# Arguments
+- `model::String`: Model type (`"tfim"` or `"heisenberg_j1j2"`)
+- `scan_param::Symbol`: Parameter to scan over (e.g., `:g` for TFIM, `:J2` for Heisenberg)
+- `scan_values::Vector{Float64}`: Values of the scan parameter
+- `row::Int`: Number of rows in the PEPS
+- `p::Int`: Circuit depth
+- `nqubits::Int`: Number of qubits per row
+- `maxiter`: Maximum iterations for optimization
+- `seed`: Random seed for reproducibility
+- `verbose`: Print progress information
+- `output_dir`: Directory to save results (default: "data")
+- `share_params`: Share parameters across circuit layers
+- `model_params...`: Fixed model parameters (e.g., `J=1.0` for TFIM, `J1=1.0` for Heisenberg)
+
+# Example
+```julia
+# TFIM: scan g with fixed J
+simulation(model="tfim", scan_param=:g, scan_values=[1.0, 2.0, 3.0],
+           J=1.0, row=3, p=2, nqubits=3, ...)
+
+# Heisenberg J1-J2: scan J2 with fixed J1
+simulation(model="heisenberg_j1j2", scan_param=:J2, scan_values=[0.0, 0.25, 0.5],
+           J1=1.0, row=3, p=2, nqubits=3, ...)
+```
+"""
 function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vector{Float64},
                     row::Int, p::Int, nqubits::Int,
                     maxiter::Int, seed::Int=123, verbose::Bool=true,
