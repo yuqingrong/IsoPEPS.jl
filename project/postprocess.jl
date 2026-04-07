@@ -1024,7 +1024,7 @@ display(fig)
 
 
 # Reconstruct gates and analyze
-plot_energy_error_vs_g("project/results", [0.0, 0.1,0.2, 0.3, 0.4, 0.5];                            
+plot_energy_error_vs_g("project/results", [0.0, 0.1,0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];                            
       model="heisenberg_j1j2",                                              
       J1=1.0, row=4, p=3, nqubits=3,                        
       dmrg_file="project/results/dmrg_j1j2_100x4_D=2.json",save_path="project/results/figures/heisenberg_energy_vs_j2.pdf")
