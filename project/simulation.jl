@@ -121,13 +121,19 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
         # 2. If no same-nqubits result, try smaller nqubits and embed
         if warm_params === nothing
             for nq in (nqubits-2):-2:3
-                warm_params, warm_val = _find_warm_start_params(output_dir, model, scan_param, val, row+2, p, nq;
-                                                                 fixed_params...)
-                if warm_params !== nothing
-                    warm_params = embed_params(warm_params, p, nq, nqubits; unit_cell=unit_cell)
-                    warm_from_nqubits = nq
-                    break
+                # Try same row first, then row+2 (for systems that grew in both dimensions)
+                found = false
+                for try_row in (row, row+2)
+                    warm_params, warm_val = _find_warm_start_params(output_dir, model, scan_param, val, try_row, p, nq;
+                                                                     fixed_params...)
+                    if warm_params !== nothing
+                        warm_params = embed_params(warm_params, p, nq, nqubits; unit_cell=unit_cell)
+                        warm_from_nqubits = nq
+                        found = true
+                        break
+                    end
                 end
+                found && break
             end
         end
 
@@ -184,7 +190,7 @@ end
  simulation(;
      model="heisenberg_j1j2",
      scan_param=:J2,
-     scan_values=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+     scan_values=[0.0],
      J1=1.0,
      row=4, p=3, nqubits=3,
      maxiter=500,

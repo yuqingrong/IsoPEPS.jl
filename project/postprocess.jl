@@ -952,7 +952,7 @@ end
 # Analyze a single result
 J=1.0;g = 1.0; row=4 ; nqubits=3; p=3; virtual_qubits=1;D=2
 data_dir = joinpath(@__DIR__, "results")
-datafile = joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J)_J2=0.0_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json")
+datafile = joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J)_J2=0.5_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile)
 
@@ -1040,6 +1040,6 @@ display(fig)
 fig, data = plot_correlation_function(datafile;
                                    max_separation=14,
                                    conv_step=100,
-                                   samples=10000,
-                                   save_path="project/results/figures/correlation_function_heisenberg_2x2_J1=$(J)_J2=0.0.pdf")
+                                   samples=1000000,
+                                   save_path="project/results/figures/correlation_function_heisenberg_2x2_J1=$(J)_J2=0.5.pdf")
 display(fig)

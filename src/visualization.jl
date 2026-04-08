@@ -3867,3 +3867,107 @@ function plot_dmrg_bond_energy_pattern(result;
                  D_v=D_v, D_h=D_h)
     return (fig, bond_data)
 end
+
+# ============================================================================
+# plot_observable_convergence
+# ============================================================================
+
+"""
+    plot_observable_convergence(filename::String; model, save_path)
+
+Plot cumulative running mean of Z/X/Y basis measurements from a circuit
+optimization result to visualize convergence to the fixed point.
+
+Overlays exact fixed-point expectation values computed from the transfer
+matrix as horizontal dashed reference lines.
+
+# Arguments
+- `filename`: Path to a CircuitOptimizationResult JSON file
+- `model::AbstractModel`: Model used for the optimization (default: `TFIM()`)
+- `save_path::Union{String,Nothing}`: Optional path to save the figure
+
+# Returns
+- CairoMakie `Figure`
+
+# Example
+```julia
+fig = plot_observable_convergence("result.json"; model=TFIM(1.0, 2.0))
+```
+"""
+function plot_observable_convergence(filename::String;
+        model::AbstractModel = TFIM(),
+        save_path::Union{String, Nothing} = nothing)
+
+    result, input_args = load_result(filename)
+
+    row = input_args[:row]
+    nqubits = input_args[:nqubits]
+    p = input_args[:p]
+    conv_step = get(input_args, :conv_step, 1000)
+    vq = (nqubits - 1) ÷ 2
+
+    Z_samples = result.final_Z_samples
+    X_samples = result.final_X_samples
+    Y_samples = result.final_Y_samples
+    has_y = !isempty(Y_samples)
+
+    # Cumulative running means
+    running_Z = cumsum(Z_samples) ./ (1:length(Z_samples))
+    running_X = cumsum(X_samples) ./ (1:length(X_samples))
+
+    # Reconstruct gates and compute exact per-site reference values
+    gates = build_unitary_gate(result.final_params, p, row, nqubits)
+    exact_Z = compute_Z_expectation(nothing, gates, row, vq) / row
+    exact_X = compute_X_expectation(nothing, gates, row, vq) / row
+
+    n_panels = has_y ? 3 : 2
+    fig = Figure(size=(700, 300 * n_panels))
+
+    # Z panel
+    ax_z = Axis(fig[1, 1],
+                xlabel="Measurement index", ylabel="Running mean ⟨Z⟩",
+                title="Observable Convergence: $(basename(filename))")
+    lines!(ax_z, 1:length(running_Z), running_Z,
+           linewidth=1.5, color=:blue, label="⟨Z⟩ running mean")
+    hlines!(ax_z, [exact_Z], linestyle=:dash, color=:red, linewidth=1.5,
+            label="Exact ⟨Z⟩/site = $(round(exact_Z, digits=4))")
+    vlines!(ax_z, [conv_step], linestyle=:dot, color=:gray, linewidth=1,
+            label="conv_step=$conv_step")
+    axislegend(ax_z, position=:rt)
+
+    # X panel
+    ax_x = Axis(fig[2, 1],
+                xlabel="Measurement index", ylabel="Running mean ⟨X⟩")
+    lines!(ax_x, 1:length(running_X), running_X,
+           linewidth=1.5, color=:green, label="⟨X⟩ running mean")
+    hlines!(ax_x, [exact_X], linestyle=:dash, color=:red, linewidth=1.5,
+            label="Exact ⟨X⟩/site = $(round(exact_X, digits=4))")
+    vlines!(ax_x, [conv_step], linestyle=:dot, color=:gray, linewidth=1,
+            label="conv_step=$conv_step")
+    axislegend(ax_x, position=:rt)
+
+    # Y panel (if applicable)
+    if has_y
+        running_Y = cumsum(Y_samples) ./ (1:length(Y_samples))
+        exact_Y = sum(real(expect(gates, row, vq, :Y; position=pos))
+                      for pos in 1:row) / row
+
+        ax_y = Axis(fig[3, 1],
+                    xlabel="Measurement index", ylabel="Running mean ⟨Y⟩")
+        lines!(ax_y, 1:length(running_Y), running_Y,
+               linewidth=1.5, color=:orange, label="⟨Y⟩ running mean")
+        hlines!(ax_y, [exact_Y], linestyle=:dash, color=:red, linewidth=1.5,
+                label="Exact ⟨Y⟩/site = $(round(exact_Y, digits=4))")
+        vlines!(ax_y, [conv_step], linestyle=:dot, color=:gray, linewidth=1,
+                label="conv_step=$conv_step")
+        axislegend(ax_y, position=:rt)
+    end
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        @info "Figure saved to $save_path"
+    end
+
+    return fig
+end
