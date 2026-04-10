@@ -1042,4 +1042,6 @@ fig, data = plot_correlation_function(datafile;
                                    conv_step=100,
                                    samples=1000000,
                                    save_path="project/results/figures/correlation_function_heisenberg_2x2_J1=$(J)_J2=0.5.pdf")
+datafile = joinpath(data_dir, "circuit_J=$(J)_g=0.5_row=3_p=3_nqubits=$(nqubits).json")
+fig = plot_observable_convergence(datafile; save_path="convergence.pdf")
 display(fig)

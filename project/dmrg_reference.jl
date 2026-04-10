@@ -249,115 +249,156 @@ function plot_correlation_decay(result; max_distance::Int=60, save_path=nothing)
     return fig
 end
 
+"""
+    run_dmrg_bulk_scan(; model="heisenberg_j1j2", Ly=4, Lx1=100, Lx2=200, D=2,
+                         scan_param=:J2, scan_values=0.0:0.1:1.0,
+                         cutoff=1e-10, nsweeps=20,
+                         noise=[1e-1, 1e-2, 1e-3, 1e-4, fill(0.0, 16)...],
+                         output_file=nothing, state_dir="states",
+                         model_params...)
 
-run_dmrg_scan(
-    model      = "heisenberg_j1j2",
-    Lx         = 100,
-    Ly         = 4,
-    scan_param = :J2,
-    scan_values = 0.0:0.1:1.0,    # or 0.0:0.1:1.0 for a full scan
-    maxdim     = 2,
-    cutoff     = 1e-10,
-    nsweeps    = 20,
-    output_file = "project/results/dmrg_j1j2_100x4_D=2.json",
-    J1         = 1.0
-)
+Run DMRG parameter scan with two system lengths to extract bulk energy density
+via finite-size subtraction.  Model-specific observables are computed automatically:
 
-# ==================== Example usage ====================
-Ly = 4
-D = 2
-model_choice = "heisenberg_j1j2"
-Lx1 = 100
-Lx2 = 200
-J2_values = collect(0.0:0.1:1.0)
+- `"heisenberg_j1j2"`: M² order parameters (Néel, stripe, (0,π))
+- `"tfim"`:            ⟨Sx⟩ and ⟨Sz⟩ magnetizations
 
-if model_choice == "heisenberg_j1j2"
-    scan_results = Dict(
+# Arguments
+- `model`: `"tfim"` or `"heisenberg_j1j2"`
+- `scan_param`: Symbol of the parameter to scan (e.g. `:J2` for J1-J2, `:g` for TFIM)
+- `scan_values`: Range of values for the scanned parameter
+- `model_params...`: Fixed model parameters (the scanned param is overridden each step)
+
+# Examples
+```julia
+run_dmrg_bulk_scan(model="heisenberg_j1j2", scan_param=:J2, scan_values=0.0:0.1:1.0, J1=1.0)
+run_dmrg_bulk_scan(model="tfim", scan_param=:g, scan_values=0.0:0.5:4.0, J=1.0)
+```
+"""
+function run_dmrg_bulk_scan(; model::String="heisenberg_j1j2",
+                              Ly::Int=4, Lx1::Int=100, Lx2::Int=200, D::Int=2,
+                              scan_param::Symbol=:J2, scan_values=0.0:0.1:1.0,
+                              cutoff::Float64=1e-10, nsweeps::Int=20,
+                              noise=[1e-1, 1e-2, 1e-3, 1e-4, fill(0.0, 16)...],
+                              output_file::Union{String,Nothing}=nothing,
+                              state_dir::String="states",
+                              model_params...)
+
+    scan_values = collect(scan_values)
+    base_params = Dict{Symbol,Any}(model_params)
+
+    if isnothing(output_file)
+        output_file = "dmrg_bulk_$(model)_Ly$(Ly)_D$(D)_$(scan_param)scan.json"
+    end
+
+    is_j1j2 = (model == "heisenberg_j1j2")
+
+    scan_results = Dict{String,Any}(
         "parameters" => Dict(
-            "model"   => model_choice,
-            "Ly"      => Ly,
-            "Lx1"     => Lx1,
-            "Lx2"     => Lx2,
-            "D"       => D,
-            "J1"      => 1.0,
-            "cutoff1" => 1e-10,
-            "cutoff2" => 1e-10,
-            "nsweeps" => 20
+            "model"        => model,
+            "Ly"           => Ly,
+            "Lx1"          => Lx1,
+            "Lx2"          => Lx2,
+            "D"            => D,
+            "scan_param"   => string(scan_param),
+            "base_params"  => Dict(string(k) => v for (k,v) in base_params),
+            "cutoff"       => cutoff,
+            "nsweeps"      => nsweeps
         ),
-        "J2_values"            => J2_values,
+        "scan_values"          => scan_values,
         "Lx1_energies"         => Float64[],
         "Lx1_energies_per_site"=> Float64[],
         "Lx2_energies"         => Float64[],
         "Lx2_energies_per_site"=> Float64[],
-        "e_bulk_values"        => Float64[],
-        "M2_neel_Lx1"         => Float64[],
-        "M2_neel_Lx2"         => Float64[],
-        "M2_stripe_Lx1"       => Float64[],
-        "M2_stripe_Lx2"       => Float64[],
-        "M2_0pi_Lx1"          => Float64[],
-        "M2_0pi_Lx2"          => Float64[]
+        "e_bulk_values"        => Float64[]
     )
-    output_file = "dmrg_bulk_$(model_choice)_Ly$(Ly)_D$(D)_J2scan.json"
+
+    if is_j1j2
+        scan_results["M2_neel_Lx1"]    = Float64[]
+        scan_results["M2_neel_Lx2"]    = Float64[]
+        scan_results["M2_stripe_Lx1"]  = Float64[]
+        scan_results["M2_stripe_Lx2"]  = Float64[]
+        scan_results["M2_0pi_Lx1"]     = Float64[]
+        scan_results["M2_0pi_Lx2"]     = Float64[]
+    else
+        scan_results["Sx_Lx1"] = Float64[]
+        scan_results["Sx_Lx2"] = Float64[]
+        scan_results["Sz_Lx1"] = Float64[]
+        scan_results["Sz_Lx2"] = Float64[]
+    end
 
     println("=" ^ 60)
-    println("J2 scan: $(J2_values)")
+    println("Model: $model — scanning $scan_param: $(scan_values)")
+    println("Base params: $base_params")
     println("=" ^ 60)
 
-    prev_psi1 = nothing  # warm-start from previous J2
+    prev_psi1 = nothing
     prev_psi2 = nothing
 
-    for (i, J2) in enumerate(J2_values)
-        println("\n[$i/$(length(J2_values))] J2 = $J2")
+    for (i, val) in enumerate(scan_values)
+        println("\n[$i/$(length(scan_values))] $scan_param = $val")
+
+        params = copy(base_params)
+        params[scan_param] = val
 
         result1 = dmrg_ground_state_2d(Lx1, Ly;
-            model="heisenberg_j1j2", J1=1.0, J2=J2,
-            maxdim=D, cutoff=1e-10, nsweeps=20,
-            noise=[1e-1, 1e-2, 1e-3, 1e-4, fill(0.0, 16)...],
-            psi0=prev_psi1)
+            model=model, maxdim=D, cutoff=cutoff, nsweeps=nsweeps,
+            noise=noise, psi0=prev_psi1, params...)
 
         result2 = dmrg_ground_state_2d(Lx2, Ly;
-            model="heisenberg_j1j2", J1=1.0, J2=J2,
-            maxdim=D, cutoff=1e-10, nsweeps=20,
-            noise=[1e-1, 1e-2, 1e-3, 1e-4, fill(0.0, 16)...],
-            psi0=prev_psi2)
+            model=model, maxdim=D, cutoff=cutoff, nsweeps=nsweeps,
+            noise=noise, psi0=prev_psi2, params...)
 
         prev_psi1 = result1.psi
         prev_psi2 = result2.psi
 
         e_bulk = compute_bulk_energy_density(Ly, Lx1, result1.energy, Lx2, result2.energy)
 
-        # Compute M² order parameters
-        M2_neel1 = compute_M2_dmrg(result1, (pi, pi))
-        M2_neel2 = compute_M2_dmrg(result2, (pi, pi))
-        M2_stripe1 = compute_M2_dmrg(result1, (pi, 0.0))
-        M2_stripe2 = compute_M2_dmrg(result2, (pi, 0.0))
-        M2_0pi1 = compute_M2_dmrg(result1, (0.0, pi))
-        M2_0pi2 = compute_M2_dmrg(result2, (0.0, pi))
-
         println("  e_bulk = $e_bulk")
         println("  E(Lx=$Lx1) = $(result1.energy), E/N = $(result1.energy_per_site)")
         println("  E(Lx=$Lx2) = $(result2.energy), E/N = $(result2.energy_per_site)")
-        println("  M²(π,π) Lx1=$(M2_neel1), Lx2=$(M2_neel2)")
-        println("  M²(π,0) Lx1=$(M2_stripe1), Lx2=$(M2_stripe2)")
-        println("  M²(0,π) Lx1=$(M2_0pi1), Lx2=$(M2_0pi2)")
 
         push!(scan_results["Lx1_energies"],          result1.energy)
         push!(scan_results["Lx1_energies_per_site"], result1.energy_per_site)
         push!(scan_results["Lx2_energies"],          result2.energy)
         push!(scan_results["Lx2_energies_per_site"], result2.energy_per_site)
         push!(scan_results["e_bulk_values"],         e_bulk)
-        push!(scan_results["M2_neel_Lx1"],          M2_neel1)
-        push!(scan_results["M2_neel_Lx2"],          M2_neel2)
-        push!(scan_results["M2_stripe_Lx1"],        M2_stripe1)
-        push!(scan_results["M2_stripe_Lx2"],        M2_stripe2)
-        push!(scan_results["M2_0pi_Lx1"],           M2_0pi1)
-        push!(scan_results["M2_0pi_Lx2"],           M2_0pi2)
 
-        # Save DMRG states for later analysis
-        state_dir = "states"
+        if is_j1j2
+            M2_neel1   = compute_M2_dmrg(result1, (pi, pi))
+            M2_neel2   = compute_M2_dmrg(result2, (pi, pi))
+            M2_stripe1 = compute_M2_dmrg(result1, (pi, 0.0))
+            M2_stripe2 = compute_M2_dmrg(result2, (pi, 0.0))
+            M2_0pi1    = compute_M2_dmrg(result1, (0.0, pi))
+            M2_0pi2    = compute_M2_dmrg(result2, (0.0, pi))
+
+            println("  M²(π,π) Lx1=$(M2_neel1), Lx2=$(M2_neel2)")
+            println("  M²(π,0) Lx1=$(M2_stripe1), Lx2=$(M2_stripe2)")
+            println("  M²(0,π) Lx1=$(M2_0pi1), Lx2=$(M2_0pi2)")
+
+            push!(scan_results["M2_neel_Lx1"],   M2_neel1)
+            push!(scan_results["M2_neel_Lx2"],   M2_neel2)
+            push!(scan_results["M2_stripe_Lx1"], M2_stripe1)
+            push!(scan_results["M2_stripe_Lx2"], M2_stripe2)
+            push!(scan_results["M2_0pi_Lx1"],    M2_0pi1)
+            push!(scan_results["M2_0pi_Lx2"],    M2_0pi2)
+        else
+            mag1 = compute_magnetization(result1)
+            mag2 = compute_magnetization(result2)
+
+            println("  ⟨Sx⟩ Lx1=$(mag1.Sx), Lx2=$(mag2.Sx)")
+            println("  ⟨Sz⟩ Lx1=$(mag1.Sz), Lx2=$(mag2.Sz)")
+
+            push!(scan_results["Sx_Lx1"], mag1.Sx)
+            push!(scan_results["Sx_Lx2"], mag2.Sx)
+            push!(scan_results["Sz_Lx1"], mag1.Sz)
+            push!(scan_results["Sz_Lx2"], mag2.Sz)
+        end
+
         mkpath(state_dir)
-        save_dmrg_state(result1, joinpath(state_dir, "dmrg_$(model_choice)_Ly$(Ly)_Lx$(Lx1)_D$(D)_J2$(J2).jls"); J1=1.0, J2=J2)
-        save_dmrg_state(result2, joinpath(state_dir, "dmrg_$(model_choice)_Ly$(Ly)_Lx$(Lx2)_D$(D)_J2$(J2).jls"); J1=1.0, J2=J2)
+        param_str = join(["$(k)$(v)" for (k,v) in params], "_")
+        save_dmrg_state(result1, joinpath(state_dir, "dmrg_$(model)_Ly$(Ly)_Lx$(Lx1)_D$(D)_$(param_str).jls"); params...)
+        save_dmrg_state(result2, joinpath(state_dir, "dmrg_$(model)_Ly$(Ly)_Lx$(Lx2)_D$(D)_$(param_str).jls"); params...)
 
         open(output_file, "w") do io
             JSON3.pretty(io, scan_results)
@@ -368,18 +409,222 @@ if model_choice == "heisenberg_j1j2"
     println("\n" * "=" ^ 60)
     println("Scan complete! Results saved to $output_file")
     println("=" ^ 60)
+
+    return scan_results
 end
-# ==================== Plot M² vs J2 ====================
-data = JSON3.read(read(output_file, String))
-J2_vals = Float64.(data.J2_values)
 
-fig = Figure(size=(900, 500))
-ax = Axis(fig[1, 1],
-            xlabel="J₂ / J₁",
-            ylabel="M²(q)",
-            title="DMRG M²(q) vs J₂  (Ly=$Ly, D=$D)")
+"""
+    check_bulk_convergence(; Ly=4, Lx_values=[20,40,60,80,100,150,200],
+                             model="heisenberg_j1j2", maxdim=2,
+                             cutoff=1e-10, nsweeps=20,
+                             noise=[1e-1,1e-2,1e-3,1e-4,fill(0.0,16)...],
+                             output_file=nothing, model_params...)
 
-# Use longer system (Lx2) for better bulk approximation
+Run DMRG at multiple cylinder lengths to check convergence of bulk energy density.
+
+The model `E(Lx) = e_bulk * Ly * Lx + E_boundary` implies `E/N = e_bulk + E_boundary/(Ly*Lx)`.
+Plotting E/N vs 1/Lx should yield a straight line whose intercept is the converged `e_bulk`.
+Pairwise `e_bulk` from consecutive (Lx_i, Lx_{i+1}) pairs should stabilize as Lx grows.
+
+# Returns
+Dict with keys:
+- `"Lx_values"`, `"energies"`, `"energies_per_site"`
+- `"pairwise_Lx_mid"`, `"pairwise_e_bulk"` — from consecutive pairs
+- `"fit_intercept"` (extrapolated e_bulk), `"fit_slope"` (E_boundary/Ly coefficient)
+"""
+function check_bulk_convergence(; Ly::Int=4,
+                                  Lx_values::Vector{Int}=[20, 40, 60, 80, 100, 150, 200],
+                                  model::String="heisenberg_j1j2",
+                                  maxdim::Int=2,
+                                  cutoff::Float64=1e-10,
+                                  nsweeps::Int=20,
+                                  noise=[1e-1, 1e-2, 1e-3, 1e-4, fill(0.0, 16)...],
+                                  output_file::Union{String,Nothing}=nothing,
+                                  model_params...)
+
+    Lx_sorted = sort(Lx_values)
+
+    if isnothing(output_file)
+        output_file = "dmrg_convergence_$(model)_Ly$(Ly)_D$(maxdim).json"
+    end
+
+    results = Dict(
+        "parameters" => Dict(
+            "model"   => model,
+            "Ly"      => Ly,
+            "maxdim"  => maxdim,
+            "cutoff"  => cutoff,
+            "nsweeps" => nsweeps,
+            "model_params" => Dict(string(k) => v for (k,v) in model_params)
+        ),
+        "Lx_values"         => Lx_sorted,
+        "energies"          => Float64[],
+        "energies_per_site" => Float64[],
+        "pairwise_Lx_mid"   => Float64[],
+        "pairwise_e_bulk"   => Float64[],
+        "fit_intercept"     => nothing,
+        "fit_slope"         => nothing
+    )
+
+    println("=" ^ 60)
+    println("Bulk Energy Convergence Check")
+    println("Model: $model, Ly=$Ly, maxdim=$maxdim")
+    println("Lx values: $Lx_sorted")
+    println("Params: ", Dict(model_params))
+    println("=" ^ 60)
+
+    for (i, Lx) in enumerate(Lx_sorted)
+        println("\n[$i/$(length(Lx_sorted))] Lx = $Lx ...")
+
+        result = dmrg_ground_state_2d(Lx, Ly;
+            model=model, maxdim=maxdim, cutoff=cutoff, nsweeps=nsweeps,
+            noise=Float64.(noise),
+            model_params...)
+
+        push!(results["energies"], result.energy)
+        push!(results["energies_per_site"], result.energy_per_site)
+
+        println("  E = $(result.energy),  E/N = $(result.energy_per_site)")
+
+        # Pairwise e_bulk from consecutive pairs
+        if i >= 2
+            Lx_prev = Lx_sorted[i-1]
+            E_prev = results["energies"][i-1]
+            e_bulk = compute_bulk_energy_density(Ly, Lx_prev, E_prev, Lx, result.energy)
+            Lx_mid = (Lx_prev + Lx) / 2.0
+            push!(results["pairwise_Lx_mid"], Lx_mid)
+            push!(results["pairwise_e_bulk"], e_bulk)
+            println("  Pairwise e_bulk($Lx_prev,$Lx) = $e_bulk")
+        end
+
+        # Linear fit E/N vs 1/Lx with all data so far
+        if i >= 2
+            inv_Lx = 1.0 ./ Lx_sorted[1:i]
+            E_per_site = results["energies_per_site"]
+            A = hcat(ones(i), inv_Lx)
+            coeffs = A \ E_per_site
+            results["fit_intercept"] = coeffs[1]
+            results["fit_slope"] = coeffs[2]
+            println("  Linear fit: e_bulk(extrapolated) = $(coeffs[1]),  slope = $(coeffs[2])")
+        end
+
+        # Incremental save
+        open(output_file, "w") do io
+            JSON3.pretty(io, results)
+        end
+    end
+
+    println("\n" * "=" ^ 60)
+    println("Convergence check complete!")
+    println("Extrapolated e_bulk = $(results["fit_intercept"])")
+    if length(results["pairwise_e_bulk"]) >= 2
+        last_two = results["pairwise_e_bulk"][end-1:end]
+        println("Last two pairwise e_bulk: $(last_two)  (Δ = $(abs(last_two[2]-last_two[1])))")
+    end
+    println("Results saved to $output_file")
+    println("=" ^ 60)
+
+    return results
+end
+
+"""
+    plot_bulk_convergence(result_or_file; save_path=nothing)
+
+Plot bulk energy convergence:
+- Left: E/N vs 1/Lx with linear fit and extrapolated e_bulk
+- Right: pairwise e_bulk vs 1/Lx_mid showing stabilization
+"""
+function plot_bulk_convergence(result_or_file; save_path::Union{String,Nothing}=nothing)
+    if result_or_file isa String
+        data = JSON3.read(read(result_or_file, String))
+        Lx_vals = Int.(data.Lx_values)
+        E_per_site = Float64.(data.energies_per_site)
+        pw_Lx_mid = Float64.(data.pairwise_Lx_mid)
+        pw_e_bulk = Float64.(data.pairwise_e_bulk)
+        e_bulk_fit = Float64(data.fit_intercept)
+        slope = Float64(data.fit_slope)
+        Ly = Int(data.parameters.Ly)
+        model = string(data.parameters.model)
+        maxdim = Int(data.parameters.maxdim)
+    else
+        data = result_or_file
+        Lx_vals = data["Lx_values"]
+        E_per_site = data["energies_per_site"]
+        pw_Lx_mid = data["pairwise_Lx_mid"]
+        pw_e_bulk = data["pairwise_e_bulk"]
+        e_bulk_fit = data["fit_intercept"]
+        slope = data["fit_slope"]
+        Ly = data["parameters"]["Ly"]
+        model = data["parameters"]["model"]
+        maxdim = data["parameters"]["maxdim"]
+    end
+
+    inv_Lx = 1.0 ./ Lx_vals
+    inv_Lx_mid = 1.0 ./ pw_Lx_mid
+
+    fig = Figure(size=(1200, 500))
+
+    # Left panel: E/N vs 1/Lx
+    ax1 = Axis(fig[1, 1],
+               xlabel="1/Lx",
+               ylabel="E / N",
+               title="$model (Ly=$Ly, D=$maxdim): E/N vs 1/Lx")
+
+    scatterlines!(ax1, inv_Lx, E_per_site,
+                  color=:steelblue, marker=:circle, markersize=10, linewidth=2,
+                  label="DMRG data")
+
+    # Fit line
+    fit_x = range(0, maximum(inv_Lx) * 1.1, length=100)
+    fit_y = e_bulk_fit .+ slope .* fit_x
+    lines!(ax1, fit_x, fit_y,
+           color=:red, linewidth=2, linestyle=:dash,
+           label="Fit: e∞ = $(round(e_bulk_fit, digits=6))")
+    hlines!(ax1, [e_bulk_fit], color=:gray, linestyle=:dot, linewidth=1)
+
+    axislegend(ax1, position=:rt)
+
+    # Right panel: pairwise e_bulk vs 1/Lx_mid
+    ax2 = Axis(fig[1, 2],
+               xlabel="1/Lx_mid",
+               ylabel="Pairwise e_bulk",
+               title="Pairwise Bulk Energy Density")
+
+    scatterlines!(ax2, inv_Lx_mid, pw_e_bulk,
+                  color=:darkgreen, marker=:diamond, markersize=10, linewidth=2,
+                  label="(Lxᵢ, Lxᵢ₊₁) pairs")
+    hlines!(ax2, [e_bulk_fit], color=:red, linestyle=:dash, linewidth=1.5,
+            label="Fit e∞ = $(round(e_bulk_fit, digits=6))")
+
+    axislegend(ax2, position=:rt)
+
+    if isnothing(save_path)
+        save_path = "bulk_convergence_$(model)_Ly$(Ly)_D$(maxdim).pdf"
+    end
+    save(save_path, fig)
+    println("Convergence plot saved to $save_path")
+
+    return fig
+end
+
+"""
+    plot_M2_vs_J2(json_file; Lx1=100, Lx2=200, save_path=nothing)
+
+Plot M²(q) order parameters vs J₂ from a bulk scan JSON file.
+"""
+function plot_M2_vs_J2(json_file::String; Lx1::Int=100, Lx2::Int=200,
+                       save_path::Union{String,Nothing}=nothing)
+    data = JSON3.read(read(json_file, String))
+    J2_vals = Float64.(haskey(data, :scan_values) ? data.scan_values : data.J2_values)
+    Ly = data.parameters.Ly
+    D = data.parameters.D
+
+    fig = Figure(size=(900, 500))
+    ax = Axis(fig[1, 1],
+              xlabel="J₂ / J₁",
+              ylabel="M²(q)",
+              title="DMRG M²(q) vs J₂  (Ly=$Ly, D=$D)")
+
     scatterlines!(ax, J2_vals, Float64.(data.M2_neel_Lx2),
                   label="M²(π,π) Néel  Lx=$Lx2", color=:blue,
                   marker=:circle, markersize=10, linewidth=2)
@@ -390,7 +635,6 @@ ax = Axis(fig[1, 1],
                   label="M²(0,π) Stripe  Lx=$Lx2", color=:green,
                   marker=:rect, markersize=10, linewidth=2)
 
-    # Also show shorter system for comparison
     scatterlines!(ax, J2_vals, Float64.(data.M2_neel_Lx1),
                   label="M²(π,π) Néel  Lx=$Lx1", color=:blue,
                   linestyle=:dash, marker=:utriangle, markersize=8, linewidth=1.5)
@@ -403,9 +647,54 @@ ax = Axis(fig[1, 1],
 
     axislegend(ax, position=:rt)
 
-    fig_path = "dmrg_M2_vs_J2_Ly$(Ly)_D$(D).pdf"
-    save(fig_path, fig)
-    println("M² plot saved to $fig_path")
+    if isnothing(save_path)
+        save_path = "dmrg_M2_vs_J2_Ly$(Ly)_D$(D).pdf"
+    end
+    save(save_path, fig)
+    println("M² plot saved to $save_path")
+
+    return fig
+end
+
+
+conv = check_bulk_convergence(
+      Ly=4,
+      Lx_values=[100, 150, 180, 200,250,300,350,400,450,500,550,600,650,700,750,800,850,900,950,1000,1500,2000,2500,3000,3500,4000],
+      model="tfim",
+      maxdim=2,
+      J1=1.0, g=0.0
+  )
+
+fig = plot_bulk_convergence(conv; save_path="project/results/figures/bulk_convergence.pdf")
+display(fig)
+
+
+# ==================== Example usage ====================
+scan_results = run_dmrg_bulk_scan(
+    model="heisenberg_j1j2",
+    Ly=4, Lx1=1000, Lx2=1200, D=2,
+    scan_param=:J2, scan_values=0.0:0.1:1.0,
+    J1=1.0
+)
+
+# TFIM
+run_dmrg_bulk_scan(
+    model="tfim",
+    Ly=4, Lx1=1000, Lx2=1500, D=2,
+    scan_param=:g, scan_values=0.0:0.5:4.0,
+    J=1.0
+)
+
+output_file = "dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json"
+plot_M2_vs_J2(output_file; Lx1=100, Lx2=200)
+
+# Check convergence of bulk energy at J2=0.5
+conv = check_bulk_convergence(
+    Ly=4, Lx_values=[20, 40, 60, 80, 100, 150, 200],
+    model="heisenberg_j1j2", maxdim=2,
+    J1=1.0, J2=0.5
+)
+plot_bulk_convergence(conv; save_path="project/results/figures/bulk_convergence.pdf")
 
 
 # 1. Run DMRG to get the ground state                     

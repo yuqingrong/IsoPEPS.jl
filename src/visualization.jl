@@ -3873,17 +3873,17 @@ end
 # ============================================================================
 
 """
-    plot_observable_convergence(filename::String; model, save_path)
+    plot_observable_convergence(filename::String; save_path)
 
 Plot cumulative running mean of Z/X/Y basis measurements from a circuit
 optimization result to visualize convergence to the fixed point.
 
 Overlays exact fixed-point expectation values computed from the transfer
-matrix as horizontal dashed reference lines.
+matrix as horizontal dashed reference lines. The model and unit cell type
+are auto-detected from the saved input_args.
 
 # Arguments
 - `filename`: Path to a CircuitOptimizationResult JSON file
-- `model::AbstractModel`: Model used for the optimization (default: `TFIM()`)
 - `save_path::Union{String,Nothing}`: Optional path to save the figure
 
 # Returns
@@ -3891,11 +3891,11 @@ matrix as horizontal dashed reference lines.
 
 # Example
 ```julia
-fig = plot_observable_convergence("result.json"; model=TFIM(1.0, 2.0))
+fig = plot_observable_convergence("result.json")
+fig = plot_observable_convergence("result.json"; save_path="convergence.pdf")
 ```
 """
 function plot_observable_convergence(filename::String;
-        model::AbstractModel = TFIM(),
         save_path::Union{String, Nothing} = nothing)
 
     result, input_args = load_result(filename)
@@ -3906,6 +3906,10 @@ function plot_observable_convergence(filename::String;
     conv_step = get(input_args, :conv_step, 1000)
     vq = (nqubits - 1) ÷ 2
 
+    # Auto-detect model from saved input_args
+    model_str = String(get(input_args, :model, "tfim"))
+    model = _construct_model(model_str, Dict{Symbol,Any}(k => v for (k, v) in input_args))
+
     Z_samples = result.final_Z_samples
     X_samples = result.final_X_samples
     Y_samples = result.final_Y_samples
@@ -3915,10 +3919,21 @@ function plot_observable_convergence(filename::String;
     running_Z = cumsum(Z_samples) ./ (1:length(Z_samples))
     running_X = cumsum(X_samples) ./ (1:length(X_samples))
 
-    # Reconstruct gates and compute exact per-site reference values
-    gates = build_unitary_gate(result.final_params, p, row, nqubits)
-    exact_Z = compute_Z_expectation(nothing, gates, row, vq) / row
-    exact_X = compute_X_expectation(nothing, gates, row, vq) / row
+    # Reconstruct gates and build TransferOperator (handles 1x1 and 2x2 unit cells)
+    if default_unit_cell(model) == :two_by_two
+        gates_odd, gates_even = build_unitary_gate_2x2(result.final_params, p, row, nqubits)
+        op = TransferOperator([gates_odd, gates_even], row, vq)
+    else
+        gates = build_unitary_gate(result.final_params, p, row, nqubits)
+        op = TransferOperator([gates], row, vq)
+    end
+
+    # Compute exact per-site reference values averaged over all (column, position)
+    N = length(op.columns)
+    exact_Z = sum(real(expect(op, :Z; col=c, position=pos))
+                  for c in 1:N for pos in 1:row) / (N * row)
+    exact_X = sum(real(expect(op, :X; col=c, position=pos))
+                  for c in 1:N for pos in 1:row) / (N * row)
 
     n_panels = has_y ? 3 : 2
     fig = Figure(size=(700, 300 * n_panels))
@@ -3926,7 +3941,8 @@ function plot_observable_convergence(filename::String;
     # Z panel
     ax_z = Axis(fig[1, 1],
                 xlabel="Measurement index", ylabel="Running mean ⟨Z⟩",
-                title="Observable Convergence: $(basename(filename))")
+                title="Observable Convergence: $(basename(filename))",
+                limits=(nothing, (-1, 1)))
     lines!(ax_z, 1:length(running_Z), running_Z,
            linewidth=1.5, color=:blue, label="⟨Z⟩ running mean")
     hlines!(ax_z, [exact_Z], linestyle=:dash, color=:red, linewidth=1.5,
@@ -3937,7 +3953,8 @@ function plot_observable_convergence(filename::String;
 
     # X panel
     ax_x = Axis(fig[2, 1],
-                xlabel="Measurement index", ylabel="Running mean ⟨X⟩")
+                xlabel="Measurement index", ylabel="Running mean ⟨X⟩",
+                limits=(nothing, (-1, 1)))
     lines!(ax_x, 1:length(running_X), running_X,
            linewidth=1.5, color=:green, label="⟨X⟩ running mean")
     hlines!(ax_x, [exact_X], linestyle=:dash, color=:red, linewidth=1.5,
@@ -3949,11 +3966,12 @@ function plot_observable_convergence(filename::String;
     # Y panel (if applicable)
     if has_y
         running_Y = cumsum(Y_samples) ./ (1:length(Y_samples))
-        exact_Y = sum(real(expect(gates, row, vq, :Y; position=pos))
-                      for pos in 1:row) / row
+        exact_Y = sum(real(expect(op, :Y; col=c, position=pos))
+                      for c in 1:N for pos in 1:row) / (N * row)
 
         ax_y = Axis(fig[3, 1],
-                    xlabel="Measurement index", ylabel="Running mean ⟨Y⟩")
+                    xlabel="Measurement index", ylabel="Running mean ⟨Y⟩",
+                    limits=(nothing, (-1, 1)))
         lines!(ax_y, 1:length(running_Y), running_Y,
                linewidth=1.5, color=:orange, label="⟨Y⟩ running mean")
         hlines!(ax_y, [exact_Y], linestyle=:dash, color=:red, linewidth=1.5,
