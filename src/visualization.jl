@@ -3935,7 +3935,29 @@ function plot_observable_convergence(filename::String;
     exact_X = sum(real(expect(op, :X; col=c, position=pos))
                   for c in 1:N for pos in 1:row) / (N * row)
 
-    n_panels = has_y ? 3 : 2
+    # Exact energy reference (dispatch per model type)
+    exact_E = if model isa TFIM
+        e, _ = compute_exact_energy(model, op)
+        real(e) / row
+    elseif model isa HeisenbergJ1J2
+        real(compute_exact_heisenberg_energy(op, model.J1, model.J2)) / row
+    else
+        error("compute_exact_energy not implemented for model type $(typeof(model))")
+    end
+
+    # Running mean energy on a downsampled grid (compute_energy_from_samples on prefix).
+    # Start at 2*row so correlator pairs (horizontal bonds) are always well-defined.
+    # Use minimum length across sample vectors to avoid out-of-bounds indexing.
+    n_samples = has_y ? min(length(X_samples), length(Z_samples), length(Y_samples)) :
+                        min(length(X_samples), length(Z_samples))
+    min_k = max(2 * row, 1)
+    eval_indices = unique(round.(Int, range(min_k, n_samples, length=min(500, n_samples - min_k + 1))))
+    running_E = [compute_energy_from_samples(model,
+                     X_samples[1:k], Z_samples[1:k],
+                     has_y ? Y_samples[1:k] : Float64[], row)
+                 for k in eval_indices]
+
+    n_panels = has_y ? 4 : 3
     fig = Figure(size=(700, 300 * n_panels))
 
     # Z panel
@@ -3980,6 +4002,323 @@ function plot_observable_convergence(filename::String;
                 label="conv_step=$conv_step")
         axislegend(ax_y, position=:rt)
     end
+
+    # Energy panel (always last row)
+    energy_row = has_y ? 4 : 3
+    ax_e = Axis(fig[energy_row, 1],
+                xlabel="Measurement index", ylabel="Running mean Energy/site",
+                title="", limits=(nothing, (-4.0, -1.0)))
+    lines!(ax_e, eval_indices, running_E,
+           linewidth=1.5, color=:purple, label="Energy running mean")
+    hlines!(ax_e, [exact_E], linestyle=:dash, color=:red, linewidth=1.5,
+            label="Exact E/site = $(round(exact_E, digits=4))")
+    vlines!(ax_e, [conv_step], linestyle=:dot, color=:gray, linewidth=1,
+            label="conv_step=$conv_step")
+    axislegend(ax_e, position=:rt)
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        @info "Figure saved to $save_path"
+    end
+
+    return fig
+end
+
+"""
+    plot_energy_convergence_vs_g(data_dir, g_values; J, row, p, nqubits, conv_step, ylims, save_path)
+
+Plot the running-mean energy dynamics for multiple g values on a single figure.
+Each g value is shown as a colored line (running mean from samples) with a matching
+dashed horizontal line for the exact energy reference.
+
+# Arguments
+- `data_dir`: Directory containing result JSON files
+- `g_values`: Vector of g values to overlay
+- `J`: Coupling constant (default 1.0)
+- `row`, `p`, `nqubits`: Circuit parameters (used to construct filenames)
+- `conv_step`: Burn-in step marked by a vertical dotted line
+- `ylims`: Y-axis limits, default `(-4.0, -1.0)`
+- `save_path`: If provided, save figure to this path
+
+# Example
+```julia
+fig = plot_energy_convergence_vs_g("project/results", [0.5, 1.0, 1.5, 2.0];
+    J=1.0, row=3, p=3, nqubits=3, conv_step=100)
+```
+"""
+function plot_energy_convergence_vs_g(data_dir::String, g_values::Vector{Float64};
+        J=1.0, row::Int=3, p::Int=3, nqubits::Int=3,
+        conv_step::Int=100,
+        ylims=(-4.0, -1.0),
+        save_path::Union{String,Nothing}=nothing)
+
+    colors = [:blue, :green, :red, :orange, :purple, :brown, :pink, :teal, :cyan, :magenta]
+
+    fig = Figure(size=(900, 500))
+    ax = Axis(fig[1, 1],
+              xlabel="Measurement index",
+              ylabel="Running mean Energy/site",
+              title="Energy Convergence: TFIM J=$J, row=$row",
+              limits=(nothing, ylims))
+
+    conv_drawn = false
+
+    for (idx, g) in enumerate(g_values)
+        filename = joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json")
+
+        if !isfile(filename)
+            @warn "File not found: $(basename(filename)), skipping g=$g"
+            continue
+        end
+
+        result, input_args = load_result(filename)
+        model_str = String(get(input_args, :model, "tfim"))
+        model = _construct_model(model_str, Dict{Symbol,Any}(k => v for (k, v) in input_args))
+
+        vq = (nqubits - 1) ÷ 2
+        gates = build_unitary_gate(result.final_params, p, row, nqubits)
+        op = TransferOperator([gates], row, vq)
+
+        exact_E, _ = compute_exact_energy(model, op)
+        exact_E = real(exact_E) / row
+
+        X_samples = result.final_X_samples
+        Z_samples = result.final_Z_samples
+        n_samples = min(length(X_samples), length(Z_samples))
+        min_k = max(2 * row, 1)
+        eval_indices = unique(round.(Int, range(min_k, n_samples,
+                                               length=min(500, n_samples - min_k + 1))))
+        running_E = [compute_energy_from_samples(model,
+                         X_samples[1:k], Z_samples[1:k], Float64[], row)
+                     for k in eval_indices]
+
+        color = colors[mod1(idx, length(colors))]
+        lines!(ax, eval_indices, running_E,
+               linewidth=1.5, color=color, label="g=$g")
+        hlines!(ax, [exact_E], linestyle=:dash, color=color, linewidth=1.0,
+                label="Exact g=$g = $(round(exact_E, digits=4))")
+
+        if !conv_drawn
+            vlines!(ax, [conv_step], linestyle=:dot, color=:gray, linewidth=1,
+                    label="conv_step=$conv_step")
+            conv_drawn = true
+        end
+    end
+
+    axislegend(ax, position=:rb)
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        @info "Figure saved to $save_path"
+    end
+
+    return fig
+end
+
+"""
+    plot_energy_dynamics(filename; M, shots, conv_step, ylims, save_path)
+
+Run M independent fresh circuit samples from the optimized parameters in `filename`
+and plot the intra-run energy convergence with standard error across runs.
+
+At each shot index k (1 to `shots`), each of the M independent runs contributes a
+cumulative prefix-energy estimate. The mean and ±1 standard error band across M runs
+are plotted, showing how fast a single run's estimate converges and the statistical
+spread.
+
+# Arguments
+- `filename`: Path to a saved result JSON file (produced by `optimize_circuit`)
+- `M`: Number of independent fresh circuit runs (default: 10_000)
+- `shots`: Shots per run after burn-in (default: 1000)
+- `conv_step`: Burn-in steps discarded at the start of each run (default: 100)
+- `ylims`: Y-axis limits (default: `(-4.0, -1.0)`)
+- `save_path`: If provided, save figure to this path
+
+# Example
+```julia
+fig = plot_energy_dynamics("project/results/result.json"; M=1000, shots=500)
+```
+"""
+function plot_energy_dynamics(filename::String;
+        M::Int = 10_000,
+        shots::Int = 1000,
+        conv_step::Int = 100,
+        ylims = (-4.0, -1.0),
+        save_path::Union{String, Nothing} = nothing)
+
+    result, input_args = load_result(filename)
+    row     = input_args[:row]
+    nqubits = input_args[:nqubits]
+    p       = input_args[:p]
+    vq      = (nqubits - 1) ÷ 2
+    model_str = String(get(input_args, :model, "tfim"))
+    model   = _construct_model(model_str, Dict{Symbol,Any}(k => v for (k, v) in input_args))
+    has_y   = needs_y_measurement(model)
+
+    # Reconstruct gates and TransferOperator (handles 1x1 and 2x2 unit cells)
+    two_by_two = default_unit_cell(model) == :two_by_two
+    if two_by_two
+        gates_odd, gates_even = build_unitary_gate_2x2(result.final_params, p, row, nqubits)
+        op = TransferOperator([gates_odd, gates_even], row, vq)
+    else
+        gates = build_unitary_gate(result.final_params, p, row, nqubits)
+        op = TransferOperator([gates], row, vq)
+    end
+
+    # Exact energy reference
+    exact_E = if model isa TFIM
+        e, _ = compute_exact_energy(model, op)
+        real(e) / row
+    elseif model isa HeisenbergJ1J2
+        real(compute_exact_heisenberg_energy(op, model.J1, model.J2)) / row
+    else
+        error("Exact energy not implemented for model type $(typeof(model))")
+    end
+
+    # Downsampled evaluation indices within each run
+    min_k = max(2 * row, 1)
+    eval_indices = unique(round.(Int, range(min_k, shots,
+                                            length=min(200, shots - min_k + 1))))
+    n_eval = length(eval_indices)
+
+    # M independent runs in parallel — energy_curves[m, i] = E at eval_indices[i] in run m
+    energy_curves = Matrix{Float64}(undef, M, n_eval)
+    Threads.@threads for m in 1:M
+        ch = two_by_two ?
+             sample_quantum_channel(gates_odd, gates_even, row, nqubits;
+                                    conv_step=conv_step, samples=shots, model=model) :
+             sample_quantum_channel(gates, row, nqubits;
+                                    conv_step=conv_step, samples=shots, model=model)
+        Z_s = ch[2][1:end]
+        X_s = ch[3][1:end]
+        Y_s = has_y ? ch[4][1:end] : Float64[]
+        for (i, k) in enumerate(eval_indices)
+            energy_curves[m, i] = compute_energy_from_samples(model,
+                X_s[1:k], Z_s[1:k], has_y ? Y_s[1:k] : Float64[], row)
+        end
+    end
+
+    # Mean and standard error across M runs at each eval index
+    mean_E = vec(mean(energy_curves, dims=1))
+    se_E   = vec(std(energy_curves,  dims=1)) ./ sqrt(M)
+
+    fig = Figure(size=(800, 500))
+    ax = Axis(fig[1, 1],
+              xlabel="Shot index (within run)",
+              ylabel="Energy/site",
+              title="Energy Dynamics: $(basename(filename))\nM=$M independent runs, $shots shots each",
+              limits=(nothing, ylims))
+
+    band!(ax, eval_indices, mean_E .- se_E, mean_E .+ se_E,
+          color=(:blue, 0.3), label="±1 SE")
+    lines!(ax, eval_indices, mean_E,
+           color=:blue, linewidth=2, label="Mean energy/site")
+    hlines!(ax, [exact_E], linestyle=:dash, color=:red, linewidth=1.5,
+            label="Exact E/site = $(round(exact_E, digits=4))")
+    axislegend(ax, position=:rb)
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        @info "Figure saved to $save_path"
+    end
+
+    return fig
+end
+
+"""
+    plot_energy_dynamics_vs_g(data_dir, g_values; J, row, p, nqubits, M, shots, conv_step, ylims, save_path)
+
+Like `plot_energy_dynamics` but overlays results for multiple g values on the same figure.
+Each g value gets its own color: a mean energy line and a ±1 SE band.
+
+# Example
+```julia
+fig = plot_energy_dynamics_vs_g("project/results", [0.5, 1.0, 1.5, 2.0];
+    J=1.0, row=3, p=3, nqubits=3, M=1000, shots=500)
+```
+"""
+function plot_energy_dynamics_vs_g(data_dir::String, g_values::Vector{Float64};
+        J=1.0, row::Int=3, p::Int=3, nqubits::Int=3,
+        M::Int = 10_000,
+        shots::Int = 1000,
+        conv_step::Int = 100,
+        ylims = (-4.0, -1.0),
+        save_path::Union{String, Nothing} = nothing)
+
+    colors = [:blue, :green, :red, :orange, :purple, :brown, :pink, :teal, :cyan, :magenta]
+
+    fig = Figure(size=(900, 500))
+    ax = Axis(fig[1, 1],
+              xlabel="Shot index (within run)",
+              ylabel="Energy/site",
+              title="Energy Dynamics: TFIM J=$J, row=$row\nM=$M independent runs, $shots shots each",
+              limits=(nothing, ylims))
+
+    for (idx, g) in enumerate(g_values)
+        filename = joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
+        if !isfile(filename)
+            @warn "File not found: $(basename(filename)), skipping g=$g"
+            continue
+        end
+
+        result, input_args = load_result(filename)
+        model_str = String(get(input_args, :model, "tfim"))
+        model     = _construct_model(model_str, Dict{Symbol,Any}(k => v for (k, v) in input_args))
+        has_y     = needs_y_measurement(model)
+
+        two_by_two = default_unit_cell(model) == :two_by_two
+        if two_by_two
+            gates_odd, gates_even = build_unitary_gate_2x2(result.final_params, p, row, nqubits)
+            op = TransferOperator([gates_odd, gates_even], row, (nqubits-1)÷2)
+        else
+            gates = build_unitary_gate(result.final_params, p, row, nqubits)
+            op = TransferOperator([gates], row, (nqubits-1)÷2)
+        end
+
+        exact_E = if model isa TFIM
+            e, _ = compute_exact_energy(model, op)
+            real(e) / row
+        elseif model isa HeisenbergJ1J2
+            real(compute_exact_heisenberg_energy(op, model.J1, model.J2)) / row
+        end
+
+        min_k = max(2 * row, 1)
+        eval_indices = unique(round.(Int, range(min_k, shots,
+                                                length=min(200, shots - min_k + 1))))
+        n_eval = length(eval_indices)
+
+        energy_curves = Matrix{Float64}(undef, M, n_eval)
+        Threads.@threads for m in 1:M
+            ch = two_by_two ?
+                 sample_quantum_channel(gates_odd, gates_even, row, nqubits;
+                                        conv_step=conv_step, samples=shots, model=model) :
+                 sample_quantum_channel(gates, row, nqubits;
+                                        conv_step=conv_step, samples=shots, model=model)
+            Z_s = ch[2][1:end]
+            X_s = ch[3][1:end]
+            Y_s = has_y ? ch[4][1:end] : Float64[]
+            for (i, k) in enumerate(eval_indices)
+                energy_curves[m, i] = compute_energy_from_samples(model,
+                    X_s[1:k], Z_s[1:k], has_y ? Y_s[1:k] : Float64[], row)
+            end
+        end
+
+        mean_E = vec(mean(energy_curves, dims=1))
+        se_E   = vec(std(energy_curves,  dims=1)) ./ sqrt(M)
+        color  = colors[mod1(idx, length(colors))]
+
+        band!(ax, eval_indices, mean_E .- se_E, mean_E .+ se_E,
+              color=(color, 0.2))
+        lines!(ax, eval_indices, mean_E,
+               color=color, linewidth=2, label="g=$g")
+        hlines!(ax, [exact_E], linestyle=:dash, color=color, linewidth=1.0,
+                label="Exact g=$g = $(round(exact_E, digits=4))")
+    end
+
+    axislegend(ax, position=:rb)
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))

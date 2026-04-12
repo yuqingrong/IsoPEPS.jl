@@ -5,6 +5,10 @@ using CairoMakie
 using Yao
 using LinearAlgebra, OMEinsum
 using JSON3
+
+const PARAMS_PER_QUBIT_PER_LAYER = 2
+
+
 """
     _find_warm_start_params(output_dir, model, scan_param, scan_value, row, p, nqubits; fixed_params...)
 
@@ -190,7 +194,7 @@ end
  simulation(;
      model="heisenberg_j1j2",
      scan_param=:J2,
-     scan_values=[0.0],
+     scan_values=[0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59],
      J1=1.0,
      row=4, p=3, nqubits=3,
      maxiter=500,
@@ -226,7 +230,7 @@ end
 simulation(;
     model="tfim",
     scan_param=:g,
-    scan_values=[0.0],
+    scan_values=[3.5, 4.0],
     J=1.0,
     row=4,
     p=4,
@@ -237,6 +241,6 @@ simulation(;
     output_dir=joinpath(@__DIR__, "results"),
     share_params=true,
     conv_step=100,
-    samples=10000,
+    samples=40000,
     n_runs=1,
     abstol=1e-5)
