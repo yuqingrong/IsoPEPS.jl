@@ -403,8 +403,8 @@ end
 
 function plot_training_history(steps::AbstractVector, values::AbstractVector;
                                 reference::Union{Real,Nothing}=nothing,
-                                ylabel::String="Energy",
-                                title::String="Training History",
+                                ylabel::String="Energy/site",
+                                title::String="",
                                 logscale::Bool=false,
                                 save_path::Union{String,Nothing}=nothing,
                                 g::Union{Real,Nothing}=nothing,
@@ -430,16 +430,16 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
 
     plot_title = title
     if !isnothing(g) && !isnothing(row) && !isnothing(nqubits)
-        plot_title = "Training History: row=$row, g=$g, nqubits=$nqubits"
+        plot_title = ""
     elseif !isnothing(g) && !isnothing(row)
-        plot_title = "row=$row, g=$g"
+        plot_title = ""
     elseif !isnothing(g)
-        plot_title = "g=$g"
+        plot_title = ""
     end
 
     fig = Figure(size=(500, 350))
     ax = Axis(fig[1, 1],
-              xlabel="Step", ylabel=ylabel,
+              xlabel="Optimization step", ylabel=ylabel,
               title=plot_title,
               yscale=logscale ? log10 : identity)
 
@@ -461,7 +461,7 @@ end
 
 function plot_training_history(result::Union{CircuitOptimizationResult, ExactOptimizationResult, ManifoldOptimizationResult}; kwargs...)
     n = length(result.energy_history)
-    plot_training_history(1:n, result.energy_history; ylabel="Energy", kwargs...)
+    plot_training_history(1:n, result.energy_history; ylabel="Energy/site", kwargs...)
 end
 
 # ============================================================================
@@ -1607,7 +1607,7 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
     skipped_g = Float64[]
 
     for (idx, g) in enumerate(g_values)
-        filename = joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
+        filename = joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json")
 
         if !isfile(filename)
             push!(skipped_g, g)
@@ -1670,15 +1670,14 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
 
     ax = Axis(fig[1, 1],
               xlabel="g",
-              ylabel="Correlation Length ξ",
-              title="Correlation Length vs g (J=$J, row=$row, D=$(nqubits-1))")
+              ylabel="Correlation Length ξ")
 
     # Extract and plot correlation lengths from transfer matrix
     g_sorted = sort(collect(keys(correlation_data)))
     ξ_transfer = [correlation_data[g].correlation_length for g in g_sorted]
 
     lines!(ax, g_sorted, ξ_transfer,
-           color=:blue, linewidth=2, label="Sampling based optimization (transfer matrix)")
+           color=:blue, linewidth=2, label="This work: sample-optimized isoPEPS")
     scatter!(ax, g_sorted, ξ_transfer,
              color=:blue, markersize=12)
 
@@ -2309,8 +2308,7 @@ function plot_M2_comparison(; exact_file::String="",
     q_colors = [:blue, :orange]
 
     fig = Figure(size=(600, 400))
-    ax = Axis(fig[1, 1], xlabel="J₂ / J₁", ylabel="M²(q)",
-              title="M²(π,π) and M²(0,π) vs J₂")
+    ax = Axis(fig[1, 1], xlabel="J₂ / J₁", ylabel="M²(q)")
 
     function _load(file)
         isempty(file) && return nothing
@@ -2322,21 +2320,28 @@ function plot_M2_comparison(; exact_file::String="",
     sampling_data = _load(sampling_file)
     dmrg_data     = _load(dmrg_file)
 
+    # Track which method styles have been labelled so each appears once
+    method_labelled = Dict{String,Bool}()
+
     for (iq, qi) in enumerate(q_info)
         color = q_colors[iq]
 
         if exact_data !== nothing && haskey(exact_data, qi.std_key)
             J2 = Float64.(exact_data["J2_values"])
             M2 = Float64.(exact_data[qi.std_key])
-            scatterlines!(ax, J2, M2, label="$(qi.label) TNcontraction", color=color,
+            lbl = get(method_labelled, "exact", false) ? nothing : "TN contraction"
+            scatterlines!(ax, J2, M2, label=lbl, color=color,
                           marker=:circle, markersize=10, linewidth=2)
+            method_labelled["exact"] = true
         end
 
         if sampling_data !== nothing && haskey(sampling_data, qi.std_key)
             J2 = Float64.(sampling_data["J2_values"])
             M2 = Float64.(sampling_data[qi.std_key])
-            scatterlines!(ax, J2, M2, label="$(qi.label) Sampling", color=color,
+            lbl = get(method_labelled, "sampling", false) ? nothing : "Sampling"
+            scatterlines!(ax, J2, M2, label=lbl, color=color,
                           marker=:rect, markersize=9, linewidth=2, linestyle=:dash)
+            method_labelled["sampling"] = true
         end
 
         if dmrg_data !== nothing
@@ -2345,13 +2350,37 @@ function plot_M2_comparison(; exact_file::String="",
             if dmrg_key !== nothing && haskey(dmrg_data, "J2_values")
                 J2 = Float64.(dmrg_data["J2_values"])
                 M2 = Float64.(dmrg_data[dmrg_key])
-                scatterlines!(ax, J2, M2, label="$(qi.label) DMRG", color=color,
+                lbl = get(method_labelled, "dmrg", false) ? nothing : "DMRG"
+                scatterlines!(ax, J2, M2, label=lbl, color=color,
                               marker=:utriangle, markersize=9, linewidth=2, linestyle=:dot)
+                method_labelled["dmrg"] = true
             end
         end
     end
 
-    Legend(fig[1, 2], ax, framevisible=false, labelsize=10, rowgap=2, patchsize=(15, 8))
+    # Flat legend inside the axes: method (line style) + q-point (color)
+    all_elems  = []
+    all_labels = String[]
+
+    if get(method_labelled, "exact", false)
+        push!(all_elems,  LineElement(color=:black, linewidth=2))
+        push!(all_labels, "TN contraction")
+    end
+    if get(method_labelled, "sampling", false)
+        push!(all_elems,  LineElement(color=:black, linewidth=2, linestyle=:dash))
+        push!(all_labels, "Sampling")
+    end
+    if get(method_labelled, "dmrg", false)
+        push!(all_elems,  LineElement(color=:black, linewidth=2, linestyle=:dot))
+        push!(all_labels, "DMRG")
+    end
+    for (i, qi) in enumerate(q_info)
+        push!(all_elems,  MarkerElement(color=q_colors[i], marker=:circle, markersize=10))
+        push!(all_labels, qi.label)
+    end
+
+    axislegend(ax, all_elems, all_labels, position=:rt,
+               framevisible=true, labelsize=10, rowgap=2, patchsize=(15, 8))
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))
@@ -2763,6 +2792,145 @@ function plot_spin_structure_factor(filename::String;
     end
 
     return (fig, SSS)
+end
+
+"""
+    plot_combined_structure_factors(data_dir, J2_values; kwargs...)
+
+Combined 2-row × N-column panel figure: spin structure factor S(q) on top,
+dimer structure factor Sᴅ(q) on bottom, one column per J2 value, with shared
+colorbars per row.
+
+# Arguments
+- `data_dir`: Directory containing saved optimization result JSONs
+- `J2_values`: Vector of J2 coupling values (e.g., [0.0, 0.5, 1.0])
+- `J1`: J1 coupling (default 1.0)
+- `row`, `p`, `nqubits`: Circuit parameters for filename matching
+- `nq`: Number of q-points along each axis (grid: nq × nq)
+- `max_separation_spin`: Max column separation for spin structure factor
+- `max_separation_dimer`: Max column separation for dimer structure factor
+- `dimer_orientation`: `:vertical` or `:horizontal`
+- `use_exact`: If true, use exact transfer matrix; if false, use sampling
+- `conv_step`, `samples`: Sampling parameters (when `use_exact=false`)
+- `save_path`: Optional path to save the figure
+
+# Returns
+- `(fig, spin_matrices, dimer_matrices)` where each `*_matrices` is a Vector of nq×nq matrices
+"""
+function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Float64};
+        J1::Float64=1.0,
+        row::Int=4, p::Int=3, nqubits::Int=3,
+        nq::Int=50,
+        max_separation_spin::Int=10,
+        max_separation_dimer::Int=20,
+        dimer_orientation::Symbol=:vertical,
+        use_exact::Bool=true,
+        conv_step::Int=1000,
+        samples::Int=100000,
+        save_path=nothing)
+
+    n = length(J2_values)
+    spin_matrices = Vector{Matrix{Float64}}(undef, n)
+    dimer_matrices = Vector{Matrix{Float64}}(undef, n)
+    filenames = Vector{String}(undef, n)
+
+    # --- Find files ---
+    for (idx, val) in enumerate(J2_values)
+        candidates = [
+            joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json"),
+            joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
+            joinpath(data_dir, "circuit_heisenberg_j1j2_J=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
+            joinpath(data_dir, "exact_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json"),
+        ]
+        found = ""
+        for c in candidates
+            if isfile(c)
+                found = c
+                break
+            end
+        end
+        if isempty(found)
+            error("No file found for J2=$val, tried $(length(candidates)) patterns")
+        end
+        filenames[idx] = found
+        println("J2=$val  →  $(basename(found))")
+    end
+
+    # --- Compute structure factor matrices ---
+    for idx in 1:n
+        println("\n--- Computing spin structure factor for J2=$(J2_values[idx]) ---")
+        _, SSS = plot_spin_structure_factor(filenames[idx];
+                    nq=nq, max_separation=max_separation_spin,
+                    use_exact=use_exact, conv_step=conv_step, samples=samples)
+        spin_matrices[idx] = SSS
+
+        println("\n--- Computing dimer structure factor for J2=$(J2_values[idx]) ---")
+        _, SD = plot_dimer_structure_factor(filenames[idx];
+                    nq=nq, dimer_orientation=dimer_orientation,
+                    max_separation=max_separation_dimer,
+                    use_exact=use_exact, conv_step=conv_step, samples=samples)
+        dimer_matrices[idx] = SD
+    end
+
+    # --- Shared color ranges ---
+    spin_min = minimum(minimum.(spin_matrices))
+    spin_max = maximum(maximum.(spin_matrices))
+    dimer_min = minimum(minimum.(dimer_matrices))
+    dimer_max = maximum(maximum.(dimer_matrices))
+
+    qvals = range(0.0, 2Float64(π), length=nq)
+
+    # --- Build combined figure ---
+    fig = Figure(size=(280 * n + 80, 520))
+
+    local hm_spin, hm_dimer
+
+    # Top row: spin structure factor S(q)
+    for (j, J2) in enumerate(J2_values)
+        ax = Axis(fig[1, j],
+                  aspect=DataAspect(),
+                  title="J₂ = $J2",
+                  xticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]),
+                  yticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]))
+        if j == 1
+            ax.ylabel = "qᵧ"
+        else
+            ax.yticklabelsvisible = false
+        end
+        ax.xticklabelsvisible = false
+        hm_spin = heatmap!(ax, qvals, qvals, spin_matrices[j],
+                           colormap=:viridis, colorrange=(spin_min, spin_max))
+    end
+    Colorbar(fig[1, n + 1], hm_spin, label="S(q)")
+
+    # Bottom row: dimer structure factor Sᴅ(q)
+    for (j, J2) in enumerate(J2_values)
+        ax = Axis(fig[2, j],
+                  xlabel="qₓ",
+                  aspect=DataAspect(),
+                  xticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]),
+                  yticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]))
+        if j == 1
+            ax.ylabel = "qᵧ"
+        else
+            ax.yticklabelsvisible = false
+        end
+        hm_dimer = heatmap!(ax, qvals, qvals, dimer_matrices[j],
+                            colormap=:viridis, colorrange=(dimer_min, dimer_max))
+    end
+    Colorbar(fig[2, n + 1], hm_dimer, label="Sᴅ(q)")
+
+    # Row labels on the left
+    Label(fig[1, 0], "S(q)", rotation=π/2, fontsize=16, tellheight=false)
+    Label(fig[2, 0], "Sᴅ(q)", rotation=π/2, fontsize=16, tellheight=false)
+
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig)
+        println("Figure saved to: $save_path")
+    end
+
+    return (fig, spin_matrices, dimer_matrices)
 end
 
 """
@@ -4245,20 +4413,19 @@ function plot_energy_dynamics_vs_g(data_dir::String, g_values::Vector{Float64};
         M::Int = 10_000,
         shots::Int = 1000,
         conv_step::Int = 100,
-        ylims = (-4.0, -1.0),
+        ylims = (-5.0, -1.0),
         save_path::Union{String, Nothing} = nothing)
 
     colors = [:blue, :green, :red, :orange, :purple, :brown, :pink, :teal, :cyan, :magenta]
 
     fig = Figure(size=(900, 500))
     ax = Axis(fig[1, 1],
-              xlabel="Shot index (within run)",
+              xlabel=rich("Channel iteration ", rich("n", font=:italic)),
               ylabel="Energy/site",
-              title="Energy Dynamics: TFIM J=$J, row=$row\nM=$M independent runs, $shots shots each",
               limits=(nothing, ylims))
 
     for (idx, g) in enumerate(g_values)
-        filename = joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
+        filename = joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json")
         if !isfile(filename)
             @warn "File not found: $(basename(filename)), skipping g=$g"
             continue
@@ -4315,10 +4482,16 @@ function plot_energy_dynamics_vs_g(data_dir::String, g_values::Vector{Float64};
         lines!(ax, eval_indices, mean_E,
                color=color, linewidth=2, label="g=$g")
         hlines!(ax, [exact_E], linestyle=:dash, color=color, linewidth=1.0,
-                label="Exact g=$g = $(round(exact_E, digits=4))")
+                label=nothing)
     end
 
-    axislegend(ax, position=:rb)
+    # Burn-in marker
+    vlines!(ax, [100], linestyle=:dash, color=:black, linewidth=1.2)
+    text!(ax, 102, ylims[1] + 0.05 * (ylims[2] - ylims[1]),
+          text="burn-in", fontsize=11, color=:black)
+
+    # Compact legend: solid lines for g values only
+    axislegend(ax, position=:rb, merge=true)
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))

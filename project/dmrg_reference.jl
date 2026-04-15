@@ -658,7 +658,7 @@ end
 
 
 conv = check_bulk_convergence(
-      Ly=4,
+      Ly=3,
       Lx_values=[100, 150, 180, 200,250,300,350,400,450,500,550,600,650,700,750,800,850,900,950,1000,1500,2000,2500,3000,3500,4000],
       model="tfim",
       maxdim=2,
@@ -690,9 +690,9 @@ plot_M2_vs_J2(output_file; Lx1=100, Lx2=200)
 
 # Check convergence of bulk energy at J2=0.5
 conv = check_bulk_convergence(
-    Ly=4, Lx_values=[20, 40, 60, 80, 100, 150, 200],
+    Ly=4, Lx_values=[100, 150, 180, 200,250,300,350,400,450,500,550,600,650,700,750,800,850,900,950,1000,1500,2000,2500,3000],
     model="heisenberg_j1j2", maxdim=2,
-    J1=1.0, J2=0.5
+    J1=1.0, J2=0.0
 )
 plot_bulk_convergence(conv; save_path="project/results/figures/bulk_convergence.pdf")
 

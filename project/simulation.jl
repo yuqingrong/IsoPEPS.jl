@@ -8,7 +8,6 @@ using JSON3
 
 const PARAMS_PER_QUBIT_PER_LAYER = 2
 
-
 """
     _find_warm_start_params(output_dir, model, scan_param, scan_value, row, p, nqubits; fixed_params...)
 
@@ -230,10 +229,10 @@ end
 simulation(;
     model="tfim",
     scan_param=:g,
-    scan_values=[3.5, 4.0],
+    scan_values=[4.5],
     J=1.0,
-    row=4,
-    p=4,
+    row=3,
+    p=3,
     nqubits=3,
     maxiter=500,
     seed=123,

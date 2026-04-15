@@ -952,7 +952,7 @@ end
 # Analyze a single result
 J=1.0;g = 1.0; row=4 ; nqubits=3; p=3; virtual_qubits=1;D=2
 data_dir = joinpath(@__DIR__, "results")
-datafile = joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J)_J2=0.5_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json")
+datafile = joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J)_J2=0.0_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile)
 
@@ -966,11 +966,11 @@ fig, data = plot_M2_vs_J2(
   )
 display(fig)
 
-save_M2_vs_J2("project/results", [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6,0.7,0.8,0.9,1.0];                                                                              
+save_M2_vs_J2("project/results", [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57,0.58,0.59,0.6,0.7,0.8,0.9,1.0];                                                                              
                 method=:exact, output_file="project/results/M2_exact.json",                                                                     
                 row=4, nqubits=3, p=3, max_separation=20) 
 
-save_M2_vs_J2("project/results", [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6,0.7,0.8,0.9,1.0];                                                                              
+save_M2_vs_J2("project/results", [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57,0.58,0.59,0.6,0.7,0.8,0.9,1.0];                                                                              
                 method=:sampling, output_file="project/results/M2_sampling.json",
                 row=4, nqubits=3, p=3, max_separation=20) 
 
@@ -979,49 +979,32 @@ plot_M2_comparison(exact_file="project/results/M2_exact.json",
                 dmrg_file="dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json",
                 save_path="project/results/figures/M2_comparison.pdf")   
  
-fig, SSS = plot_spin_structure_factor("project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json";                                                                             
-                nq=50,                                                                                                                                    
-                max_separation=10,
-                use_exact=false,       # sampling method                                                                                                  
-                conv_step=1000,        # burn-in steps                
-                samples=100000,        # measurement samples
-                save_path="project/results/figures/spin_SF_sampling.pdf"
-            )
+# Combined spin + dimer structure factor panel (J2 = 0.0, 0.5, 1.0)
+fig, spin_mats, dimer_mats = plot_combined_structure_factors(
+    "project/results", [0.0, 0.5, 1.0];
+    row=4, p=3, nqubits=3, nq=50,
+    max_separation_spin=10, max_separation_dimer=10,
+    use_exact=true,
+    save_path="project/results/figures/structure_factors_combined.pdf"
+)
 display(fig)
 
 fig, data = plot_bond_energy_pattern("project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.0_row=4_p=3_nqubits=3_2x2.json";
-      use_exact=true, save_path="project/results/figures/bond_energy——exact.pdf") 
+      use_exact=true, save_path="project/results/figures/bond_energy——exact.pdf")
 
 fig, data = plot_bond_energy_pattern("project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json";
       use_exact=false,
       samples=1000000,
       conv_step=100,
       save_path="project/results/figures/bond_energy_sampling.pdf"
-    ) 
+    )
 display(fig)
 
-# Dimer structure factor heatmap (exact)
-fig, SD = plot_dimer_structure_factor("project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json";
-      nq=50,
-      dimer_orientation=:vertical,
-      max_separation=10,
-      use_exact=true,
-      save_path="project/results/figures/dimer_SF_exact.pdf"
+fig, _, _ = plot_combined_structure_factors(
+      "project/results", [0.0, 0.5, 1.0];
+      use_exact=false, conv_step=100, samples=1000000,save_path="project/results/figures/structure_factors_combined.pdf"
   )
 display(fig)
-
-# Dimer structure factor heatmap (sampling)
-fig, SD = plot_dimer_structure_factor("project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.0_row=4_p=3_nqubits=3_2x2.json";
-      nq=50,
-      dimer_orientation=:vertical,
-      max_separation=10,
-      use_exact=false,
-      conv_step=1000,
-      samples=100000,
-      save_path="project/results/figures/dimer_SF_sampling.pdf"
-  )
-display(fig)
-
 
 # Reconstruct gates and analyze
 plot_energy_error_vs_g("project/results", [0.0, 0.1,0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];                            
@@ -1030,7 +1013,7 @@ plot_energy_error_vs_g("project/results", [0.0, 0.1,0.2, 0.3, 0.4, 0.5, 0.6, 0.7
       dmrg_file="project/results/dmrg_j1j2_100x4_D=2.json",save_path="project/results/figures/heisenberg_energy_vs_j2.pdf")
 
  
-plot_correlation_vs_g(data_dir, [0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0];dmrg_file=joinpath(data_dir,"dmrg_tfim_100x3.json"),pepskit_file=referfile, g_c=3.04,
+plot_correlation_vs_g(data_dir, [0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5];dmrg_file=joinpath(data_dir,"dmrg_tfim_100x3.json"),pepskit_file=referfile, g_c=3.04,
 save_path="project/results/figures/corr_length_vs_g.pdf")
 
 fig, data = plot_correlation_vs_J2("project/results", [0.0, 0.1, 0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0];
@@ -1052,6 +1035,6 @@ fig = plot_energy_convergence_vs_g("project/results", [0.0, 0.5, 1.0, 1.5, 2.0, 
 fig = plot_energy_dynamics(datafile;                               
       M=1000, shots=150, conv_step=0, save_path="project/results/figures/energy_dynamics.pdf")
 display(fig)
-fig = plot_energy_dynamics_vs_g("project/results", [0.5, 1.0, 1.5, 2.0, 2.5, 3.0];
+fig = plot_energy_dynamics_vs_g("project/results", [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0];
 J=1.0, row=3, p=3, nqubits=3,                                                                                                
-M=1000, shots=150, conv_step=0, save_path="project/results/figures/energy_dynamics_vs_g.pdf")
+M=1000, shots=200, conv_step=0, save_path="project/results/figures/energy_dynamics_vs_g.pdf")
