@@ -310,7 +310,9 @@ function run_dmrg_bulk_scan(; model::String="heisenberg_j1j2",
         "Lx1_energies_per_site"=> Float64[],
         "Lx2_energies"         => Float64[],
         "Lx2_energies_per_site"=> Float64[],
-        "e_bulk_values"        => Float64[]
+        "e_bulk_values"        => Float64[],
+        "xi_Lx1"               => Union{Float64,Nothing}[],
+        "xi_Lx2"               => Union{Float64,Nothing}[]
     )
 
     if is_j1j2
@@ -363,6 +365,12 @@ function run_dmrg_bulk_scan(; model::String="heisenberg_j1j2",
         push!(scan_results["Lx2_energies"],          result2.energy)
         push!(scan_results["Lx2_energies_per_site"], result2.energy_per_site)
         push!(scan_results["e_bulk_values"],         e_bulk)
+
+        ξ1 = try compute_correlation_length_dmrg(result1).ξ catch e; @warn "ξ(Lx1) failed: $e"; nothing end
+        ξ2 = try compute_correlation_length_dmrg(result2).ξ catch e; @warn "ξ(Lx2) failed: $e"; nothing end
+        push!(scan_results["xi_Lx1"], ξ1)
+        push!(scan_results["xi_Lx2"], ξ2)
+        println("  ξ(Lx=$Lx1) = $ξ1,  ξ(Lx=$Lx2) = $ξ2")
 
         if is_j1j2
             M2_neel1   = compute_M2_dmrg(result1, (pi, pi))
