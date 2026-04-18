@@ -25,3 +25,15 @@ function IsoPEPS.pepskit_ground_state(d::Int, D::Int, J::Float64, g::Float64;
 end
 
 end # module PEPSKitExt
+
+result = IsoPEPS.pepskit_ground_state(2, 2, 1.0, 2.25; χ=30)
+                                                                                                                                                
+data = Dict(    
+    "energy" => real(result.energy),
+    "correlation_length" => result.correlation_length,
+    "parameters" => Dict("d"=>2, "D"=>2, "J"=>1.0, "g"=>2.25, "χ"=>20)
+)
+
+open("project/results/pepskit_d=2_D=2_g=3.0.json", "w") do io
+    JSON3.pretty(io, data)
+end

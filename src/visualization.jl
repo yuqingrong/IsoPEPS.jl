@@ -410,7 +410,9 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
                                 g::Union{Real,Nothing}=nothing,
                                 row::Union{Int,Nothing}=nothing,
                                 nqubits::Union{Int,Nothing}=nothing,
-                                pepskit_results_file::Union{String,Nothing}=nothing)
+                                pepskit_results_file::Union{String,Nothing}=nothing,
+                                dmrg_bulk_file::Union{String,Nothing}=nothing,
+                                J2::Union{Real,Nothing}=nothing)
 
     ref_energy = reference
     if !isnothing(pepskit_results_file) && !isnothing(g) && isfile(pepskit_results_file)
@@ -425,6 +427,38 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
         else
             @warn "g=$g not found in pepskit results, using closest value g=$(g_values[idx])"
             ref_energy = energies[idx]
+        end
+    end
+
+    dmrg_ref = nothing
+    if !isnothing(dmrg_bulk_file) && isfile(dmrg_bulk_file)
+        dmrg_data = open(dmrg_bulk_file, "r") do io
+            JSON3.read(io, Dict)
+        end
+        scan_vals = Float64.(collect(get(dmrg_data, "scan_values", get(dmrg_data, "J2_values", nothing))))
+        e_bulk = Float64.(collect(dmrg_data["e_bulk_values"]))
+        scan_param = if haskey(dmrg_data["parameters"], "scan_param")
+            string(dmrg_data["parameters"]["scan_param"])
+        elseif haskey(dmrg_data, "J2_values")
+            "J2"
+        else
+            "g"
+        end
+
+        scan_target = if scan_param == "g" && !isnothing(g)
+            Float64(g)
+        elseif scan_param == "J2" && !isnothing(J2)
+            Float64(J2)
+        else
+            nothing
+        end
+
+        if !isnothing(scan_target)
+            idx = argmin(abs.(scan_vals .- scan_target))
+            dmrg_ref = e_bulk[idx]
+            if abs(scan_vals[idx] - scan_target) > 1e-6
+                @warn "$scan_param=$scan_target not found in DMRG bulk, using closest $scan_param=$(scan_vals[idx])"
+            end
         end
     end
 
@@ -448,6 +482,14 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
     if !isnothing(ref_energy)
         ref_label = "PEPSKit.jl (E=$(round(ref_energy, digits=4)))"
         hlines!(ax, [ref_energy], linestyle=:dash, color=:red, linewidth=1.5, label=ref_label)
+    end
+
+    if !isnothing(dmrg_ref)
+        dmrg_label = "DMRG bulk (E=$(round(dmrg_ref, digits=4)))"
+        hlines!(ax, [dmrg_ref], linestyle=:dash, color=:red, linewidth=1.5, label=dmrg_label)
+    end
+
+    if !isnothing(ref_energy) || !isnothing(dmrg_ref)
         axislegend(ax, position=:rt)
     end
 

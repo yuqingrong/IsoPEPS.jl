@@ -6,15 +6,16 @@ using JSON3
 using Statistics
 using OMEinsum
 """
-    analyze_result(filename::String; pepskit_results_file=nothing)
+    analyze_result(filename::String; pepskit_results_file=nothing, dmrg_bulk_file=nothing)
 
 Analyze a saved training result from JSON file.
 
 # Arguments
 - `filename`: Path to the result JSON file
 - `pepskit_results_file`: Path to pepskit results JSON file for reference energy (optional)
+- `dmrg_bulk_file`: Path to DMRG bulk model JSON file for reference energy (optional)
 """
-function analyze_result(filename::String; pepskit_results_file::Union{String,Nothing}=nothing, use_exact::Bool=true)
+function analyze_result(filename::String; pepskit_results_file::Union{String,Nothing}=nothing, dmrg_bulk_file::Union{String,Nothing}=nothing, use_exact::Bool=true)
     result, input_args = load_result(filename)
     
     println("=== Training Result Analysis ===")
@@ -41,12 +42,14 @@ function analyze_result(filename::String; pepskit_results_file::Union{String,Not
         println("  nqubits = ", nqubits)
     end
     
-    # Plot training history with reference from pepskit results
+    # Plot training history with reference energies
     fig = plot_training_history(result;
         g=g,
         row=row,
         nqubits=nqubits,
-        pepskit_results_file=pepskit_results_file
+        J2=J2,
+        pepskit_results_file=pepskit_results_file,
+        dmrg_bulk_file=dmrg_bulk_file
     )
     display(fig)
     
@@ -954,7 +957,7 @@ J=1.0;g = 1.0; row=4 ; nqubits=3; p=3; virtual_qubits=1;D=2
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J)_J2=0.0_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
-result, args = analyze_result(datafile; pepskit_results_file=referfile)
+result, args = analyze_result(datafile; pepskit_results_file=referfile, dmrg_bulk_file="project/results/dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json")
 
 fig, data = plot_M2_vs_J2(                                                                                                                    
       data_dir,           # directory with saved JSON result files
