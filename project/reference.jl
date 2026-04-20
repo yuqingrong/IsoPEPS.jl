@@ -28,8 +28,11 @@ function run_pepskit_scan(; d::Int=2, D::Int=2, J::Float64=1.0,
                            g_values=0.0:0.25:4.0,
                            χ::Int=10, ctmrg_tol::Float64=1e-8,
                            grad_tol::Float64=1e-4, maxiter::Int=1000,
+                           ctmrg_maxiter::Int=400, reuse_env::Bool=true,
+                           robust_svd::Bool=true,
+                           warm_start::Bool=true,
                            output_file::String="pepskit_results.json")
-    
+
     results = Dict(
         "parameters" => Dict(
             "d" => d,
@@ -38,34 +41,51 @@ function run_pepskit_scan(; d::Int=2, D::Int=2, J::Float64=1.0,
             "χ" => χ,
             "ctmrg_tol" => ctmrg_tol,
             "grad_tol" => grad_tol,
-            "maxiter" => maxiter
+            "maxiter" => maxiter,
+            "ctmrg_maxiter" => ctmrg_maxiter,
+            "reuse_env" => reuse_env,
+            "robust_svd" => robust_svd,
+            "warm_start" => warm_start
         ),
         "g_values" => collect(g_values),
         "energies" => Any[],
         "correlation_lengths" => Any[]
     )
-    
+
     # Ensure output directory exists
     mkpath(dirname(output_file))
-    
+
     println("=" ^ 60)
     println("PEPSKit Ground State Scan")
     println("d=$d, D=$D, J=$J, χ=$χ")
     println("g values: ", collect(g_values))
     println("=" ^ 60)
 
+    prev_peps = nothing
+    prev_env  = nothing
+
     for (i, g) in enumerate(g_values)
         println("\n[$i/$(length(g_values))] Running g = $g ...")
 
+        peps_init = warm_start ? prev_peps : nothing
+        env_init  = warm_start ? prev_env  : nothing
+
         try
             result = pepskit_ground_state(d, D, J, g; χ=χ, ctmrg_tol=ctmrg_tol,
-                                          grad_tol=grad_tol, maxiter=maxiter)
+                                          grad_tol=grad_tol, maxiter=maxiter,
+                                          ctmrg_maxiter=ctmrg_maxiter,
+                                          reuse_env=reuse_env,
+                                          robust_svd=robust_svd,
+                                          peps_init=peps_init, env_init=env_init)
 
             energy = real(result.energy)
             ξ = result.correlation_length
 
             push!(results["energies"], energy)
             push!(results["correlation_lengths"], ξ)
+
+            prev_peps = result.peps
+            prev_env  = result.env
 
             println("  Energy: $energy")
             println("  Correlation length: $ξ")
@@ -74,8 +94,10 @@ function run_pepskit_scan(; d::Int=2, D::Int=2, J::Float64=1.0,
             println("  ERROR: $e")
             push!(results["energies"], nothing)
             push!(results["correlation_lengths"], nothing)
+            prev_peps = nothing
+            prev_env  = nothing
         end
-        
+
         # Save intermediate results
         open(output_file, "w") do io
             JSON3.pretty(io, results)
@@ -183,12 +205,12 @@ results = run_pepskit_scan(
         d = 2,
         D = 2,
         J = 1.0,
-        g_values = 0.5:0.25:4.0,
-        χ = 12,
+        g_values = 2.25:-0.25:2.0,
+        χ = 16,
         ctmrg_tol = 1e-8,
         grad_tol = 1e-4,
         maxiter = 50,
-        output_file = joinpath(@__DIR__, "results", "pepskit_results_D=2_χ=12.json")
+        output_file = joinpath(@__DIR__, "results", "pepskit_results_D=2_single.json")
     )
 
 plot_pepskit_energy("project/results/pepskit_results_D=2.json"; save_path="project/results/figures/pepskit_energy.pdf")

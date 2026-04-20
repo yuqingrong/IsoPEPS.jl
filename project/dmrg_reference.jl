@@ -193,60 +193,10 @@ end
 Plot the connected correlation function and its exponential fit.
 """
 function plot_correlation_decay(result; max_distance::Int=60, save_path=nothing)
-    corr_result = compute_correlation_length_dmrg(result; max_distance=max_distance)
-
-    ξ = corr_result.ξ
-    correlations = corr_result.correlations
-    distances = corr_result.distances
-
-    valid_idx = abs.(correlations) .> 1e-12
-    valid_corr = abs.(correlations[valid_idx])
-    valid_dist = distances[valid_idx]
-
-    if length(valid_dist) >= 2
-        log_corr = log.(valid_corr)
-        A = hcat(ones(length(valid_dist)), -valid_dist)
-        coeffs = A \ log_corr
-        a, slope = coeffs[1], coeffs[2]
-        fit_distances = range(minimum(valid_dist), maximum(valid_dist), length=100)
-        fit_curve = exp.(a .- fit_distances ./ ξ)
-    else
-        fit_distances = distances
-        fit_curve = zeros(length(distances))
-    end
-
-    fig = Figure(size=(1000, 400))
-
-    ax1 = Axis(fig[1, 1],
-               xlabel="Distance r",
-               ylabel="|C_connected(r)|",
-               title="Connected Correlation Function")
-    scatter!(ax1, distances, abs.(correlations),
-             color=:blue, markersize=8, label="Data")
-    lines!(ax1, fit_distances, fit_curve,
-           color=:red, linewidth=2, linestyle=:dash,
-           label="Fit: exp(-r/ξ), ξ=$(round(ξ, digits=2))")
-    axislegend(ax1, position=:rt)
-
-    ax2 = Axis(fig[1, 2],
-               xlabel="Distance r",
-               ylabel="log|C_connected(r)|",
-               title="Log Scale (Linear Fit)")
-    scatter!(ax2, valid_dist, log.(valid_corr),
-             color=:blue, markersize=8, label="log|Data|")
-    if length(valid_dist) >= 2
-        lines!(ax2, fit_distances, a .- fit_distances ./ ξ,
-               color=:red, linewidth=2, linestyle=:dash,
-               label="Linear fit: a - r/ξ")
-    end
-    axislegend(ax2, position=:rt)
-
-    if !isnothing(save_path)
-        save(save_path, fig)
-        println("Figure saved to $save_path")
-    end
-
-    return fig
+    error("plot_correlation_decay is deprecated: compute_correlation_length_dmrg " *
+          "now uses the MPS column-block transfer matrix and no longer returns " *
+          "raw correlator data. To inspect correlator decay, compute " *
+          "`correlation_matrix(result.psi, \"Sz\", \"Sz\")` directly and plot it.")
 end
 
 """
@@ -688,7 +638,7 @@ scan_results = run_dmrg_bulk_scan(
 # TFIM
 run_dmrg_bulk_scan(
     model="tfim",
-    Ly=4, Lx1=1000, Lx2=1500, D=2,
+    Ly=3, Lx1=1000, Lx2=1500, D=2,
     scan_param=:g, scan_values=0.0:0.5:4.0,
     J=1.0
 )

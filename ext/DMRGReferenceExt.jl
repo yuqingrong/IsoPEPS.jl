@@ -246,53 +246,62 @@ end
 """
     compute_correlation_length_dmrg(result; max_distance::Int=60)
 
-Estimate correlation length from connected correlation function decay.
-Uses C_connected(r) = ⟨Sz(i) Sz(i+r)⟩ - ⟨Sz(i)⟩⟨Sz(i+r)⟩
+Estimate the correlation length from the spectrum of the MPS column-block
+transfer matrix. For a cylinder with `Ly` rows in column-major ordering,
+a one-column shift corresponds to `Ly` consecutive MPS tensors; the block
+transfer matrix built from them, as a linear map on the right-bond space
+`C^{χ} ⊗ C^{χ*}`, has eigenvalues `λ₁ ≥ λ₂ ≥ …` and
+
+    ξ = -1 / log|λ₂ / λ₁|    (in units of columns)
+
+This matches the units of the old fit-based estimator, which sampled
+correlators at `r·Ly`. The `max_distance` kwarg is accepted for backward
+compatibility and ignored.
 """
 function IsoPEPS.compute_correlation_length_dmrg(result; max_distance::Int=60)
     psi = result.psi
-    sites = result.sites
-    N = length(sites)
+    Ly = result.Ly
+    Lx = result.Lx
+    N = length(psi)
 
-    max_dist = min(max_distance, N ÷ 6)
-    n_avg = N - 3 * max_dist
+    # Pick a bulk column near the middle; require at least one column on each side.
+    i_col = clamp(div(Lx, 2), 2, Lx - 1)
+    s_start = (i_col - 1) * Ly + 1
+    s_end   = s_start + Ly - 1
+    @assert 1 < s_start && s_end < N "column block must be in the bulk"
 
-    Sz_expect = ITensorMPS.expect(psi, "Sz")
-    C = correlation_matrix(psi, "Sz", "Sz"; ishermitian=false)
-
-    C_connected = zeros(N, N)
-    for i in 1:N
-        for j in 1:N
-            C_connected[i,j] = real(C[i,j]) - Sz_expect[i] * Sz_expect[j]
-        end
+    # Contract Ly consecutive MPS tensors into a single ket block.
+    ket = psi[s_start]
+    for s in (s_start + 1):s_end
+        ket = ket * psi[s]
     end
 
-    correlations = zeros(max_dist)
-    for i in 1:n_avg
-        for r in 1:max_dist
-            correlations[r] += C_connected[i, i + 3*r]
-        end
+    l_link = commonind(psi[s_start - 1], psi[s_start])
+    r_link = commonind(psi[s_end],       psi[s_end + 1])
+
+    # Prime the two open link indices on the bra so they are distinct from
+    # the ket's; physical indices stay unprimed and therefore get contracted.
+    bra = dag(prime(prime(ket, l_link), r_link))
+    T = ket * bra
+    # T has indices (l_link, r_link, l_link', r_link'). Combine left pair and
+    # right pair to get a square matrix on χ² space.
+    CL = combiner(l_link, prime(l_link))
+    CR = combiner(r_link, prime(r_link))
+    Tc = T * CL * CR
+    L_idx = combinedind(CL)
+    R_idx = combinedind(CR)
+    Tmat = matrix(Tc, L_idx, R_idx)
+
+    evals = LinearAlgebra.eigvals(Tmat)
+    absv = sort(abs.(evals); rev = true)
+    λ1 = absv[1]
+    λ2 = length(absv) >= 2 ? absv[2] : 0.0
+
+    if λ1 < 1e-14 || λ2 < 1e-14 || λ2 / λ1 >= 1 - 1e-12
+        return (ξ = 1e6, lambdas = (λ1, λ2))
     end
-    correlations ./= n_avg
-
-    distances = collect(1:max_dist)
-
-    valid_idx = abs.(correlations) .> 1e-12
-    if sum(valid_idx) < 2
-        return (ξ=1e6, correlations=correlations, distances=distances)
-    end
-
-    log_corr = log.(abs.(correlations[valid_idx]))
-    valid_distances = distances[valid_idx]
-
-    A = hcat(ones(length(valid_distances)), -valid_distances)
-    coeffs = A \ log_corr
-    ξ = 1.0 / coeffs[2]
-
-    ξ = abs(ξ)
-    ξ = clamp(ξ, 0.01, 1e6)
-
-    return (ξ=ξ, correlations=correlations, distances=distances)
+    ξ = clamp(-1.0 / log(λ2 / λ1), 0.01, 1e6)
+    return (ξ = ξ, lambdas = (λ1, λ2))
 end
 
 """
