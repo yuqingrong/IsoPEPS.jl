@@ -31,7 +31,7 @@ function IsoPEPS.pepskit_ground_state(d::Int, D::Int, J::Float64, g::Float64;
                                χ::Int=20, ctmrg_tol::Float64=1e-8,
                                grad_tol::Float64=1e-4, maxiter::Int=100,
                                peps_init=nothing, env_init=nothing)
-    H = transverse_field_ising(PEPSKit.InfiniteSquare(); g=g)
+    H = transverse_field_ising(Float64, PEPSKit.InfiniteSquare(); g=g)
     peps₀ = isnothing(peps_init) ?
         InfinitePEPS(randn, Float64, ℝ^d, ℝ^D) :
         peps_init
