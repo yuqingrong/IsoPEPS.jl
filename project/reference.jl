@@ -24,10 +24,10 @@ Run pepskit_ground_state for a range of g values and save results to JSON.
 # Returns
 Dictionary with results for each g value
 """
-function run_pepskit_scan(; d::Int=2, D::Int=2, J::Float64=1.0, 
+function run_pepskit_scan(; d::Int=2, D::Int=2, J::Float64=1.0,
                            g_values=0.0:0.25:4.0,
-                           χ::Int=10, ctmrg_tol::Float64=1e-10, 
-                           grad_tol::Float64=1e-6, maxiter::Int=1000,
+                           χ::Int=10, ctmrg_tol::Float64=1e-8,
+                           grad_tol::Float64=1e-4, maxiter::Int=1000,
                            output_file::String="pepskit_results.json")
     
     results = Dict(
@@ -41,8 +41,8 @@ function run_pepskit_scan(; d::Int=2, D::Int=2, J::Float64=1.0,
             "maxiter" => maxiter
         ),
         "g_values" => collect(g_values),
-        "energies" => Float64[],
-        "correlation_lengths" => Float64[]
+        "energies" => Any[],
+        "correlation_lengths" => Any[]
     )
     
     # Ensure output directory exists
@@ -53,27 +53,27 @@ function run_pepskit_scan(; d::Int=2, D::Int=2, J::Float64=1.0,
     println("d=$d, D=$D, J=$J, χ=$χ")
     println("g values: ", collect(g_values))
     println("=" ^ 60)
-    
+
     for (i, g) in enumerate(g_values)
         println("\n[$i/$(length(g_values))] Running g = $g ...")
-        
+
         try
-            result = pepskit_ground_state(d, D, J, g; χ=χ, ctmrg_tol=ctmrg_tol, 
+            result = pepskit_ground_state(d, D, J, g; χ=χ, ctmrg_tol=ctmrg_tol,
                                           grad_tol=grad_tol, maxiter=maxiter)
-            
+
             energy = real(result.energy)
             ξ = result.correlation_length
-            
+
             push!(results["energies"], energy)
             push!(results["correlation_lengths"], ξ)
-            
+
             println("  Energy: $energy")
             println("  Correlation length: $ξ")
-            
+
         catch e
             println("  ERROR: $e")
-            push!(results["energies"], NaN)
-            push!(results["correlation_lengths"], NaN)
+            push!(results["energies"], nothing)
+            push!(results["correlation_lengths"], nothing)
         end
         
         # Save intermediate results
@@ -178,19 +178,18 @@ function plot_corr_PEPSKit(filename::String="project/results/pepskit_results_D=2
 end
 
 # Run the scan
-if abspath(PROGRAM_FILE) == @__FILE__
-    results = run_pepskit_scan(
+
+results = run_pepskit_scan(
         d = 2,
-        D = 4,
+        D = 2,
         J = 1.0,
-        g_values = 0.0:0.25:4.0,
-        χ = 20,
-        ctmrg_tol = 1e-10,
-        grad_tol = 1e-6,
-        maxiter = 1000,
-        output_file = joinpath(@__DIR__, "results", "pepskit_results_D=4_χ=20.json")
+        g_values = 0.5:0.25:4.0,
+        χ = 12,
+        ctmrg_tol = 1e-8,
+        grad_tol = 1e-4,
+        maxiter = 50,
+        output_file = joinpath(@__DIR__, "results", "pepskit_results_D=2_χ=12.json")
     )
-end
 
 plot_pepskit_energy("project/results/pepskit_results_D=2.json"; save_path="project/results/figures/pepskit_energy.pdf")
 

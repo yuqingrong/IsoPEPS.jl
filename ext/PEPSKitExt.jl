@@ -5,7 +5,7 @@ using PEPSKit, TensorKit, MPSKitModels
 using PEPSKit: InfiniteSquare
 using MPSKitModels: transverse_field_ising
 using Logging
-
+using JSON3
 struct GaugeFilterLogger{L<:AbstractLogger} <: AbstractLogger
     inner::L
 end
@@ -28,11 +28,16 @@ Logging.min_enabled_level(l::GaugeFilterLogger) = Logging.min_enabled_level(l.in
 Logging.catch_exceptions(l::GaugeFilterLogger) = Logging.catch_exceptions(l.inner)
 
 function IsoPEPS.pepskit_ground_state(d::Int, D::Int, J::Float64, g::Float64;
-                               χ::Int=20, ctmrg_tol::Float64=1e-10,
-                               grad_tol::Float64=1e-6, maxiter::Int=100)
+                               χ::Int=20, ctmrg_tol::Float64=1e-8,
+                               grad_tol::Float64=1e-4, maxiter::Int=100,
+                               peps_init=nothing, env_init=nothing)
     H = transverse_field_ising(PEPSKit.InfiniteSquare(); g=g)
-    peps₀ = InfinitePEPS(ComplexSpace(d), ComplexSpace(D))
-    env₀, = leading_boundary(CTMRGEnv(peps₀, ComplexSpace(χ)), peps₀; tol=ctmrg_tol)
+    peps₀ = isnothing(peps_init) ?
+        InfinitePEPS(randn, Float64, ℝ^d, ℝ^D) :
+        peps_init
+    env₀ = isnothing(env_init) ?
+        first(leading_boundary(CTMRGEnv(peps₀, ℝ^χ), peps₀; tol=ctmrg_tol)) :
+        env_init
 
     filtered = GaugeFilterLogger(current_logger())
 
@@ -53,18 +58,3 @@ function IsoPEPS.pepskit_ground_state(d::Int, D::Int, J::Float64, g::Float64;
 end
 
 end # module PEPSKitExt
-
-result = IsoPEPS.pepskit_ground_state(2, 2, 1.0, 0.0; χ=30)                                                                   
-                                                                                                                             
-      data = Dict(                                                                                                                 
-                                                                                                                                    
-      "energy" => real(result.energy),                                                                                         
-                                                                                                                                  
-        "correlation_length" => result.correlation_length,                                                                       
-        "parameters" => Dict("d"=>2, "D"=>2, "J"=>1.0, "g"=>0.0, "χ"=>30)                                                       
-       )                                                                                                                            
-                                                                                                                                    
-  open("project/results/pepskit_d=2_D=2_g=2.25.json", "w") do io                                                               
-        JSON3.pretty(io, data)                                                                                                   
-       end                                                                                                                          
-   println("Done: energy = ", real(result.energy))
