@@ -1,6 +1,6 @@
 using Test
 using IsoPEPS
-using CairoMakie: Figure
+using CairoMakie: Figure, Legend, Theme, with_theme
 
 @testset "save and load results" begin
     # Test CircuitOptimizationResult
@@ -90,10 +90,19 @@ end
     
     fig = plot_training_history(steps, energies; ylabel="Energy")
     @test fig isa Figure
+    ax = fig.content[1]
+    @test ax.xlabelsize[] == IsoPEPS.PAPER_AXIS_LABELSIZE
+    @test ax.ylabelsize[] == IsoPEPS.PAPER_AXIS_LABELSIZE
     
     # With reference
     fig2 = plot_training_history(steps, energies; reference=-1.0)
     @test fig2 isa Figure
+    legend = fig2.content[2]
+    @test legend isa Legend
+    @test legend.labelsize[] == 8
+    @test isnothing(legend.layoutobservables.gridcontent[])
+    @test IsoPEPS.compact_reference_label(:pepskit, -0.5738123) == "PEPSKit (-0.5738)"
+    @test IsoPEPS.compact_reference_label(:dmrg, -0.5738123) == "DMRG (-0.5738)"
     
     # With result
     result = CircuitOptimizationResult(
@@ -101,6 +110,62 @@ end
     )
     fig3 = plot_training_history(result)
     @test fig3 isa Figure
+end
+
+@testset "plot_training_history ignores ambient axis label sizes" begin
+    with_theme(Theme(Axis=(xlabelsize=21, ylabelsize=19,
+                           xticklabelsize=17, yticklabelsize=15,
+                           titlesize=23))) do
+        fig = plot_training_history(1:3, [0.1, 0.2, 0.3]; ylabel="Energy")
+        ax = fig.content[1]
+        @test ax.xlabelsize[] == IsoPEPS.PAPER_AXIS_LABELSIZE
+        @test ax.ylabelsize[] == IsoPEPS.PAPER_AXIS_LABELSIZE
+        @test ax.xticklabelsize[] == IsoPEPS.PAPER_TICKLABELSIZE
+        @test ax.yticklabelsize[] == IsoPEPS.PAPER_TICKLABELSIZE
+        @test ax.titlesize[] == IsoPEPS.PAPER_TITLESIZE
+    end
+end
+
+@testset "plot_correlation_vs_g legend stays stacked top-left" begin
+    data_dir = joinpath(@__DIR__, "..", "project", "results")
+    fig, _ = plot_correlation_vs_g(data_dir, [2.0];
+                                   max_separation=1,
+                                   dmrg_file=joinpath(data_dir, "dmrg_tfim_100x3.json"),
+                                   pepskit_file=joinpath(data_dir, "pepskit_results_D=2.json"),
+                                   g_c=3.04)
+    @test fig isa Figure
+    legend = fig.content[2]
+    @test legend isa Legend
+    @test legend.nbanks[] == 1
+end
+
+@testset "plot_M2_comparison legend stays inside blank region" begin
+    repo = joinpath(@__DIR__, "..")
+    fig = plot_M2_comparison(exact_file=joinpath(repo, "project", "results", "M2_exact.json"),
+                             sampling_file=joinpath(repo, "project", "results", "M2_sampling.json"))
+    @test fig isa Figure
+    legend = fig.content[2]
+    @test legend isa Legend
+    gc = legend.layoutobservables.gridcontent[]
+    @test gc.span.rows == 1:1
+    @test gc.span.cols == 1:1
+    @test legend.tellwidth[] == false
+    @test legend.tellheight[] == false
+    @test legend.nbanks[] == 1
+    @test legend.halign[] == :left
+    @test legend.valign[] == 0.88
+    @test legend.margin[] == (1, 1, 1, 1)
+    g = legend.entrygroups[][1]
+    @test [e.label[] for e in g[2]] == ["M²(π,π) TN", "M²(π,π) Samp.", "M²(0,π) TN", "M²(0,π) Samp."]
+    annotations = IsoPEPS.m2_phase_annotations(0.24)
+    @test [a.label for a in annotations] == ["Neel order", "VBS", "Stripe order"]
+    @test [(a.x, a.y) for a in annotations] == [(0.20, 0.05), (0.57, 0.05), (0.80, 0.05)]
+    ax = fig.content[1]
+    texts = ax.scene.plots[5:7]
+    @test all(text_plot.fontsize[] == IsoPEPS.PAPER_LEGEND_LABELSIZE for text_plot in texts)
+    @test all(text_plot.color[] == to_color(:firebrick) for text_plot in texts)
+    @test all(text_plot.strokecolor[] == to_color(:firebrick) for text_plot in texts)
+    @test all(text_plot.strokewidth[] == 0 for text_plot in texts)
 end
 
 @testset "plot_variance_vs_samples" begin

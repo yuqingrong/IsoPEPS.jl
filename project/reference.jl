@@ -2,6 +2,7 @@ using IsoPEPS
 using PEPSKit
 using JSON3
 using CairoMakie
+set_theme!(IsoPEPS.paper_theme())
 
 """
     run_pepskit_scan(; d=2, D=2, J=1.0, g_values=0.0:0.25:4.0, χ=10, 

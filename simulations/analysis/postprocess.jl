@@ -13,6 +13,7 @@ Examples:
 
 using IsoPEPS
 using CairoMakie
+set_theme!(IsoPEPS.paper_theme())
 using JSON3
 using Statistics
 using LinearAlgebra

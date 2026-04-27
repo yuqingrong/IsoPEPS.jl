@@ -2,9 +2,11 @@ using IsoPEPS
 using Optimization
 using Random
 using CairoMakie
+set_theme!(IsoPEPS.paper_theme())
 using Yao
 using LinearAlgebra, OMEinsum
 using JSON3
+
 
 const PARAMS_PER_QUBIT_PER_LAYER = 2
 
@@ -24,7 +26,7 @@ function _find_warm_start_params(output_dir, model, scan_param, scan_value, row,
     # Filename format: circuit_{model}_{fixed_params}_{scan_param}={value}_row={row}_p={p}_nqubits={nqubits}.json
     fixed_str = join(["$(k)=$(v)" for (k, v) in sort(collect(fixed_params), by=first)], "_")
     prefix = isempty(fixed_str) ? "circuit_$(model)_$(scan_param)=" : "circuit_$(model)_$(fixed_str)_$(scan_param)="
-    suffix = "_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json" # TODO: not always true
+    suffix = "_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json" # TODO: not always true
 
     best_params = nothing
     best_val = nothing
@@ -174,7 +176,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
         # Save result to JSON
         fixed_str = join(["$(k)=$(v)" for (k, v) in sort(collect(fixed_params), by=first)], "_")
         name_prefix = isempty(fixed_str) ? "circuit_$(model)" : "circuit_$(model)_$(fixed_str)"
-        filename = joinpath(output_dir, "$(name_prefix)_$(scan_param)=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json")
+        filename = joinpath(output_dir, "$(name_prefix)_$(scan_param)=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json")
         input_args = Dict{Symbol,Any}(
             :model => model, :scan_param => scan_param, scan_param => val,
             :row => row, :p => p, :nqubits => nqubits,
@@ -189,6 +191,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
     end
 end
 
+#=
 # ── Example: TFIM ──
  simulation(;
      model="heisenberg_j1j2",
@@ -207,7 +210,7 @@ end
      abstol=1e-5,
      unit_cell=:two_by_two
  )
-
+=#
 # ── Example: Heisenberg J1-J2 ──
 # simulation(;
 #     model="heisenberg_j1j2",
@@ -229,9 +232,9 @@ end
 simulation(;
     model="tfim",
     scan_param=:g,
-    scan_values=[5.5, 6.0],
+    scan_values=[3.5],
     J=1.0,
-    row=3,
+    row=4,
     p=3,
     nqubits=3,
     maxiter=500,

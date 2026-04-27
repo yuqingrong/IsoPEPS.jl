@@ -1,5 +1,6 @@
 using IsoPEPS
 using CairoMakie
+set_theme!(IsoPEPS.paper_theme())
 using Random
 using LinearAlgebra
 using JSON3
@@ -674,8 +675,8 @@ function plot_energy_vs_g(data_dir::String; J=1.0, row=3)
     sort!(data, by=x->x.g)
     
     # Plot
-    fig = Figure(size=(800, 600))
-    ax = Axis(fig[1, 1], 
+    fig = Figure(size=IsoPEPS.PAPER_FIGSIZE)
+    ax = Axis(fig[1, 1],
               xlabel="Transverse field (g)", 
               ylabel="Ground state energy",
               title="TFIM Energy Landscape (J=$J, row=$row)")
@@ -908,7 +909,7 @@ function run_energy_evolution(file1::String, file2::String; n_runs=50, conv_step
     energies2, _, _, _ = get_energies(file2, labels[2])
     
     # Create plot
-    fig = Figure(size=(900, 500))
+    fig = Figure(size=IsoPEPS.PAPER_FIGSIZE)
     ax = Axis(fig[1, 1],
               xlabel="Run Number",
               ylabel="Energy",
@@ -1016,7 +1017,7 @@ plot_energy_error_vs_g("project/results", [0.0, 0.1,0.2, 0.3, 0.4, 0.5, 0.6, 0.7
       dmrg_file="project/results/dmrg_j1j2_100x4_D=2.json",save_path="project/results/figures/heisenberg_energy_vs_j2.pdf")
 
  
-plot_correlation_vs_g(data_dir, [0.5,1.0,1.5,2.0,2.5,3.0,3.5,4.0,4.5,5.0];dmrg_file=joinpath(data_dir,"dmrg_tfim_100x3.json"),pepskit_file=referfile, g_c=3.04,
+plot_correlation_vs_g(data_dir, [2.0,2.5,3.0,3.5,4.0,4.5,5.0];dmrg_file=joinpath(data_dir,"dmrg_tfim_100x3.json"),pepskit_file=referfile, g_c=3.04,
 save_path="project/results/figures/corr_length_vs_g.pdf")
 
 fig, data = plot_correlation_vs_J2("project/results", [0.0, 0.1, 0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0];

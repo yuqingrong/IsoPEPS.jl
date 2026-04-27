@@ -4,6 +4,7 @@ using ITensorMPS  # triggers DMRGReferenceExt
 using JSON3
 using CairoMakie
 using Statistics
+set_theme!(IsoPEPS.paper_theme())
 
 # Core DMRG functions (dmrg_ground_state_2d, build_hamiltonian, etc.)
 # are now provided by IsoPEPS via the DMRGReferenceExt extension.

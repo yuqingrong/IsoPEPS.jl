@@ -1,6 +1,84 @@
 # Visualization: plotting and fitting functions
 
 # ============================================================================
+# Paper-quality theme
+# ============================================================================
+
+const PAPER_FIGSIZE = (246, 170)         # PRL/PRX single column (3.375 in × 2.36 in)
+const PAPER_FIGSIZE_WIDE = (510, 200)    # PRX/Nature double column (7.08 in × 2.78 in)
+const PAPER_FONT = "Helvetica"
+const PAPER_FONTSIZE = 10
+const PAPER_AXIS_LABELSIZE = 10
+const PAPER_TICKLABELSIZE = 9
+const PAPER_TITLESIZE = 11
+const PAPER_LEGEND_LABELSIZE = 8
+
+"""
+    paper_theme()
+
+Science/PRX-style Makie theme: Helvetica sans-serif, compact margins, framed
+legends, light grid. Apply with `set_theme!(paper_theme())` or
+`with_theme(paper_theme()) do ... end`.
+"""
+function paper_theme()
+    Theme(
+        fontsize = PAPER_FONTSIZE,
+        font = PAPER_FONT,
+        figure_padding = 6,
+        palette = (color = [:steelblue, :firebrick, :seagreen, :darkorange,
+                            :purple, :saddlebrown, :hotpink, :teal, :gray],),
+        Axis = (
+            xlabelsize = PAPER_AXIS_LABELSIZE, ylabelsize = PAPER_AXIS_LABELSIZE,
+            xticklabelsize = PAPER_TICKLABELSIZE, yticklabelsize = PAPER_TICKLABELSIZE,
+            titlesize = PAPER_TITLESIZE,
+            xgridvisible = true, ygridvisible = true,
+            xgridcolor = (:gray, 0.25), ygridcolor = (:gray, 0.25),
+            xgridwidth = 0.5, ygridwidth = 0.5,
+            spinewidth = 0.8,
+            xtickwidth = 0.8, ytickwidth = 0.8,
+        ),
+        Legend = (
+            framevisible = true, framewidth = 0.5,
+            labelsize = PAPER_LEGEND_LABELSIZE, padding = (3, 3, 3, 3),
+            rowgap = 1,
+        ),
+        Lines = (linewidth = 1.0, cycle = [:color]),
+        Scatter = (markersize = 6, strokewidth = 0.5, cycle = [:color]),
+        ScatterLines = (linewidth = 1.0, markersize = 6, cycle = [:color]),
+        Errorbars = (linewidth = 0.8, whiskerwidth = 4),
+    )
+end
+
+function compact_reference_label(kind::Symbol, value::Real)
+    rounded_value = round(value, digits=4)
+    if kind === :pepskit
+        return "PEPSKit ($rounded_value)"
+    elseif kind === :dmrg
+        return "DMRG ($rounded_value)"
+    else
+        throw(ArgumentError("unknown reference label kind: $kind"))
+    end
+end
+
+function m2_phase_annotations(ymax::Real)
+    [
+        (x=0.20, y=0.05, label="Neel order", align=(:center, :center)),
+        (x=0.57, y=0.05, label="VBS", align=(:center, :center)),
+        (x=0.80, y=0.05, label="Stripe order", align=(:center, :center)),
+    ]
+end
+
+function add_paper_legend!(ax::Axis; position=:rt, nbanks::Int=1)
+    axislegend(ax;
+               position=position,
+               nbanks=nbanks,
+               labelsize=PAPER_LEGEND_LABELSIZE,
+               padding=(1, 1, 1, 1),
+               margin=(1, 1, 1, 1),
+               framevisible=false)
+end
+
+# ============================================================================
 # fit_acf
 # ============================================================================
 
@@ -227,7 +305,7 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
                   lambda_eff_dominant::Union{Tuple{AbstractVector,AbstractVector},Nothing}=nothing)
 
     fig_height = show_lambda_eff ? 600 : 400
-    fig = Figure(size=(600, fig_height))
+    fig = Figure(size=PAPER_FIGSIZE)
 
     abs_acf = collect(acf)
     lags_vec = collect(lags)
@@ -251,7 +329,7 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
     if !isnothing(acf_err) && !logscale
         errorbars!(ax, lags_vec, plot_y, collect(acf_err), color=:gray)
     end
-    scatter!(ax, lags_vec, plot_y, markersize=8, label="Data", color=:steelblue)
+    scatter!(ax, lags_vec, plot_y, label="Data", color=:steelblue)
 
     if isnothing(fit_params) && !isnothing(fit_range)
         if fit_oscillatory
@@ -285,7 +363,7 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
             end
         end
 
-        lines!(ax, lags_vec, fit_curve, linewidth=2, linestyle=:dash, color=:red, label=label_text)
+        lines!(ax, lags_vec, fit_curve, linestyle=:dash, color=:firebrick, label=label_text)
     end
 
     if !isnothing(theoretical_decay)
@@ -297,7 +375,7 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
         else
             theory_y = real.(collect(theory_corr))
         end
-        lines!(ax, theory_lags_vec, theory_y, linewidth=2, linestyle=:solid, color=:green,
+        lines!(ax, theory_lags_vec, theory_y, linestyle=:solid, color=:seagreen,
                label="Theory (dominant)")
     end
 
@@ -310,7 +388,7 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
         else
             exact_y = real.(collect(exact_corr))
         end
-        lines!(ax, exact_lags_vec, exact_y, linewidth=2, linestyle=:dot, color=:purple,
+        lines!(ax, exact_lags_vec, exact_y, linestyle=:dot, color=:purple,
                label="Exact (all modes)")
     end
 
@@ -323,7 +401,7 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
         else
             dom_y = real.(collect(dom_corr))
         end
-        lines!(ax, dom_lags_vec, dom_y, linewidth=2.5, linestyle=:dashdot, color=:orange,
+        lines!(ax, dom_lags_vec, dom_y, linestyle=:dashdot, color=:darkorange,
                label="Dominant modes")
     end
 
@@ -341,7 +419,7 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
         valid_mask = isfinite.(lambda_eff) .& (lambda_eff .> 0) .& (lambda_eff .< 10)
         if any(valid_mask)
             scatter!(ax2, lambda_eff_lags[valid_mask], lambda_eff[valid_mask],
-                    markersize=6, label="λ_eff(r) from data", color=:steelblue)
+                    label="λ_eff(r) from data", color=:steelblue)
         end
 
         if !isnothing(lambda_eff_theory)
@@ -351,7 +429,7 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
             valid_theory = isfinite.(theory_vals) .& (theory_vals .> 0) .& (theory_vals .< 10)
             if any(valid_theory)
                 lines!(ax2, theory_lags_vec[valid_theory], theory_vals[valid_theory],
-                      linewidth=2.5, linestyle=:solid, color=:purple,
+                      linestyle=:solid, color=:purple,
                       label="λ_eff (all modes)")
             end
         end
@@ -363,20 +441,20 @@ function plot_acf(lags::AbstractVector, acf::AbstractVector;
             valid_dom = isfinite.(dom_vals) .& (dom_vals .> 0) .& (dom_vals .< 10)
             if any(valid_dom)
                 lines!(ax2, dom_lags_vec[valid_dom], dom_vals[valid_dom],
-                      linewidth=2.5, linestyle=:dashdot, color=:orange,
+                      linestyle=:dashdot, color=:darkorange,
                       label="λ_eff (dominant modes)")
             end
         end
 
         if !isnothing(lambda_theory)
-            hlines!(ax2, [lambda_theory], color=:green, linestyle=:dash, linewidth=2,
+            hlines!(ax2, [lambda_theory], color=:seagreen, linestyle=:dash,
                    label="λ_slow (contributing) = $(round(lambda_theory, digits=4))")
         end
 
         if !isnothing(fit_params)
             λ_fit = haskey(fit_params, :λ₂) ? fit_params.λ₂ :
                     (haskey(fit_params, :λ₂_magnitude) ? fit_params.λ₂_magnitude : exp(-1/fit_params.ξ))
-            hlines!(ax2, [λ_fit], color=:red, linestyle=:dot, linewidth=2,
+            hlines!(ax2, [λ_fit], color=:firebrick, linestyle=:dot,
                    label="λ₂ (single exp fit) = $(round(λ_fit, digits=4))")
         end
 
@@ -471,31 +549,35 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
         plot_title = ""
     end
 
-    fig = Figure(size=(500, 350))
-    ax = Axis(fig[1, 1],
-              xlabel="Optimization step", ylabel=ylabel,
-              title=plot_title,
-              yscale=logscale ? log10 : identity)
+    fig = with_theme(paper_theme()) do
+        fig = Figure(size=PAPER_FIGSIZE)
+        ax = Axis(fig[1, 1],
+                  xlabel="Optimization step", ylabel=ylabel,
+                  title=plot_title,
+                  yscale=logscale ? log10 : identity)
 
-    lines!(ax, collect(steps), collect(values), linewidth=2, label=ylabel)
+        lines!(ax, collect(steps), collect(values), label=ylabel)
 
-    if !isnothing(ref_energy)
-        ref_label = "PEPSKit.jl (E=$(round(ref_energy, digits=4)))"
-        hlines!(ax, [ref_energy], linestyle=:dash, color=:red, linewidth=1.5, label=ref_label)
-    end
+        if !isnothing(ref_energy)
+            ref_label = compact_reference_label(:pepskit, ref_energy)
+            hlines!(ax, [ref_energy], linestyle=:dash, color=:firebrick, label=ref_label)
+        end
 
-    if !isnothing(dmrg_ref)
-        dmrg_label = "DMRG bulk (E=$(round(dmrg_ref, digits=4)))"
-        hlines!(ax, [dmrg_ref], linestyle=:dash, color=:red, linewidth=1.5, label=dmrg_label)
-    end
+        if !isnothing(dmrg_ref)
+            dmrg_label = compact_reference_label(:dmrg, dmrg_ref)
+            hlines!(ax, [dmrg_ref], linestyle=:dash, color=:darkorange, label=dmrg_label)
+        end
 
-    if !isnothing(ref_energy) || !isnothing(dmrg_ref)
-        axislegend(ax, position=:rt)
-    end
+        if !isnothing(ref_energy) || !isnothing(dmrg_ref)
+            add_paper_legend!(ax; position=:rt)
+        end
 
-    if !isnothing(save_path)
-        save(save_path, fig)
-        @info "Figure saved to $save_path"
+        if !isnothing(save_path)
+            save(save_path, fig)
+            @info "Figure saved to $save_path"
+        end
+
+        fig
     end
 
     return fig
@@ -545,7 +627,7 @@ function plot_expectation_values(; energy::Union{Real,Nothing}=nothing,
         plot_title = "Expectation Values: g=$g"
     end
 
-    fig = Figure(size=(500, 350))
+    fig = Figure(size=PAPER_FIGSIZE)
     ax = Axis(fig[1, 1],
               xlabel="Observable", ylabel="Value",
               title=plot_title,
@@ -557,10 +639,10 @@ function plot_expectation_values(; energy::Union{Real,Nothing}=nothing,
     for (i, v) in enumerate(values)
         offset = v >= 0 ? 0.05 : -0.05
         align = v >= 0 ? (:center, :bottom) : (:center, :top)
-        text!(ax, i, v + offset; text=string(round(v, digits=4)), align=align, fontsize=12)
+        text!(ax, i, v + offset; text=string(round(v, digits=4)), align=align)
     end
 
-    hlines!(ax, [0], color=:black, linewidth=1)
+    hlines!(ax, [0], color=:black)
 
     ymin = min(minimum(values), 0) * 1.2
     ymax = max(maximum(values), 0) * 1.2
@@ -954,7 +1036,7 @@ function plot_expectation_values(result::CircuitOptimizationResult;
         return nothing
     end
 
-    fig = Figure(size=(800, 400))
+    fig = Figure(size=PAPER_FIGSIZE)
     ax = Axis(fig[1, 1],
               xlabel="Observable", ylabel="Value",
               title=plot_title,
@@ -972,13 +1054,13 @@ function plot_expectation_values(result::CircuitOptimizationResult;
         valid_errors = sample_errors[valid_sample]
         if any(valid_errors .> 0)
             errorbars!(ax, positions_sample[valid_sample], sample_values[valid_sample],
-                      valid_errors, color=:black, linewidth=1.5, whiskerwidth=8)
+                      valid_errors, color=:black)
         end
         for (i, (pos, val, err)) in enumerate(zip(positions_sample, sample_values, sample_errors))
             if !isnan(val)
                 offset = val >= 0 ? (0.03 + err) : (-0.03 - err)
                 align = val >= 0 ? (:center, :bottom) : (:center, :top)
-                text!(ax, pos, val + offset; text=string(round(val, digits=3)), align=align, fontsize=9)
+                text!(ax, pos, val + offset; text=string(round(val, digits=3)), align=align)
             end
         end
     end
@@ -994,13 +1076,13 @@ function plot_expectation_values(result::CircuitOptimizationResult;
                 if !isnan(val)
                     offset = val >= 0 ? 0.03 : -0.03
                     align = val >= 0 ? (:center, :bottom) : (:center, :top)
-                    text!(ax, pos, val + offset; text=string(round(val, digits=3)), align=align, fontsize=9)
+                    text!(ax, pos, val + offset; text=string(round(val, digits=3)), align=align)
                 end
             end
         end
     end
 
-    hlines!(ax, [0], color=:black, linewidth=1)
+    hlines!(ax, [0], color=:black)
     axislegend(ax, position=:rb)
 
     if !isnothing(save_path)
@@ -1021,7 +1103,7 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
                                    title::String="Variance vs Samples",
                                    save_path::Union{String,Nothing}=nothing)
 
-    fig = Figure(size=(500, 350))
+    fig = Figure(size=PAPER_FIGSIZE)
     ax = Axis(fig[1, 1],
               xlabel="Number of Samples", ylabel="Variance",
               title=title,
@@ -1030,7 +1112,7 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
     if !isnothing(errors)
         errorbars!(ax, collect(sample_sizes), collect(variances), collect(errors), color=:gray)
     end
-    scatter!(ax, collect(sample_sizes), collect(variances), markersize=10, label="Data")
+    scatter!(ax, collect(sample_sizes), collect(variances), label="Data")
 
     if fit_scaling && length(sample_sizes) > 1
         log_N = log.(sample_sizes)
@@ -1039,7 +1121,7 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
         a = exp(c)
         N_range = range(minimum(sample_sizes), maximum(sample_sizes), length=50)
         fit_line = a ./ N_range
-        lines!(ax, collect(N_range), fit_line, linewidth=2, linestyle=:dash, color=:red,
+        lines!(ax, collect(N_range), fit_line, linestyle=:dash, color=:firebrick,
                label="1/N scaling (a=$(round(a, digits=2)))")
     end
 
@@ -1707,87 +1789,86 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
         error("No valid results found for any g value")
     end
 
-    # Create figure
-    fig = Figure(size=(800, 600))
+    # Create figure with the package paper theme so saved plots keep the same label sizes.
+    fig = with_theme(paper_theme()) do
+        fig = Figure(size=PAPER_FIGSIZE)
 
-    ax = Axis(fig[1, 1],
-              xlabel="g",
-              ylabel="Correlation Length ξ")
+        ax = Axis(fig[1, 1],
+                  xlabel="g",
+                  ylabel="Correlation Length ξ")
 
-    # Extract and plot correlation lengths from transfer matrix
-    g_sorted = sort(collect(keys(correlation_data)))
-    ξ_transfer = [correlation_data[g].correlation_length for g in g_sorted]
+        # Extract and plot correlation lengths from transfer matrix
+        g_sorted = sort(collect(keys(correlation_data)))
+        ξ_transfer = [correlation_data[g].correlation_length for g in g_sorted]
 
-    lines!(ax, g_sorted, ξ_transfer,
-           color=:blue, linewidth=2, label="This work: sample-optimized isoPEPS")
-    scatter!(ax, g_sorted, ξ_transfer,
-             color=:blue, markersize=12)
+        scatterlines!(ax, g_sorted, ξ_transfer,
+                      color=:steelblue, marker=:circle, label="IsoPEPS")
 
-    # Overlay DMRG correlation lengths if a file is provided
-    if dmrg_file !== nothing && isfile(dmrg_file)
-        println("\nLoading DMRG reference from: $dmrg_file")
-        dmrg_data = open(dmrg_file, "r") do io
-            JSON3.read(io)
+        # Overlay DMRG correlation lengths if a file is provided
+        if dmrg_file !== nothing && isfile(dmrg_file)
+            println("\nLoading DMRG reference from: $dmrg_file")
+            dmrg_data = open(dmrg_file, "r") do io
+                JSON3.read(io)
+            end
+
+            dmrg_g = Float64.(collect(dmrg_data.scan_values))
+            dmrg_ξ = collect(dmrg_data.correlation_lengths)
+
+            # Filter out null/nothing entries and unreasonable values
+            valid = [i for i in eachindex(dmrg_g)
+                     if dmrg_ξ[i] !== nothing && isfinite(Float64(dmrg_ξ[i])) && Float64(dmrg_ξ[i]) < 1e5]
+            dmrg_g_valid = dmrg_g[valid]
+            dmrg_ξ_valid = Float64.(dmrg_ξ[valid])
+
+            scatterlines!(ax, dmrg_g_valid, dmrg_ξ_valid,
+                          color=:firebrick, linestyle=:dash, marker=:diamond, label="DMRG")
+
+            println("  DMRG: $(length(dmrg_g_valid)) valid g points loaded")
+        elseif dmrg_file !== nothing
+            @warn "DMRG file not found: $dmrg_file"
         end
 
-        dmrg_g = Float64.(collect(dmrg_data.scan_values))
-        dmrg_ξ = collect(dmrg_data.correlation_lengths)
+        # Overlay PEPSKit correlation lengths if a file is provided
+        if pepskit_file !== nothing && isfile(pepskit_file)
+            println("\nLoading PEPSKit reference from: $pepskit_file")
+            peps_data = open(pepskit_file, "r") do io
+                JSON3.read(io)
+            end
 
-        # Filter out null/nothing entries and unreasonable values
-        valid = [i for i in eachindex(dmrg_g)
-                 if dmrg_ξ[i] !== nothing && isfinite(Float64(dmrg_ξ[i])) && Float64(dmrg_ξ[i]) < 1e5]
-        dmrg_g_valid = dmrg_g[valid]
-        dmrg_ξ_valid = Float64.(dmrg_ξ[valid])
+            peps_g = Float64.(collect(peps_data.g_values))
+            peps_ξ = collect(peps_data.correlation_lengths)
 
-        lines!(ax, dmrg_g_valid, dmrg_ξ_valid,
-               color=:red, linewidth=2, linestyle=:dash, label="DMRG reference")
-        scatter!(ax, dmrg_g_valid, dmrg_ξ_valid,
-                 color=:red, markersize=8, marker=:diamond)
+            # Filter out null/nothing entries and unreasonable values
+            valid = [i for i in eachindex(peps_g)
+                     if peps_ξ[i] !== nothing && isfinite(Float64(peps_ξ[i])) && Float64(peps_ξ[i]) < 1e5]
+            peps_g_valid = peps_g[valid]
+            peps_ξ_valid = Float64.(peps_ξ[valid])
 
-        println("  DMRG: $(length(dmrg_g_valid)) valid g points loaded")
-    elseif dmrg_file !== nothing
-        @warn "DMRG file not found: $dmrg_file"
-    end
+            D_label = haskey(peps_data, :parameters) && haskey(peps_data.parameters, :D) ?
+                " (D=$(peps_data.parameters.D))" : ""
+            scatterlines!(ax, peps_g_valid, peps_ξ_valid,
+                          color=:seagreen, linestyle=:dashdot, marker=:utriangle, label="iPEPS")
 
-    # Overlay PEPSKit correlation lengths if a file is provided
-    if pepskit_file !== nothing && isfile(pepskit_file)
-        println("\nLoading PEPSKit reference from: $pepskit_file")
-        peps_data = open(pepskit_file, "r") do io
-            JSON3.read(io)
+            println("  PEPSKit: $(length(peps_g_valid)) valid g points loaded")
+        elseif pepskit_file !== nothing
+            @warn "PEPSKit file not found: $pepskit_file"
         end
 
-        peps_g = Float64.(collect(peps_data.g_values))
-        peps_ξ = collect(peps_data.correlation_lengths)
+        # Mark critical point
+        if g_c !== nothing
+            vlines!(ax, [g_c], color=:black, linestyle=:dot,
+                    label=rich("g", subscript("c"), " ≈ $g_c"))
+        end
 
-        # Filter out null/nothing entries and unreasonable values
-        valid = [i for i in eachindex(peps_g)
-                 if peps_ξ[i] !== nothing && isfinite(Float64(peps_ξ[i])) && Float64(peps_ξ[i]) < 1e5]
-        peps_g_valid = peps_g[valid]
-        peps_ξ_valid = Float64.(peps_ξ[valid])
+        add_paper_legend!(ax; position=:lt, nbanks=1)
 
-        D_label = haskey(peps_data, :parameters) && haskey(peps_data.parameters, :D) ?
-            " (D=$(peps_data.parameters.D))" : ""
-        lines!(ax, peps_g_valid, peps_ξ_valid,
-               color=:green, linewidth=2, linestyle=:dashdot, label="iPEPS reference")
-        scatter!(ax, peps_g_valid, peps_ξ_valid,
-                 color=:green, markersize=8, marker=:utriangle)
+        if !isnothing(save_path)
+            mkpath(dirname(save_path))
+            save(save_path, fig)
+            println("\nFigure saved to: $save_path")
+        end
 
-        println("  PEPSKit: $(length(peps_g_valid)) valid g points loaded")
-    elseif pepskit_file !== nothing
-        @warn "PEPSKit file not found: $pepskit_file"
-    end
-
-    # Mark critical point
-    if g_c !== nothing
-        vlines!(ax, [g_c], color=:black, linestyle=:dot, linewidth=1.5, label="g_c ≈ $g_c")
-    end
-
-    axislegend(ax, position=:lt)
-
-    if !isnothing(save_path)
-        mkpath(dirname(save_path))
-        save(save_path, fig)
-        println("\nFigure saved to: $save_path")
+        fig
     end
 
     return fig, correlation_data
@@ -1945,56 +2026,59 @@ function plot_correlation_vs_J2(data_dir::String, J2_values::Vector{Float64};
         error("No valid results found for any J2 value")
     end
 
-    # Create figure
-    fig = Figure(size=(800, 600))
+    # Create figure with the package paper theme so saved plots keep the same label sizes.
+    fig = with_theme(paper_theme()) do
+        fig = Figure(size=PAPER_FIGSIZE)
 
-    ax = Axis(fig[1, 1],
-              xlabel="J₂ / J₁",
-              ylabel="Correlation Length ξ",
-              title="Correlation Length vs J₂ (J₁=$J1, row=$row, D=$(nqubits-1))")
+        ax = Axis(fig[1, 1],
+                  xlabel="J₂ / J₁",
+                  ylabel="Correlation Length ξ",
+                  title="Correlation Length vs J₂ (J₁=$J1, row=$row, D=$(nqubits-1))")
 
-    # Plot correlation lengths from transfer matrix
-    J2_sorted = sort(collect(keys(correlation_data)))
-    ξ_transfer = [correlation_data[j].correlation_length for j in J2_sorted]
+        # Plot correlation lengths from transfer matrix
+        J2_sorted = sort(collect(keys(correlation_data)))
+        ξ_transfer = [correlation_data[j].correlation_length for j in J2_sorted]
 
-    lines!(ax, J2_sorted, ξ_transfer,
-           color=:blue, linewidth=2, label="IsoPEPS (transfer matrix)")
-    scatter!(ax, J2_sorted, ξ_transfer,
-             color=:blue, markersize=12)
+        lines!(ax, J2_sorted, ξ_transfer,
+               color=:steelblue, label="IsoPEPS (transfer matrix)")
+        scatter!(ax, J2_sorted, ξ_transfer, color=:steelblue)
 
-    # Overlay DMRG correlation lengths if provided
-    if dmrg_file !== nothing && isfile(dmrg_file)
-        println("\nLoading DMRG reference from: $dmrg_file")
-        dmrg_data = open(dmrg_file, "r") do io
-            JSON3.read(io)
+        # Overlay DMRG correlation lengths if provided
+        if dmrg_file !== nothing && isfile(dmrg_file)
+            println("\nLoading DMRG reference from: $dmrg_file")
+            dmrg_data = open(dmrg_file, "r") do io
+                JSON3.read(io)
+            end
+
+            if haskey(dmrg_data, :correlation_lengths)
+                j2_key = haskey(dmrg_data, :scan_values) ? :scan_values : :J2_values
+                dmrg_J2 = Float64.(collect(dmrg_data[j2_key]))
+                dmrg_ξ = collect(dmrg_data.correlation_lengths)
+
+                valid = [i for i in eachindex(dmrg_J2)
+                         if dmrg_ξ[i] !== nothing && isfinite(Float64(dmrg_ξ[i])) && Float64(dmrg_ξ[i]) < 1e5]
+                dmrg_J2_valid = dmrg_J2[valid]
+                dmrg_ξ_valid = Float64.(dmrg_ξ[valid])
+
+                lines!(ax, dmrg_J2_valid, dmrg_ξ_valid,
+                       color=:firebrick, linestyle=:dash, label="DMRG reference")
+                scatter!(ax, dmrg_J2_valid, dmrg_ξ_valid,
+                         color=:firebrick, marker=:diamond)
+                println("  DMRG: $(length(dmrg_J2_valid)) valid J2 points loaded")
+            end
+        elseif dmrg_file !== nothing
+            println("DMRG file not found: $dmrg_file")
         end
 
-        if haskey(dmrg_data, :correlation_lengths)
-            j2_key = haskey(dmrg_data, :scan_values) ? :scan_values : :J2_values
-            dmrg_J2 = Float64.(collect(dmrg_data[j2_key]))
-            dmrg_ξ = collect(dmrg_data.correlation_lengths)
+        axislegend(ax, position=:lt)
 
-            valid = [i for i in eachindex(dmrg_J2)
-                     if dmrg_ξ[i] !== nothing && isfinite(Float64(dmrg_ξ[i])) && Float64(dmrg_ξ[i]) < 1e5]
-            dmrg_J2_valid = dmrg_J2[valid]
-            dmrg_ξ_valid = Float64.(dmrg_ξ[valid])
-
-            lines!(ax, dmrg_J2_valid, dmrg_ξ_valid,
-                   color=:red, linewidth=2, linestyle=:dash, label="DMRG reference")
-            scatter!(ax, dmrg_J2_valid, dmrg_ξ_valid,
-                     color=:red, markersize=8, marker=:diamond)
-            println("  DMRG: $(length(dmrg_J2_valid)) valid J2 points loaded")
+        if !isnothing(save_path)
+            mkpath(dirname(save_path))
+            save(save_path, fig)
+            println("\nFigure saved to: $save_path")
         end
-    elseif dmrg_file !== nothing
-        println("DMRG file not found: $dmrg_file")
-    end
 
-    axislegend(ax, position=:lt)
-
-    if !isnothing(save_path)
-        mkpath(dirname(save_path))
-        save(save_path, fig)
-        println("\nFigure saved to: $save_path")
+        fig
     end
 
     return fig, correlation_data
@@ -2134,18 +2218,18 @@ function plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
     end
 
     # --- Plot ---
-    fig = Figure(size=(800, 500))
+    fig = Figure(size=PAPER_FIGSIZE_WIDE)
     ax = Axis(fig[1, 1],
               xlabel="J₂ / J₁",
               ylabel="M²(q)",
               title="Magnetic Order [$method_str]: row=$row, nqubits=$nqubits, p=$p")
 
     scatterlines!(ax, J2_found, M2_neel,
-                  label="M²(π,π) Néel", color=:blue, marker=:circle, markersize=10, linewidth=2)
+                  label="M²(π,π) Néel", color=:steelblue, marker=:circle)
     scatterlines!(ax, J2_found, M2_stripe,
-                  label="M²(π,0) Stripe", color=:red, marker=:diamond, markersize=10, linewidth=2)
+                  label="M²(π,0) Stripe", color=:firebrick, marker=:diamond)
     scatterlines!(ax, J2_found, M2_stripe_0pi,
-                  label="M²(0,π) Stripe", color=:green, marker=:rect, markersize=10, linewidth=2)
+                  label="M²(0,π) Stripe", color=:seagreen, marker=:rect)
 
     # Overlay DMRG reference if provided
     if dmrg_file !== nothing && isfile(dmrg_file)
@@ -2154,28 +2238,28 @@ function plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
             dmrg_J2 = Float64.(dmrg_data[:J2_values])
             dmrg_neel = Float64.(dmrg_data[:M2_neel])
             scatterlines!(ax, dmrg_J2, dmrg_neel,
-                          label="DMRG M²(π,π)", color=:blue, linestyle=:dash,
-                          marker=:utriangle, markersize=8, linewidth=1.5)
+                          label="DMRG M²(π,π)", color=:steelblue, linestyle=:dash,
+                          marker=:utriangle)
         end
         if haskey(dmrg_data, :J2_values) && haskey(dmrg_data, :M2_stripe)
             dmrg_J2 = Float64.(dmrg_data[:J2_values])
             dmrg_stripe = Float64.(dmrg_data[:M2_stripe])
             scatterlines!(ax, dmrg_J2, dmrg_stripe,
-                          label="DMRG M²(π,0)", color=:red, linestyle=:dash,
-                          marker=:utriangle, markersize=8, linewidth=1.5)
+                          label="DMRG M²(π,0)", color=:firebrick, linestyle=:dash,
+                          marker=:utriangle)
         end
         if haskey(dmrg_data, :J2_values) && haskey(dmrg_data, :M2_stripe_0pi)
             dmrg_J2 = Float64.(dmrg_data[:J2_values])
             dmrg_stripe_0pi = Float64.(dmrg_data[:M2_stripe_0pi])
             scatterlines!(ax, dmrg_J2, dmrg_stripe_0pi,
-                          label="DMRG M²(0,π)", color=:green, linestyle=:dash,
-                          marker=:utriangle, markersize=8, linewidth=1.5)
+                          label="DMRG M²(0,π)", color=:seagreen, linestyle=:dash,
+                          marker=:utriangle)
         end
     elseif dmrg_file !== nothing
         @warn "DMRG file not found: $dmrg_file"
     end
 
-    axislegend(ax, position=:rt)
+    Legend(fig[1, 2], ax)
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))
@@ -2349,7 +2433,7 @@ function plot_M2_comparison(; exact_file::String="",
     # Colors: blue/orange for (π,π)/(0,π); solid/dash/dot for exact/sampling/DMRG
     q_colors = [:blue, :orange]
 
-    fig = Figure(size=(600, 400))
+    fig = Figure(size=PAPER_FIGSIZE)
     ax = Axis(fig[1, 1], xlabel="J₂ / J₁", ylabel="M²(q)")
 
     function _load(file)
@@ -2361,6 +2445,7 @@ function plot_M2_comparison(; exact_file::String="",
     exact_data    = _load(exact_file)
     sampling_data = _load(sampling_file)
     dmrg_data     = _load(dmrg_file)
+    all_M2_values = Float64[]
 
     # Track which method styles have been labelled so each appears once
     method_labelled = Dict{String,Bool}()
@@ -2371,18 +2456,19 @@ function plot_M2_comparison(; exact_file::String="",
         if exact_data !== nothing && haskey(exact_data, qi.std_key)
             J2 = Float64.(exact_data["J2_values"])
             M2 = Float64.(exact_data[qi.std_key])
+            append!(all_M2_values, M2)
             lbl = get(method_labelled, "exact", false) ? nothing : "TN contraction"
-            scatterlines!(ax, J2, M2, label=lbl, color=color,
-                          marker=:circle, markersize=10, linewidth=2)
+            scatterlines!(ax, J2, M2, label=lbl, color=color, marker=:circle)
             method_labelled["exact"] = true
         end
 
         if sampling_data !== nothing && haskey(sampling_data, qi.std_key)
             J2 = Float64.(sampling_data["J2_values"])
             M2 = Float64.(sampling_data[qi.std_key])
+            append!(all_M2_values, M2)
             lbl = get(method_labelled, "sampling", false) ? nothing : "Sampling"
             scatterlines!(ax, J2, M2, label=lbl, color=color,
-                          marker=:rect, markersize=9, linewidth=2, linestyle=:dash)
+                          marker=:rect, linestyle=:dash)
             method_labelled["sampling"] = true
         end
 
@@ -2392,37 +2478,56 @@ function plot_M2_comparison(; exact_file::String="",
             if dmrg_key !== nothing && haskey(dmrg_data, "J2_values")
                 J2 = Float64.(dmrg_data["J2_values"])
                 M2 = Float64.(dmrg_data[dmrg_key])
+                append!(all_M2_values, M2)
                 lbl = get(method_labelled, "dmrg", false) ? nothing : "DMRG"
                 scatterlines!(ax, J2, M2, label=lbl, color=color,
-                              marker=:utriangle, markersize=9, linewidth=2, linestyle=:dot)
+                              marker=:utriangle, linestyle=:dot)
                 method_labelled["dmrg"] = true
             end
         end
     end
 
-    # Flat legend inside the axes: method (line style) + q-point (color)
+    ymax = isempty(all_M2_values) ? 0.25 : max(0.25, 1.12 * maximum(all_M2_values))
+    ylims!(ax, 0, ymax)
+
+    # Combined legend: one entry per (q-point, method) pair so color + style are visible together
     all_elems  = []
     all_labels = String[]
 
-    if get(method_labelled, "exact", false)
-        push!(all_elems,  LineElement(color=:black, linewidth=2))
-        push!(all_labels, "TN contraction")
-    end
-    if get(method_labelled, "sampling", false)
-        push!(all_elems,  LineElement(color=:black, linewidth=2, linestyle=:dash))
-        push!(all_labels, "Sampling")
-    end
-    if get(method_labelled, "dmrg", false)
-        push!(all_elems,  LineElement(color=:black, linewidth=2, linestyle=:dot))
-        push!(all_labels, "DMRG")
-    end
-    for (i, qi) in enumerate(q_info)
-        push!(all_elems,  MarkerElement(color=q_colors[i], marker=:circle, markersize=10))
-        push!(all_labels, qi.label)
+    method_style = [
+        ("exact",    "TN",      :solid, :circle),
+        ("sampling", "Samp.",   :dash,  :rect),
+        ("dmrg",     "DMRG",   :dot,   :utriangle),
+    ]
+
+    for (iq, qi) in enumerate(q_info)
+        color = q_colors[iq]
+        for (key, mname, ls, mk) in method_style
+            get(method_labelled, key, false) || continue
+            push!(all_elems, [LineElement(color=color, linestyle=ls),
+                              MarkerElement(color=color, marker=mk)])
+            push!(all_labels, "$(qi.label) $(mname)")
+        end
     end
 
-    axislegend(ax, all_elems, all_labels, position=:rt,
-               framevisible=true, labelsize=10, rowgap=2, patchsize=(15, 8))
+    Legend(fig[1, 1], all_elems, all_labels;
+           tellwidth=false, tellheight=false,
+           halign=:left, valign=0.88,
+           nbanks=1,
+           margin=(1, 1, 1, 1),
+           framevisible=false,
+           labelsize=PAPER_LEGEND_LABELSIZE,
+           padding=(1, 1, 1, 1))
+
+    for ann in m2_phase_annotations(ymax)
+        text!(ax, ann.x, ann.y;
+              text=ann.label,
+              align=ann.align,
+              fontsize=PAPER_LEGEND_LABELSIZE,
+              color=:firebrick,
+              strokecolor=:firebrick,
+              strokewidth=0)
+    end
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))
@@ -4263,9 +4368,10 @@ function plot_energy_convergence_vs_g(data_dir::String, g_values::Vector{Float64
         ylims=(-4.0, -1.0),
         save_path::Union{String,Nothing}=nothing)
 
-    colors = [:blue, :green, :red, :orange, :purple, :brown, :pink, :teal, :cyan, :magenta]
+    palette = [:steelblue, :firebrick, :seagreen, :darkorange,
+               :purple, :saddlebrown, :hotpink, :teal, :gray]
 
-    fig = Figure(size=(900, 500))
+    fig = Figure(size=PAPER_FIGSIZE_WIDE)
     ax = Axis(fig[1, 1],
               xlabel="Measurement index",
               ylabel="Running mean Energy/site",
@@ -4303,20 +4409,19 @@ function plot_energy_convergence_vs_g(data_dir::String, g_values::Vector{Float64
                          X_samples[1:k], Z_samples[1:k], Float64[], row)
                      for k in eval_indices]
 
-        color = colors[mod1(idx, length(colors))]
-        lines!(ax, eval_indices, running_E,
-               linewidth=1.5, color=color, label="g=$g")
-        hlines!(ax, [exact_E], linestyle=:dash, color=color, linewidth=1.0,
+        color = palette[mod1(idx, length(palette))]
+        lines!(ax, eval_indices, running_E, color=color, label="g=$g")
+        hlines!(ax, [exact_E], linestyle=:dash, color=color,
                 label="Exact g=$g = $(round(exact_E, digits=4))")
 
         if !conv_drawn
-            vlines!(ax, [conv_step], linestyle=:dot, color=:gray, linewidth=1,
+            vlines!(ax, [conv_step], linestyle=:dot, color=:gray,
                     label="conv_step=$conv_step")
             conv_drawn = true
         end
     end
 
-    axislegend(ax, position=:rb)
+    Legend(fig[1, 2], ax, merge=true)
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))
@@ -4414,7 +4519,7 @@ function plot_energy_dynamics(filename::String;
     mean_E = vec(mean(energy_curves, dims=1))
     se_E   = vec(std(energy_curves,  dims=1)) ./ sqrt(M)
 
-    fig = Figure(size=(800, 500))
+    fig = Figure(size=PAPER_FIGSIZE)
     ax = Axis(fig[1, 1],
               xlabel="Shot index (within run)",
               ylabel="Energy/site",
@@ -4422,10 +4527,10 @@ function plot_energy_dynamics(filename::String;
               limits=(nothing, ylims))
 
     band!(ax, eval_indices, mean_E .- se_E, mean_E .+ se_E,
-          color=(:blue, 0.3), label="±1 SE")
+          color=(:steelblue, 0.3), label="±1 SE")
     lines!(ax, eval_indices, mean_E,
-           color=:blue, linewidth=2, label="Mean energy/site")
-    hlines!(ax, [exact_E], linestyle=:dash, color=:red, linewidth=1.5,
+           color=:steelblue, label="Mean energy/site")
+    hlines!(ax, [exact_E], linestyle=:dash, color=:firebrick,
             label="Exact E/site = $(round(exact_E, digits=4))")
     axislegend(ax, position=:rb)
 
@@ -4458,13 +4563,14 @@ function plot_energy_dynamics_vs_g(data_dir::String, g_values::Vector{Float64};
         ylims = (-5.0, -1.0),
         save_path::Union{String, Nothing} = nothing)
 
-    colors = [:blue, :green, :red, :orange, :purple, :brown, :pink, :teal, :cyan, :magenta]
-
-    fig = Figure(size=(900, 500))
+    fig = Figure(size=PAPER_FIGSIZE_WIDE)
     ax = Axis(fig[1, 1],
               xlabel=rich("Channel iteration ", rich("n", font=:italic)),
               ylabel="Energy/site",
               limits=(nothing, ylims))
+
+    palette = [:steelblue, :firebrick, :seagreen, :darkorange,
+               :purple, :saddlebrown, :hotpink, :teal, :gray]
 
     for (idx, g) in enumerate(g_values)
         filename = joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json")
@@ -4517,23 +4623,22 @@ function plot_energy_dynamics_vs_g(data_dir::String, g_values::Vector{Float64};
 
         mean_E = vec(mean(energy_curves, dims=1))
         se_E   = vec(std(energy_curves,  dims=1)) ./ sqrt(M)
-        color  = colors[mod1(idx, length(colors))]
+        color  = palette[mod1(idx, length(palette))]
 
         band!(ax, eval_indices, mean_E .- se_E, mean_E .+ se_E,
               color=(color, 0.2))
         lines!(ax, eval_indices, mean_E,
-               color=color, linewidth=2, label="g=$g")
-        hlines!(ax, [exact_E], linestyle=:dash, color=color, linewidth=1.0,
-                label=nothing)
+               color=color, label="g=$g")
+        hlines!(ax, [exact_E], linestyle=:dash, color=color, label=nothing)
     end
 
     # Burn-in marker
-    vlines!(ax, [100], linestyle=:dash, color=:black, linewidth=1.2)
+    vlines!(ax, [100], linestyle=:dash, color=:black)
     text!(ax, 102, ylims[1] + 0.05 * (ylims[2] - ylims[1]),
-          text="burn-in", fontsize=11, color=:black)
+          text="burn-in", color=:black)
 
-    # Compact legend: solid lines for g values only
-    axislegend(ax, position=:rb, merge=true)
+    # Outside legend: keeps the axis uncluttered when many g values are present
+    Legend(fig[1, 2], ax, merge=true)
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))

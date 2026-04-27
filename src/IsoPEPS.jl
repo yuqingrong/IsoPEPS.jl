@@ -175,6 +175,7 @@ export save_result, load_result, save_results, load_results, resample_circuit
 export reconstruct_gates
 
 # Visualization (loaded via CairoMakie extension)
+export paper_theme, PAPER_FIGSIZE, PAPER_FIGSIZE_WIDE
 export plot_acf, fit_acf, fit_acf_power, fit_acf_oscillatory
 export plot_training_history, plot_variance_vs_samples, plot_expectation_values
 export plot_corr_scale
@@ -187,4 +188,12 @@ export bond_expectation, all_bond_expectations
 export plot_dmrg_spin_structure_factor, plot_dmrg_dimer_structure_factor
 export plot_dmrg_plaquette_structure_factor, plot_dmrg_dimer_bond_pattern
 export plot_dmrg_bond_energy_pattern
+
+# =============================================================================
+# Module init: activate paper-quality Makie theme on package load
+# =============================================================================
+function __init__()
+    set_theme!(paper_theme())
+end
+
 end
