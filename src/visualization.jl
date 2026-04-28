@@ -481,9 +481,10 @@ end
 
 function plot_training_history(steps::AbstractVector, values::AbstractVector;
                                 reference::Union{Real,Nothing}=nothing,
-                                ylabel::String="Energy/site",
+                                ylabel::String="E / site",
                                 title::String="",
                                 logscale::Bool=false,
+                                ylims::Union{Tuple{Real,Real},Nothing}=(-0.7, 0.0),
                                 save_path::Union{String,Nothing}=nothing,
                                 g::Union{Real,Nothing}=nothing,
                                 row::Union{Int,Nothing}=nothing,
@@ -551,10 +552,12 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
 
     fig = with_theme(paper_theme()) do
         fig = Figure(size=PAPER_FIGSIZE)
-        ax = Axis(fig[1, 1],
-                  xlabel="Optimization step", ylabel=ylabel,
-                  title=plot_title,
-                  yscale=logscale ? log10 : identity)
+        ax = Axis(fig[1, 1];
+                  xlabel = "Optimization step",
+                  ylabel = ylabel,
+                  title  = plot_title,
+                  yscale = logscale ? log10 : identity,
+                  limits = (nothing, isnothing(ylims) ? nothing : (Float64(ylims[1]), Float64(ylims[2]))))
 
         lines!(ax, collect(steps), collect(values), label=ylabel)
 
@@ -1094,42 +1097,326 @@ function plot_expectation_values(result::CircuitOptimizationResult;
 end
 
 # ============================================================================
+# compute_variance_vs_samples
+# ============================================================================
+
+"""
+    compute_variance_vs_samples(filename, sample_sizes; kwargs...)
+
+Run the circuit once at `maximum(sample_sizes)` samples, then estimate the
+variance of the energy estimator at each target sample size via bootstrap
+subsampling.  The returned vectors can be passed directly to
+`plot_variance_vs_samples`.
+
+# Arguments
+- `filename`: Path to a saved optimization result JSON
+- `sample_sizes`: Vector of sample counts to evaluate (e.g. `[1_000, 10_000, 100_000]`)
+- `conv_step`: Burn-in steps discarded from the front of the chain (default 100)
+- `n_bootstrap`: Number of bootstrap draws per sample size (default 200)
+- `save_path`: If provided, saves the results as JSON for later use
+
+# Returns
+- `(sample_sizes, variances, errors)` — each is a `Vector{Float64}` of the same
+  length.  `errors` is the standard error on each variance estimate.
+
+# Example
+```julia
+sizes = [1_000, 5_000, 10_000, 50_000, 100_000]
+ns, vars, errs = compute_variance_vs_samples(
+    "project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json",
+    sizes; conv_step=100, n_bootstrap=200)
+fig = plot_variance_vs_samples(ns, vars; errors=errs)
+```
+"""
+function compute_variance_vs_samples(filename::String,
+                                     sample_sizes::AbstractVector{Int};
+                                     conv_step::Int=100,
+                                     n_bootstrap::Int=200,
+                                     save_path::Union{String,Nothing}=nothing)
+
+    result, input_args = load_result(filename)
+    model_str  = get(input_args, :model, "tfim")
+    is_heisenberg = (model_str == "heisenberg_j1j2")
+    row        = Int(input_args[:row])
+    J1         = Float64(get(input_args, :J1, get(input_args, :J, 1.0)))
+    J2         = Float64(get(input_args, :J2, 0.0))
+    g          = Float64(get(input_args, :g,  1.0))
+    J          = Float64(get(input_args, :J,  1.0))
+
+    max_samples = maximum(sample_sizes)
+    println("=== compute_variance_vs_samples ===")
+    println("Model: $model_str  |  max samples: $max_samples  |  conv_step: $conv_step")
+
+    # Run circuit once at maximum sample size
+    resample_result = resample_circuit(filename;
+                                       conv_step=conv_step,
+                                       samples=max_samples,
+                                       measure_y=is_heisenberg)
+    if isnothing(resample_result)
+        error("resample_circuit failed for $filename")
+    end
+
+    if is_heisenberg
+        _rho, Z_all, X_all, Y_all, _params, _gates = resample_result
+        Z_pool = Z_all[conv_step+1:end]
+        X_pool = X_all[conv_step+1:end]
+        Y_pool = Y_all[conv_step+1:end]
+    else
+        _rho, Z_all, X_all, _params, _gates = resample_result
+        Z_pool = Z_all[conv_step+1:end]
+        X_pool = X_all[conv_step+1:end]
+    end
+
+    # Each MCMC step emits `row` consecutive spin values (one per row position).
+    # Horizontal bonds in compute_heisenberg_energy require SPATIALLY ADJACENT
+    # columns, i.e., consecutive MCMC steps.  We therefore use a moving-block
+    # bootstrap: pick a random start position and take n_cols CONSECUTIVE columns.
+    pool_cols   = length(Z_pool) ÷ row
+    pool_cols_X = length(X_pool) ÷ row
+    pool_cols_Y = is_heisenberg ? length(Y_pool) ÷ row : 0
+    println("Pool size after burn-in: $(length(Z_pool)) spins  ($pool_cols columns × row=$row)")
+
+    _block(pool, start_col, n_cols) = @view pool[(start_col-1)*row+1 : (start_col+n_cols-1)*row]
+
+    sorted_sizes = sort(sample_sizes)
+    variances    = Vector{Float64}(undef, length(sorted_sizes))
+    errors       = Vector{Float64}(undef, length(sorted_sizes))
+
+    for (k, n_spins) in enumerate(sorted_sizes)
+        # n_spins is number of spin measurements; convert to column count
+        n_cols = min(n_spins ÷ row, pool_cols - 1)
+        energies = Vector{Float64}(undef, n_bootstrap)
+
+        max_start_Z = pool_cols   - n_cols
+        max_start_X = pool_cols_X - n_cols
+        max_start_Y = is_heisenberg ? pool_cols_Y - n_cols : 1
+
+        for b in 1:n_bootstrap
+            sz = rand(1:max_start_Z)
+            sx = rand(1:max_start_X)
+            if is_heisenberg
+                sy = rand(1:max_start_Y)
+                energies[b] = compute_heisenberg_energy(
+                    _block(X_pool, sx, n_cols),
+                    _block(Z_pool, sz, n_cols),
+                    _block(Y_pool, sy, n_cols),
+                    J1, J2, row)
+            else
+                energies[b] = compute_tfim_energy(
+                    _block(X_pool, sx, n_cols),
+                    _block(Z_pool, sz, n_cols),
+                    g, J, row)
+            end
+        end
+
+        v = var(energies)
+        variances[k] = v
+        errors[k]    = v * sqrt(2 / (n_bootstrap - 1))
+        println("  n=$n_spins ($(n_cols) cols)  →  E̅ = $(round(mean(energies), sigdigits=6))  Var(E) = $(round(v, sigdigits=4))")
+    end
+
+    if !isnothing(save_path)
+        save_results(save_path;
+                     sample_sizes=collect(Int, sorted_sizes),
+                     variances=variances,
+                     errors=errors,
+                     model=model_str, conv_step=conv_step, n_bootstrap=n_bootstrap)
+        println("Data saved to: $save_path")
+    end
+
+    return collect(Float64, sorted_sizes), variances, errors
+end
+
+# ============================================================================
+# plot_energy_vs_inv_samples
+# ============================================================================
+
+"""
+    plot_energy_vs_inv_samples(filename, sample_sizes; kwargs...)
+
+Scatter-plot all bootstrap energy estimates versus 1/N for each sample size.
+Each vertical cluster of dots represents the distribution of energy estimates
+from `n_bootstrap` random subsamples of size N; as N → ∞ (1/N → 0) the
+spread narrows, visually confirming the 1/√N standard-error scaling.
+
+# Arguments
+- `filename`: Path to a saved optimization result JSON
+- `sample_sizes`: Vector of column counts to evaluate (e.g. `[1_000, 5_000, …]`).
+  Must be much smaller than `total_samples ÷ row` for the bootstrap to show spread.
+- `total_samples`: Total spin measurements to collect as the pool (default:
+  `20 * maximum(sample_sizes) * row`). Must satisfy `total_samples >> max(sample_sizes)`.
+- `conv_step`: Burn-in steps to discard (default 100)
+- `n_bootstrap`: Bootstrap draws per sample size (default 200)
+- `figsize`: Override figure size (default `PAPER_FIGSIZE`)
+- `save_path`: Optional path to save the figure
+
+# Returns
+- `(fig, energies_matrix)` where `energies_matrix` is a
+  `length(sample_sizes) × n_bootstrap` matrix of energy estimates
+"""
+function plot_energy_vs_inv_samples(filename::String,
+                                    sample_sizes::AbstractVector{Int};
+                                    total_samples::Union{Int,Nothing}=nothing,
+                                    conv_step::Int=100,
+                                    n_bootstrap::Int=200,
+                                    figsize=nothing,
+                                    save_path::Union{String,Nothing}=nothing)
+
+    result, input_args = load_result(filename)
+    model_str     = get(input_args, :model, "tfim")
+    is_heisenberg = (model_str == "heisenberg_j1j2")
+    row   = Int(input_args[:row])
+    J1    = Float64(get(input_args, :J1, get(input_args, :J, 1.0)))
+    J2    = Float64(get(input_args, :J2, 0.0))
+    g     = Float64(get(input_args, :g,  1.0))
+    J     = Float64(get(input_args, :J,  1.0))
+
+    sorted_sizes = sort(sample_sizes)
+    # Pool must be >> max(sample_sizes) so different bootstrap blocks exist.
+    # Default: 20× the largest requested spin count.
+    _pool_samples = isnothing(total_samples) ? 20 * last(sorted_sizes) : total_samples
+
+    println("=== plot_energy_vs_inv_samples ===")
+    println("Model: $model_str  |  pool: $_pool_samples spins  |  conv_step: $conv_step  |  n_bootstrap: $n_bootstrap")
+
+    resample_result = resample_circuit(filename;
+                                       conv_step=conv_step,
+                                       samples=_pool_samples,
+                                       measure_y=is_heisenberg)
+    isnothing(resample_result) && error("resample_circuit failed for $filename")
+
+    if is_heisenberg
+        _rho, Z_all, X_all, Y_all, _params, _gates = resample_result
+        Z_pool = Z_all[conv_step+1:end]
+        X_pool = X_all[conv_step+1:end]
+        Y_pool = Y_all[conv_step+1:end]
+    else
+        _rho, Z_all, X_all, _params, _gates = resample_result
+        Z_pool = Z_all[conv_step+1:end]
+        X_pool = X_all[conv_step+1:end]
+    end
+    pool_cols   = length(Z_pool) ÷ row
+    pool_cols_X = length(X_pool) ÷ row
+    pool_cols_Y = is_heisenberg ? length(Y_pool) ÷ row : 0
+    println("Pool size after burn-in: $(length(Z_pool)) spins  ($pool_cols columns × row=$row)")
+
+    _block(pool, start_col, n_cols) = @view pool[(start_col-1)*row+1 : (start_col+n_cols-1)*row]
+
+    n_sizes         = length(sorted_sizes)
+    energies_matrix = Matrix{Float64}(undef, n_sizes, n_bootstrap)
+
+    for (k, n_spins) in enumerate(sorted_sizes)
+        # n_spins is number of spin measurements; convert to column count
+        n_cols      = min(n_spins ÷ row, pool_cols - 1)
+        max_start_Z = pool_cols   - n_cols
+        max_start_X = pool_cols_X - n_cols
+        max_start_Y = is_heisenberg ? pool_cols_Y - n_cols : 1
+        for b in 1:n_bootstrap
+            sz = rand(1:max_start_Z)
+            sx = rand(1:max_start_X)
+            if is_heisenberg
+                sy = rand(1:max_start_Y)
+                energies_matrix[k, b] = compute_heisenberg_energy(
+                    _block(X_pool, sx, n_cols),
+                    _block(Z_pool, sz, n_cols),
+                    _block(Y_pool, sy, n_cols),
+                    J1, J2, row)
+            else
+                energies_matrix[k, b] = compute_tfim_energy(
+                    _block(X_pool, sx, n_cols),
+                    _block(Z_pool, sz, n_cols),
+                    g, J, row)
+            end
+        end
+        println("  n=$n_spins ($(n_cols) cols)  →  E = $(round(mean(energies_matrix[k,:]), sigdigits=6)) ± $(round(std(energies_matrix[k,:]), sigdigits=3))")
+    end
+
+    # ── Figure ───────────────────────────────────────────────────────────────
+    _figsize = isnothing(figsize) ? PAPER_FIGSIZE : figsize
+
+    fig = with_theme(paper_theme()) do
+        fig = Figure(size=_figsize)
+
+        ax = Axis(fig[1, 1];
+                  xlabel = "1 / N (samples)",
+                  ylabel = "E / site",
+                  xscale = log10)
+
+        for (k, n) in enumerate(sorted_sizes)
+            x = fill(1.0 / n, n_bootstrap)
+            scatter!(ax, x, energies_matrix[k, :];
+                     color=(:steelblue, 0.35), markersize=4, strokewidth=0)
+        end
+
+        # overlay mean only
+        means = vec(mean(energies_matrix; dims=2))
+        xs    = 1.0 ./ sorted_sizes
+        scatter!(ax, Float64.(xs), means;
+                 color=:firebrick, marker=:circle, markersize=5,
+                 label="mean")
+
+        if !isnothing(save_path)
+            mkpath(dirname(save_path))
+            save(save_path, fig)
+            println("Figure saved to: $save_path")
+        end
+
+        fig
+    end
+
+    return fig, energies_matrix
+end
+
+# ============================================================================
 # plot_variance_vs_samples
 # ============================================================================
 
 function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::AbstractVector;
                                    errors::Union{AbstractVector,Nothing}=nothing,
                                    fit_scaling::Bool=true,
-                                   title::String="Variance vs Samples",
+                                   figsize=nothing,
                                    save_path::Union{String,Nothing}=nothing)
 
-    fig = Figure(size=PAPER_FIGSIZE)
-    ax = Axis(fig[1, 1],
-              xlabel="Number of Samples", ylabel="Variance",
-              title=title,
-              xscale=log10, yscale=log10)
+    ns   = collect(Float64, sample_sizes)
+    vars = collect(Float64, variances)
 
-    if !isnothing(errors)
-        errorbars!(ax, collect(sample_sizes), collect(variances), collect(errors), color=:gray)
-    end
-    scatter!(ax, collect(sample_sizes), collect(variances), label="Data")
+    _figsize = isnothing(figsize) ? PAPER_FIGSIZE : figsize
 
-    if fit_scaling && length(sample_sizes) > 1
-        log_N = log.(sample_sizes)
-        log_var = log.(variances)
-        c = mean(log_var .+ log_N)
-        a = exp(c)
-        N_range = range(minimum(sample_sizes), maximum(sample_sizes), length=50)
-        fit_line = a ./ N_range
-        lines!(ax, collect(N_range), fit_line, linestyle=:dash, color=:firebrick,
-               label="1/N scaling (a=$(round(a, digits=2)))")
-    end
+    fig = with_theme(paper_theme()) do
+        fig = Figure(size=_figsize)
 
-    axislegend(ax, position=:rt)
+        ax = Axis(fig[1, 1];
+                  xlabel   = "N (samples)",
+                  ylabel   = "Var(E)",
+                  xscale   = log10,
+                  yscale   = log10)
 
-    if !isnothing(save_path)
-        save(save_path, fig)
-        @info "Figure saved to $save_path"
+        if !isnothing(errors)
+            errorbars!(ax, ns, vars, collect(Float64, errors);
+                       color=(:steelblue, 0.4), whiskerwidth=4)
+        end
+        scatter!(ax, ns, vars;
+                 label="bootstrap estimate", color=:steelblue, marker=:circle)
+
+        if fit_scaling && length(ns) > 1
+            log_N   = log.(ns)
+            log_var = log.(vars)
+            a = exp(mean(log_var .+ log_N))
+            N_fit = range(minimum(ns), maximum(ns); length=200)
+            lines!(ax, collect(N_fit), a ./ collect(N_fit);
+                   linestyle=:dash, color=:firebrick,
+                   label="∝ 1/N  (a=$(round(a, sigdigits=3)))")
+        end
+
+        add_paper_legend!(ax; position=:rt)
+
+        if !isnothing(save_path)
+            mkpath(dirname(save_path))
+            save(save_path, fig)
+            println("Figure saved to: $save_path")
+        end
+
+        fig
     end
 
     return fig
@@ -1143,6 +1430,7 @@ function plot_correlation_function(filename::String;
                                    max_separation::Int=20,
                                    conv_step::Int=1000,
                                    samples::Int=100000,
+                                   figsize=nothing,
                                    save_path::Union{String,Nothing}=nothing)
 
     result, input_args = load_result(filename)
@@ -1254,104 +1542,89 @@ function plot_correlation_function(filename::String;
     println("Mean |exact - sample| error (full): $(round(mean_error_full, digits=6))")
     println("Mean |exact - sample| error (connected): $(round(mean_error_connected, digits=6))")
 
-    fig = Figure(size=(800, 700))
     min_val = 1e-15
 
-    if is_heisenberg
-        J2 = get(input_args, :J2, 0.0)
-        title_str = "Correlation Function: J2=$J2, row=$row, nqubits=$nqubits, ξ=$(round(correlation_length, digits=2))"
-    else
-        title_str = "Correlation Function: g=$g, row=$row, nqubits=$nqubits, ξ=$(round(correlation_length, digits=2))"
-    end
-    Label(fig[0, 1], title_str, fontsize=16, font=:bold)
-
-    ax1 = Axis(fig[1, 1],
-               xlabel="Separation r",
-               ylabel="|⟨Z_i Z_{i+r}⟩|",
-               title="Full Correlation",
-               yscale=log10)
-
-    exact_full_abs = max.(abs.(exact_full_vals), min_val)
-    sample_full_abs = max.(abs.(sample_full_vals), min_val)
-    error_full_plot = max.(error_full, min_val)
-
-    lines!(ax1, separations, exact_full_abs, label="Exact contraction", color=:blue, linewidth=2)
-    scatter!(ax1, separations, exact_full_abs, color=:blue, markersize=8)
-
-    err_low = min.(sample_full_err_vals, sample_full_abs .- min_val)
-    err_high = sample_full_err_vals
-    scatter!(ax1, collect(sample_seps), sample_full_abs,
-             label="Sampling ± std err", color=:red, markersize=8, marker=:diamond)
-    errorbars!(ax1, collect(sample_seps), sample_full_abs, err_low, err_high,
-               color=:red, whiskerwidth=6)
-    axislegend(ax1, position=:rt)
-
-    ax2 = Axis(fig[2, 1],
-               xlabel="Separation r",
-               ylabel="|⟨Z_i Z_{i+r}⟩_c|",
-               title="Connected Correlation",
-               yscale=log10)
-
-    exact_connected_abs = max.(abs.(exact_connected_vals), min_val)
-    sample_connected_abs = max.(abs.(sample_connected_vals), min_val)
-
-    # Plot exact data first
-    lines!(ax2, separations, exact_connected_abs, label="Exact contraction", color=:blue, linewidth=2)
-    scatter!(ax2, separations, exact_connected_abs, color=:blue, markersize=8)
-
-    err_low_conn = min.(sample_connected_err_vals, sample_connected_abs .- min_val)
-    err_high_conn = sample_connected_err_vals
-    scatter!(ax2, collect(sample_seps), sample_connected_abs,
-             label="Sampling ± std err", color=:red, markersize=8, marker=:diamond)
-    errorbars!(ax2, collect(sample_seps), sample_connected_abs, err_low_conn, err_high_conn,
-               color=:red, whiskerwidth=6)
-
-    # Fit connected correlation to extract correlation length
-    println("\nFitting connected correlation to A*exp(-r/ξ)...")
-    println("Data to fit:")
-    for (i, r) in enumerate(separations[1:min(5, length(separations))])
-        println("  r=$r: $(exact_connected_vals[i]) -> |val|=$(abs(exact_connected_vals[i]))")
-    end
-
+    # Fit connected correlation to A·exp(−r/ξ)
+    println("\nFitting connected correlation to A·exp(−r/ξ)...")
     ξ_fitted = nothing
     A_fitted = nothing
     try
         fit_params = fit_acf(separations, exact_connected_vals; include_zero=false)
         ξ_fitted = fit_params.ξ
         A_fitted = fit_params.A
-        println("Fitted correlation length ξ = $(round(ξ_fitted, digits=3))")
-        println("Fitted amplitude A = $(round(A_fitted, digits=4))")
-        println("Transfer matrix ξ = $(round(correlation_length, digits=3))")
-        println("Ratio ξ_fitted/ξ_transfer = $(round(ξ_fitted/correlation_length, digits=3))")
-
-        r_check = separations[1:min(10, length(separations))]
-        fitted_check = abs(A_fitted) .* exp.(-r_check ./ ξ_fitted)
-        data_check = abs.(exact_connected_vals[1:length(r_check)])
-        println("Fit check (first $(length(r_check)) points):")
-        for (i, r) in enumerate(r_check)
-            rel_err = abs(fitted_check[i] - data_check[i]) / data_check[i] * 100
-            println("  r=$r: data=$(data_check[i]), fit=$(fitted_check[i]), rel_err=$(round(rel_err, digits=1))%")
-        end
-
-        r_fit = range(1, max_separation, length=100)
-        fitted_curve = abs(A_fitted) .* exp.(-r_fit ./ ξ_fitted)
-        fitted_curve_plot = max.(fitted_curve, min_val)
-        lines!(ax2, r_fit, fitted_curve_plot,
-               label="Fit: |A|*exp(-r/$(round(ξ_fitted, digits=2)))",
-               color=:green, linewidth=3, linestyle=:dash)
-
-        ax2.title = "Connected Correlation (ξ_fit=$(round(ξ_fitted, digits=2)), ξ_TM=$(round(correlation_length, digits=2)))"
+        println("  ξ_fit = $(round(ξ_fitted, digits=3))   ξ_TM = $(round(correlation_length, digits=3))")
     catch e
         @warn "Exponential fitting failed: $e"
-        println("Skipping exponential fit overlay")
     end
 
-    axislegend(ax2, position=:rt)
+    _w, _h = PAPER_FIGSIZE
+    _figsize = isnothing(figsize) ? (_w, 2_h - 20) : figsize
 
-    if !isnothing(save_path)
-        mkpath(dirname(save_path))
-        save(save_path, fig)
-        println("\nFigure saved to: $save_path")
+    fig = with_theme(paper_theme()) do
+        fig = Figure(size=_figsize)
+
+        exact_full_abs       = max.(abs.(exact_full_vals),      min_val)
+        sample_full_abs      = max.(abs.(sample_full_vals),     min_val)
+        exact_connected_abs  = max.(abs.(exact_connected_vals), min_val)
+        sample_connected_abs = max.(abs.(sample_connected_vals),min_val)
+
+        # ── Panel (a): full correlator ────────────────────────────────────
+        ax1 = Axis(fig[1, 1];
+                   ylabel = "|⟨ZᵢZᵢ₊ᵣ⟩|",
+                   yscale = log10,
+                   xticklabelsvisible = false)
+
+        scatterlines!(ax1, separations, exact_full_abs;
+                      color=:steelblue, marker=:circle, label="TN contraction")
+
+        err_low = min.(sample_full_err_vals, sample_full_abs .- min_val)
+        errorbars!(ax1, collect(sample_seps), sample_full_abs,
+                   err_low, sample_full_err_vals;
+                   color=:firebrick, whiskerwidth=4)
+        scatter!(ax1, collect(sample_seps), sample_full_abs;
+                 color=:firebrick, marker=:diamond, label="Sampling")
+
+        text!(ax1, 0.03, 0.97; text="(a)", space=:relative,
+              align=(:left, :top), fontsize=PAPER_TITLESIZE, font=:bold)
+        add_paper_legend!(ax1; position=(:left, 0.82))
+
+        # ── Panel (b): connected correlator + fit ─────────────────────────
+        ax2 = Axis(fig[2, 1];
+                   xlabel = "r",
+                   ylabel = "|⟨ZᵢZᵢ₊ᵣ⟩_c|",
+                   yscale = log10)
+
+        scatterlines!(ax2, separations, exact_connected_abs;
+                      color=:steelblue, marker=:circle, label="TN contraction")
+
+        err_low_c = min.(sample_connected_err_vals, sample_connected_abs .- min_val)
+        errorbars!(ax2, collect(sample_seps), sample_connected_abs,
+                   err_low_c, sample_connected_err_vals;
+                   color=:firebrick, whiskerwidth=4)
+        scatter!(ax2, collect(sample_seps), sample_connected_abs;
+                 color=:firebrick, marker=:diamond, label="Sampling")
+
+        if !isnothing(ξ_fitted) && !isnothing(A_fitted)
+            r_fit = range(first(separations), last(separations); length=200)
+            fitted = max.(abs(A_fitted) .* exp.(-r_fit ./ ξ_fitted), min_val)
+            lines!(ax2, r_fit, fitted;
+                   color=:seagreen, linestyle=:dash,
+                   label="∝ e^{−r/$(round(ξ_fitted, digits=2))}")
+        end
+
+        text!(ax2, 0.03, 0.97; text="(b)", space=:relative,
+              align=(:left, :top), fontsize=PAPER_TITLESIZE, font=:bold)
+        add_paper_legend!(ax2; position=(:left, 0.82))
+
+        rowgap!(fig.layout, 4)
+
+        if !isnothing(save_path)
+            mkpath(dirname(save_path))
+            save(save_path, fig)
+            println("\nFigure saved to: $save_path")
+        end
+
+        fig
     end
 
     data = (
@@ -1426,6 +1699,7 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
                                 conv_step::Int=100, samples::Int=1000000,
                                 pepskit_file::Union{String,Nothing}=nothing,
                                 dmrg_file::Union{String,Nothing}=nothing,
+                                figsize=nothing,
                                 save_path::Union{String,Nothing}=nothing)
 
     m = _construct_model(model, Dict{Symbol,Any}(:J => Float64(J), :g => 1.0, :J1 => J1, :J2 => 0.0))
@@ -1593,79 +1867,90 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
         error("No valid results found for any $scan_label value")
     end
 
-    # Axis labels and titles based on model
-    xlabel_str = is_heisenberg ? "J2 / J1" : "Transverse field g"
-    title_energy = is_heisenberg ? "Heisenberg J1-J2: Energy vs J2 (row=$row, p=$p)" : "Ground State Energy: Exact vs Reference"
-    title_error = is_heisenberg ? "Energy Error vs J2" : "Energy Error vs g"
+    xlabel_str = is_heisenberg ? "J₂ / J₁" : "g"
 
-    # Create figure
-    fig = Figure(size=(1000, 800))
+    _w, _h = PAPER_FIGSIZE                       # 246 × 170 pt
+    _figsize = isnothing(figsize) ? (_w, 2_h - 20) : figsize   # ~(246, 320) for 2 panels
 
-    # Plot 1: Energies comparison
-    ax1 = Axis(fig[1, 1],
-               xlabel=xlabel_str,
-               ylabel="Energy",
-               title=title_energy)
+    fig = with_theme(paper_theme()) do
+        fig = Figure(size=_figsize)
 
-    lines!(ax1, g_vals_found, energies_exact, label="sampling based optimization",
-           color=:blue, linewidth=2)
-    scatter!(ax1, g_vals_found, energies_exact, color=:blue, markersize=12)
+        # ── Panel (a): energy per site ──────────────────────────────────────
+        ax1 = Axis(fig[1, 1];
+                   ylabel      = "E / site",
+                   xticklabelsvisible = false,
+                   xgridvisible = true,
+                   ygridvisible = true)
 
-    if !all(isnan.(energies_ref))
-        valid_mask = .!isnan.(energies_ref)
-        lines!(ax1, g_vals_found[valid_mask], energies_ref[valid_mask],
-               label="iPEPS", color=:red, linewidth=2, linestyle=:dash)
-        scatter!(ax1, g_vals_found[valid_mask], energies_ref[valid_mask],
-                color=:red, markersize=12, marker=:diamond)
-    end
+        scatterlines!(ax1, g_vals_found, energies_exact;
+                      label="IsoPEPS", color=:steelblue,
+                      marker=:circle, linestyle=:solid)
 
-    if !all(isnan.(energies_dmrg))
-        valid_mask = .!isnan.(energies_dmrg)
-        lines!(ax1, g_vals_found[valid_mask], energies_dmrg[valid_mask],
-               label="DMRG", color=:green, linewidth=2, linestyle=:dot)
-        scatter!(ax1, g_vals_found[valid_mask], energies_dmrg[valid_mask],
-                color=:green, markersize=12, marker=:star5)
-    end
+        if !all(isnan.(energies_ref))
+            mask = .!isnan.(energies_ref)
+            scatterlines!(ax1, g_vals_found[mask], energies_ref[mask];
+                          label="iPEPS", color=:firebrick,
+                          marker=:diamond, linestyle=:dash)
+        end
 
-    axislegend(ax1, position=:rb)
+        if !all(isnan.(energies_dmrg))
+            mask = .!isnan.(energies_dmrg)
+            scatterlines!(ax1, g_vals_found[mask], energies_dmrg[mask];
+                          label="DMRG", color=:seagreen,
+                          marker=:utriangle, linestyle=:dot)
+        end
 
-    # Plot 2: Energy errors
-    ax2 = Axis(fig[2, 1],
-               xlabel=xlabel_str,
-               ylabel="Energy Error",
-               title=title_error,
-               yscale=log10)
+        text!(ax1, 0.03, 0.97; text="(a)", space=:relative,
+              align=(:left, :top), fontsize=PAPER_TITLESIZE, font=:bold)
+        add_paper_legend!(ax1; position=(:left, 0.82))
 
-    # Error between exact and PEPSKit reference
-    if !all(isnan.(errors))
-        valid_mask = .!isnan.(errors)
-        lines!(ax2, g_vals_found[valid_mask], errors[valid_mask],
-               label="|E_optimized - E_iPEPS|", color=:red, linewidth=2)
-        scatter!(ax2, g_vals_found[valid_mask], errors[valid_mask],
-                color=:red, markersize=12)
-    end
+        # ── Panel (b): energy error (log scale) ─────────────────────────────
+        ax2 = Axis(fig[2, 1];
+                   xlabel      = xlabel_str,
+                   ylabel      = "|ΔE / site|",
+                   yscale      = log10,
+                   xgridvisible = true,
+                   ygridvisible = true)
 
-    # Error between exact and DMRG
-    if !all(isnan.(energies_dmrg))
-        valid_mask = .!isnan.(energies_dmrg)
-        errors_dmrg = abs.(energies_exact[valid_mask] .- energies_dmrg[valid_mask])
-        lines!(ax2, g_vals_found[valid_mask], errors_dmrg,
-               label="|E_optimized - E_DMRG|", color=:green, linewidth=2, linestyle=:dash)
-        scatter!(ax2, g_vals_found[valid_mask], errors_dmrg,
-                color=:green, markersize=12, marker=:star5)
-    end
+        has_error = false
 
-    if !all(isnan.(errors)) || !all(isnan.(energies_dmrg))
-        axislegend(ax2, position=:lt)
-    else
-        text!(ax2, 0.5, 0.5, text="No reference data available",
-              align=(:center, :center), space=:relative)
-    end
+        if !all(isnan.(errors))
+            mask = .!isnan.(errors)
+            scatterlines!(ax2, g_vals_found[mask], errors[mask];
+                          label="IsoPEPS − iPEPS", color=:firebrick,
+                          marker=:diamond, linestyle=:dash)
+            has_error = true
+        end
 
-    if !isnothing(save_path)
-        mkpath(dirname(save_path))
-        save(save_path, fig)
-        println("\nFigure saved to: $save_path")
+        if !all(isnan.(energies_dmrg))
+            mask = .!isnan.(energies_dmrg)
+            err_dmrg = abs.(energies_exact[mask] .- energies_dmrg[mask])
+            scatterlines!(ax2, g_vals_found[mask], err_dmrg;
+                          label="IsoPEPS − DMRG", color=:seagreen,
+                          marker=:utriangle, linestyle=:dot)
+            has_error = true
+        end
+
+        if has_error
+            add_paper_legend!(ax2; position=(:left, 0.82))
+        else
+            text!(ax2, 0.5, 0.5; text="No reference data",
+                  align=(:center, :center), space=:relative,
+                  fontsize=PAPER_AXIS_LABELSIZE, color=:gray)
+        end
+
+        text!(ax2, 0.03, 0.97; text="(b)", space=:relative,
+              align=(:left, :top), fontsize=PAPER_TITLESIZE, font=:bold)
+
+        rowgap!(fig.layout, 4)
+
+        if !isnothing(save_path)
+            mkpath(dirname(save_path))
+            save(save_path, fig)
+            println("\nFigure saved to: $save_path")
+        end
+
+        fig
     end
 
     data = (
@@ -1680,36 +1965,238 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
 end
 
 """
-    plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
-                          J=1.0, row=3, nqubits=5, p=3,
-                          max_separation=20,
-                          connected=true,
-                          save_path::Union{String,Nothing}=nothing)
+    plot_magnetization_vs_g(data_dir, g_values; kwargs...)
 
-Plot correlation function for different g values on the same plot.
+Plot ⟨Z⟩ (longitudinal) and ⟨X⟩ (transverse) magnetisation per site vs
+transverse field g for the TFIM, using sampling data.
+
+In the ordered phase (g < g_c ≈ 3.04) ⟨Z⟩ > 0 and ⟨X⟩ is small;
+in the disordered phase (g > g_c) the roles reverse.
+
+# Arguments
+- `data_dir`: Directory containing result JSON files
+- `g_values`: Vector of g values to scan
+- `J`: Coupling (default 1.0)
+- `row`, `p`, `nqubits`: Circuit parameters
+- `conv_step`: Burn-in steps (default 100)
+- `samples`: Number of spin measurements per g (default 500_000)
+- `figsize`: Override figure size (default `PAPER_FIGSIZE`)
+- `save_path`: Optional path to save the figure
+
+# Returns
+- `(fig, data)` where `data` is a `Dict` mapping each g to
+  `(mZ=..., mX=...)`.
+"""
+function plot_magnetization_vs_g(data_dir::String, g_values::Vector{Float64};
+                                  J::Float64=1.0,
+                                  row::Int=3, p::Int=3, nqubits::Int=3,
+                                  conv_step::Int=100,
+                                  samples::Int=500_000,
+                                  figsize=nothing,
+                                  save_path::Union{String,Nothing}=nothing)
+
+    sorted_g = sort(g_values)
+    mZ_vals  = Float64[]
+    mX_vals  = Float64[]
+    g_found  = Float64[]
+
+    println("=== plot_magnetization_vs_g ===")
+
+    for g in sorted_g
+        candidates = [
+            joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json"),
+            joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
+            joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
+        ]
+        filename = ""
+        for c in candidates
+            isfile(c) && (filename = c; break)
+        end
+        if isempty(filename)
+            @warn "No file found for g=$g, skipping"
+            continue
+        end
+
+        println("  g=$g  →  $(basename(filename))")
+        resample_result = resample_circuit(filename; conv_step=conv_step,
+                                           samples=samples, measure_y=false)
+        if isnothing(resample_result)
+            @warn "Resampling failed for g=$g, skipping"
+            continue
+        end
+        _rho, Z_all, X_all, _params, _gates = resample_result
+        Z_pool = Z_all[conv_step+1:end]
+        X_pool = X_all[conv_step+1:end]
+
+        mZ = abs(expect(Z_pool, row))   # |⟨Z⟩| averaged over all sites
+        mX = abs(expect(X_pool, row))   # |⟨X⟩|
+
+        push!(mZ_vals, mZ)
+        push!(mX_vals, mX)
+        push!(g_found, g)
+        println("    |⟨Z⟩| = $(round(mZ, sigdigits=4))   |⟨X⟩| = $(round(mX, sigdigits=4))")
+    end
+
+    isempty(g_found) && error("No data found for any g value")
+
+    _figsize = isnothing(figsize) ? PAPER_FIGSIZE : figsize
+
+    fig = with_theme(paper_theme()) do
+        fig = Figure(size=_figsize)
+
+        ax = Axis(fig[1, 1];
+                  xlabel = "g",
+                  ylabel = "Magnetisation per site")
+
+        scatterlines!(ax, g_found, mZ_vals;
+                      color=:steelblue, marker=:circle,
+                      label="|⟨Z⟩|")
+        scatterlines!(ax, g_found, mX_vals;
+                      color=:firebrick, marker=:diamond, linestyle=:dash,
+                      label="|⟨X⟩|")
+
+        add_paper_legend!(ax; position=:rt)
+
+        if !isnothing(save_path)
+            mkpath(dirname(save_path))
+            save(save_path, fig)
+            println("Figure saved to: $save_path")
+        end
+
+        fig
+    end
+
+    data = Dict(g => (mZ=mZ_vals[k], mX=mX_vals[k]) for (k, g) in enumerate(g_found))
+    return fig, data
+end
+
+"""
+    plot_connected_corr_vs_g(data_dir, g_values; kwargs...)
+
+Plot nearest-neighbor C(1) and next-nearest-neighbor C(2) connected ZZ
+correlations vs transverse field g for the TFIM, using sampling data.
+
+Connected correlation at column separation r, averaged over all row positions:
+
+    C(r) = ⟨Zᵢ Zᵢ₊ᵣ⟩ − ⟨Zᵢ⟩²
+
+# Arguments
+- `data_dir`: Directory containing result JSON files
+- `g_values`: Vector of g values to scan
+- `J`: Coupling (default 1.0)
+- `row`, `p`, `nqubits`: Circuit parameters
+- `conv_step`: Burn-in steps (default 100)
+- `samples`: Number of spin measurements per g (default 500_000)
+- `figsize`: Override figure size (default `PAPER_FIGSIZE`)
+- `save_path`: Optional path to save the figure
+
+# Returns
+- `(fig, data)` where `data` is a `Dict` mapping each g to
+  `(C1=..., C2=...)`.
+"""
+function plot_connected_corr_vs_g(data_dir::String, g_values::Vector{Float64};
+                                   J::Float64=1.0,
+                                   row::Int=3, p::Int=3, nqubits::Int=3,
+                                   conv_step::Int=100,
+                                   samples::Int=500_000,
+                                   figsize=nothing,
+                                   save_path::Union{String,Nothing}=nothing)
+
+    sorted_g = sort(g_values)
+    C1_vals  = Float64[]
+    C2_vals  = Float64[]
+    g_found  = Float64[]
+
+    println("=== plot_connected_corr_vs_g ===")
+
+    for g in sorted_g
+        candidates = [
+            joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json"),
+            joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
+            joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
+        ]
+        filename = ""
+        for c in candidates
+            isfile(c) && (filename = c; break)
+        end
+        if isempty(filename)
+            @warn "No file found for g=$g, skipping"
+            continue
+        end
+
+        println("  g=$g  →  $(basename(filename))")
+        resample_result = resample_circuit(filename; conv_step=conv_step,
+                                           samples=samples, measure_y=false)
+        if isnothing(resample_result)
+            @warn "Resampling failed for g=$g, skipping"
+            continue
+        end
+        _rho, Z_all, _X_all, _params, _gates = resample_result
+        Z_pool = Z_all[conv_step+1:end]
+
+        # Average C(r) over all row positions for better statistics
+        function mean_C(r)
+            vals = [abs(correlation_function(Z_pool, row, r;
+                                             position=pos, connected=true)[r])
+                    for pos in 1:row]
+            return mean(vals)
+        end
+
+        push!(C1_vals, mean_C(1))
+        push!(C2_vals, mean_C(2))
+        push!(g_found, g)
+        println("    C(1) = $(round(last(C1_vals), sigdigits=4))   C(2) = $(round(last(C2_vals), sigdigits=4))")
+    end
+
+    isempty(g_found) && error("No data found for any g value")
+
+    _figsize = isnothing(figsize) ? PAPER_FIGSIZE : figsize
+
+    fig = with_theme(paper_theme()) do
+        fig = Figure(size=_figsize)
+
+        ax = Axis(fig[1, 1];
+                  xlabel = "g",
+                  ylabel = "C(r)",
+                  yscale = log10)
+
+        scatterlines!(ax, g_found, C1_vals;
+                      color=:steelblue, marker=:circle,
+                      label="C(1) nearest")
+        scatterlines!(ax, g_found, C2_vals;
+                      color=:firebrick, marker=:diamond, linestyle=:dash,
+                      label="C(2) next-nearest")
+
+        add_paper_legend!(ax; position=:lt)
+
+        if !isnothing(save_path)
+            mkpath(dirname(save_path))
+            save(save_path, fig)
+            println("Figure saved to: $save_path")
+        end
+
+        fig
+    end
+
+    data = Dict(g => (C1=C1_vals[k], C2=C2_vals[k]) for (k, g) in enumerate(g_found))
+    return fig, data
+end
+
+"""
+    plot_correlation_vs_g(data_dir, g_values; kwargs...)
+
+Plot correlation length ξ vs g for the TFIM from the transfer-matrix spectrum.
 
 # Arguments
 - `data_dir`: Directory containing result JSON files
 - `g_values`: Vector of g values to plot
-- `J`: Coupling strength (default: 1.0)
-- `row`: Number of rows (default: 3)
-- `nqubits`: Number of qubits (default: 5)
-- `p`: Circuit depth (default: 3)
-- `max_separation`: Maximum separation to plot (default: 20)
-- `connected`: Plot connected correlation (default: true)
+- `J`: Coupling strength (default 1.0)
+- `row`, `p`, `nqubits`: Circuit parameters
+- `max_separation`: Maximum separation (default 20)
+- `connected`: Use connected correlator (default true)
+- `dmrg_file`, `pepskit_file`: Optional reference data files
+- `g_c`: Optional critical field value for annotation
 - `save_path`: Path to save figure (optional)
-
-# Returns
-- `fig`: Makie Figure object
-- `data`: Dict mapping g values to correlation data
-
-# Example
-```julia
-g_vals = [1.0, 2.0, 3.0, 4.0]
-fig, data = plot_correlation_vs_g("project/results", g_vals;
-                                  max_separation=30,
-                                  save_path="correlation_vs_g.pdf")
-```
 """
 function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
                                J=1.0, row=3, nqubits=3, p=3,
@@ -2942,6 +3429,91 @@ function plot_spin_structure_factor(filename::String;
 end
 
 """
+    save_combined_structure_factor_data(output_file, data_dir, J2_values; kwargs...)
+
+Compute spin and dimer structure factor matrices for each J2 value and save the
+results to a JSON file. The saved file can later be passed to
+`plot_combined_structure_factors` via the `data_file` keyword to skip
+recomputation.
+
+# Arguments
+- `output_file`: Path to write the JSON data file
+- `data_dir`: Directory containing saved optimization result JSONs
+- `J2_values`: Vector of J2 coupling values (e.g., [0.0, 0.5, 1.0])
+- `J1`: J1 coupling (default 1.0)
+- `row`, `p`, `nqubits`: Circuit parameters for filename matching
+- `nq`: Number of q-points along each axis (grid: nq × nq)
+- `max_separation_spin`: Max column separation for spin structure factor
+- `max_separation_dimer`: Max column separation for dimer structure factor
+- `dimer_orientation`: `:vertical` or `:horizontal`
+- `use_exact`: If true, use exact transfer matrix; if false, use sampling
+- `conv_step`, `samples`: Sampling parameters (when `use_exact=false`)
+
+# Returns
+- `(spin_matrices, dimer_matrices)` — Vectors of nq×nq matrices
+"""
+function save_combined_structure_factor_data(output_file::String,
+        data_dir::String, J2_values::Vector{Float64};
+        J1::Float64=1.0,
+        row::Int=4, p::Int=3, nqubits::Int=3,
+        nq::Int=50,
+        max_separation_spin::Int=10,
+        max_separation_dimer::Int=20,
+        dimer_orientation::Symbol=:vertical,
+        use_exact::Bool=true,
+        conv_step::Int=1000,
+        samples::Int=100000)
+
+    n = length(J2_values)
+    spin_matrices = Vector{Matrix{Float64}}(undef, n)
+    dimer_matrices = Vector{Matrix{Float64}}(undef, n)
+    filenames = Vector{String}(undef, n)
+
+    for (idx, val) in enumerate(J2_values)
+        candidates = [
+            joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json"),
+            joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
+            joinpath(data_dir, "circuit_heisenberg_j1j2_J=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
+            joinpath(data_dir, "exact_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json"),
+        ]
+        found = ""
+        for c in candidates
+            if isfile(c)
+                found = c
+                break
+            end
+        end
+        isempty(found) && error("No file found for J2=$val, tried $(length(candidates)) patterns")
+        filenames[idx] = found
+        println("J2=$val  →  $(basename(found))")
+    end
+
+    for idx in 1:n
+        println("\n--- Computing spin structure factor for J2=$(J2_values[idx]) ---")
+        _, SSS = plot_spin_structure_factor(filenames[idx];
+                    nq=nq, max_separation=max_separation_spin,
+                    use_exact=use_exact, conv_step=conv_step, samples=samples)
+        spin_matrices[idx] = SSS
+
+        println("\n--- Computing dimer structure factor for J2=$(J2_values[idx]) ---")
+        _, SD = plot_dimer_structure_factor(filenames[idx];
+                    nq=nq, dimer_orientation=dimer_orientation,
+                    max_separation=max_separation_dimer,
+                    use_exact=use_exact, conv_step=conv_step, samples=samples)
+        dimer_matrices[idx] = SD
+    end
+
+    save_results(output_file;
+        J2_values=J2_values,
+        nq=nq,
+        use_exact=use_exact,
+        spin_matrices=[collect(eachcol(m)) for m in spin_matrices],
+        dimer_matrices=[collect(eachcol(m)) for m in dimer_matrices])
+    println("\nData saved to: $output_file")
+    return (spin_matrices, dimer_matrices)
+end
+
+"""
     plot_combined_structure_factors(data_dir, J2_values; kwargs...)
 
 Combined 2-row × N-column panel figure: spin structure factor S(q) on top,
@@ -2959,6 +3531,11 @@ colorbars per row.
 - `dimer_orientation`: `:vertical` or `:horizontal`
 - `use_exact`: If true, use exact transfer matrix; if false, use sampling
 - `conv_step`, `samples`: Sampling parameters (when `use_exact=false`)
+- `data_file`: Optional path to a JSON produced by `save_combined_structure_factor_data`.
+  When provided the matrices are loaded from disk and no computation is performed;
+  `data_dir`, `J2_values`, and all method parameters are ignored.
+- `figsize`: `(width, height)` in points. Defaults to double-column APS width (510 pt)
+  with height derived from the number of columns so each heatmap stays roughly square.
 - `save_path`: Optional path to save the figure
 
 # Returns
@@ -2974,49 +3551,62 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
         use_exact::Bool=true,
         conv_step::Int=1000,
         samples::Int=100000,
+        data_file=nothing,
+        figsize=nothing,
         save_path=nothing)
 
-    n = length(J2_values)
-    spin_matrices = Vector{Matrix{Float64}}(undef, n)
-    dimer_matrices = Vector{Matrix{Float64}}(undef, n)
-    filenames = Vector{String}(undef, n)
+    local spin_matrices, dimer_matrices
 
-    # --- Find files ---
-    for (idx, val) in enumerate(J2_values)
-        candidates = [
-            joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json"),
-            joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
-            joinpath(data_dir, "circuit_heisenberg_j1j2_J=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
-            joinpath(data_dir, "exact_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json"),
-        ]
-        found = ""
-        for c in candidates
-            if isfile(c)
-                found = c
-                break
+    if !isnothing(data_file)
+        # --- Load pre-computed data ---
+        println("Loading structure factor data from: $data_file")
+        d = load_results(data_file)
+        J2_values = Float64.(d["J2_values"])
+        nq = Int(d["nq"])
+        spin_matrices  = [Float64.(hcat(col...)) for col in d["spin_matrices"]]
+        dimer_matrices = [Float64.(hcat(col...)) for col in d["dimer_matrices"]]
+    else
+        spin_matrices = Vector{Matrix{Float64}}(undef, length(J2_values))
+        dimer_matrices = Vector{Matrix{Float64}}(undef, length(J2_values))
+        filenames = Vector{String}(undef, length(J2_values))
+
+        # --- Find files ---
+        for (idx, val) in enumerate(J2_values)
+            candidates = [
+                joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json"),
+                joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
+                joinpath(data_dir, "circuit_heisenberg_j1j2_J=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
+                joinpath(data_dir, "exact_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json"),
+            ]
+            found = ""
+            for c in candidates
+                if isfile(c)
+                    found = c
+                    break
+                end
             end
+            if isempty(found)
+                error("No file found for J2=$val, tried $(length(candidates)) patterns")
+            end
+            filenames[idx] = found
+            println("J2=$val  →  $(basename(found))")
         end
-        if isempty(found)
-            error("No file found for J2=$val, tried $(length(candidates)) patterns")
+
+        # --- Compute structure factor matrices ---
+        for idx in 1:length(J2_values)
+            println("\n--- Computing spin structure factor for J2=$(J2_values[idx]) ---")
+            _, SSS = plot_spin_structure_factor(filenames[idx];
+                        nq=nq, max_separation=max_separation_spin,
+                        use_exact=use_exact, conv_step=conv_step, samples=samples)
+            spin_matrices[idx] = SSS
+
+            println("\n--- Computing dimer structure factor for J2=$(J2_values[idx]) ---")
+            _, SD = plot_dimer_structure_factor(filenames[idx];
+                        nq=nq, dimer_orientation=dimer_orientation,
+                        max_separation=max_separation_dimer,
+                        use_exact=use_exact, conv_step=conv_step, samples=samples)
+            dimer_matrices[idx] = SD
         end
-        filenames[idx] = found
-        println("J2=$val  →  $(basename(found))")
-    end
-
-    # --- Compute structure factor matrices ---
-    for idx in 1:n
-        println("\n--- Computing spin structure factor for J2=$(J2_values[idx]) ---")
-        _, SSS = plot_spin_structure_factor(filenames[idx];
-                    nq=nq, max_separation=max_separation_spin,
-                    use_exact=use_exact, conv_step=conv_step, samples=samples)
-        spin_matrices[idx] = SSS
-
-        println("\n--- Computing dimer structure factor for J2=$(J2_values[idx]) ---")
-        _, SD = plot_dimer_structure_factor(filenames[idx];
-                    nq=nq, dimer_orientation=dimer_orientation,
-                    max_separation=max_separation_dimer,
-                    use_exact=use_exact, conv_step=conv_step, samples=samples)
-        dimer_matrices[idx] = SD
     end
 
     # --- Shared color ranges ---
@@ -3028,7 +3618,16 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
     qvals = range(0.0, 2Float64(π), length=nq)
 
     # --- Build combined figure ---
-    fig = Figure(size=(280 * n + 80, 520))
+    # Default: double-column APS width; height derived so each heatmap is square.
+    # panel_width ≈ (total_width - colorbar_col) / n_columns
+    # total_height ≈ n_rows × panel_width + top/bottom margins
+    n = length(J2_values)
+    _colorbar_w = 50
+    _default_w  = first(PAPER_FIGSIZE_WIDE)   # 510 pt
+    _panel_w    = (_default_w - _colorbar_w) ÷ n
+    _default_h  = 2 * _panel_w + 60           # 2 rows + label margin
+    _figsize    = isnothing(figsize) ? (_default_w, _default_h) : figsize
+    fig = Figure(size=_figsize)
 
     local hm_spin, hm_dimer
 
@@ -3514,7 +4113,7 @@ function plot_bond_energy_pattern(filename::String;
                                   use_exact::Bool=true,
                                   conv_step::Int=1000,
                                   samples::Int=100000,
-                                  title::String="",
+                                  figsize=nothing,
                                   save_path=nothing)
 
     result, input_args = load_result(filename)
@@ -3658,64 +4257,77 @@ function plot_bond_energy_pattern(filename::String;
     all_vals = vcat(vec(vert_tiled), vec(horiz_tiled))
     cmax = isempty(all_vals) ? 1.0 : max(maximum(abs, all_vals), 1e-10)
 
-    if isempty(title)
-        model_str = is_2x2 ? "2×2" : "1×1"
-        title = "Bond Energy ⟨Sᵢ·Sⱼ⟩ ($model_str, $method_str)"
-    end
+    # Figure size: scale one lattice unit to ~35 pt, add colorbar column and margins
+    _unit    = 35
+    _cb_w    = 55
+    _default_w = max_cols * _unit + _cb_w + 20
+    _default_h = (_row + 1) * _unit + 20
+    _figsize = isnothing(figsize) ? (_default_w, _default_h) : figsize
 
-    fig = Figure(size=(max(600, 100 * max_cols), max(400, 100 * _row)))
-    ax = Axis(fig[1, 1], title=title,
-              xlabel="Column", ylabel="Row",
-              aspect=DataAspect())
+    fig = with_theme(paper_theme()) do
+        fig = Figure(size=_figsize)
 
-    # Vertical bonds
-    for col in 1:max_cols
-        for pos in 1:_row
-            pos2 = pos % _row + 1
-            val = vert_tiled[pos, col]
-            y1, y2 = Float64(pos), Float64(pos2)
-            lw = 1.0 + 4.0 * abs(val) / cmax
-            c = val / cmax
-            if pos2 < pos
-                linesegments!(ax, [Float64(col), Float64(col)], [y1, y1 + 0.5],
-                              color=[c, c], colorrange=(-1, 1), colormap=:RdBu,
-                              linewidth=lw)
-                linesegments!(ax, [Float64(col), Float64(col)], [y2 - 0.5, y2],
-                              color=[c, c], colorrange=(-1, 1), colormap=:RdBu,
-                              linewidth=lw)
-            else
-                linesegments!(ax, [Float64(col), Float64(col)], [y1, y2],
+        ax = Axis(fig[1, 1];
+                  xlabel  = "Column",
+                  ylabel  = "Row",
+                  aspect  = DataAspect(),
+                  xticklabelsize = PAPER_TICKLABELSIZE,
+                  yticklabelsize = PAPER_TICKLABELSIZE)
+
+        # Vertical bonds
+        for col in 1:max_cols
+            for pos in 1:_row
+                pos2 = pos % _row + 1
+                val  = vert_tiled[pos, col]
+                y1, y2 = Float64(pos), Float64(pos2)
+                lw = 0.8 + 3.0 * abs(val) / cmax
+                c  = val / cmax
+                if pos2 < pos
+                    linesegments!(ax, [Float64(col), Float64(col)], [y1, y1 + 0.5],
+                                  color=[c, c], colorrange=(-1, 1), colormap=:RdBu,
+                                  linewidth=lw)
+                    linesegments!(ax, [Float64(col), Float64(col)], [y2 - 0.5, y2],
+                                  color=[c, c], colorrange=(-1, 1), colormap=:RdBu,
+                                  linewidth=lw)
+                else
+                    linesegments!(ax, [Float64(col), Float64(col)], [y1, y2],
+                                  color=[c, c], colorrange=(-1, 1), colormap=:RdBu,
+                                  linewidth=lw)
+                end
+            end
+        end
+
+        # Horizontal bonds
+        for col in 1:(max_cols - 1)
+            for pos in 1:_row
+                val = horiz_tiled[pos, col]
+                lw  = 0.8 + 3.0 * abs(val) / cmax
+                c   = val / cmax
+                linesegments!(ax, [Float64(col), Float64(col + 1)],
+                              [Float64(pos), Float64(pos)],
                               color=[c, c], colorrange=(-1, 1), colormap=:RdBu,
                               linewidth=lw)
             end
         end
-    end
 
-    # Horizontal bonds
-    for col in 1:(max_cols - 1)
-        for pos in 1:_row
-            val = horiz_tiled[pos, col]
-            lw = 1.0 + 4.0 * abs(val) / cmax
-            c = val / cmax
-            linesegments!(ax, [Float64(col), Float64(col + 1)], [Float64(pos), Float64(pos)],
-                          color=[c, c], colorrange=(-1, 1), colormap=:RdBu,
-                          linewidth=lw)
+        # Sites
+        xs = [Float64(col) for col in 1:max_cols for _ in 1:_row]
+        ys = [Float64(pos) for _   in 1:max_cols for pos in 1:_row]
+        scatter!(ax, xs, ys; color=:gray30, markersize=5, strokewidth=0)
+
+        Colorbar(fig[1, 2]; colormap=:RdBu, limits=(-cmax, cmax),
+                 label="⟨𝐒ᵢ · 𝐒ⱼ⟩",
+                 labelsize=PAPER_AXIS_LABELSIZE,
+                 ticklabelsize=PAPER_TICKLABELSIZE,
+                 width=12)
+
+        if !isnothing(save_path)
+            mkpath(dirname(save_path))
+            save(save_path, fig)
+            println("Figure saved to: $save_path")
         end
-    end
 
-    # Draw sites
-    for col in 1:max_cols, pos in 1:_row
-        scatter!(ax, [Float64(col)], [Float64(pos)], color=:gray40, markersize=6)
-    end
-
-    # Colorbar
-    Colorbar(fig[1, 2], colormap=:RdBu, limits=(-cmax, cmax),
-             label="⟨Sᵢ · Sⱼ⟩")
-
-    if !isnothing(save_path)
-        mkpath(dirname(save_path))
-        save(save_path, fig)
-        println("Figure saved to: $save_path")
+        fig
     end
 
     bond_data = Dict(:vertical => vert_tiled, :horizontal => horiz_tiled)
@@ -4563,14 +5175,15 @@ function plot_energy_dynamics_vs_g(data_dir::String, g_values::Vector{Float64};
         ylims = (-5.0, -1.0),
         save_path::Union{String, Nothing} = nothing)
 
-    fig = Figure(size=PAPER_FIGSIZE_WIDE)
-    ax = Axis(fig[1, 1],
-              xlabel=rich("Channel iteration ", rich("n", font=:italic)),
-              ylabel="Energy/site",
-              limits=(nothing, ylims))
-
     palette = [:steelblue, :firebrick, :seagreen, :darkorange,
                :purple, :saddlebrown, :hotpink, :teal, :gray]
+
+    fig = with_theme(paper_theme()) do
+    fig = Figure(size=PAPER_FIGSIZE_WIDE)
+    ax = Axis(fig[1, 1];
+              xlabel  = "Channel iteration",
+              ylabel  = "E / site",
+              limits  = (nothing, ylims))
 
     for (idx, g) in enumerate(g_values)
         filename = joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json")
@@ -4637,14 +5250,25 @@ function plot_energy_dynamics_vs_g(data_dir::String, g_values::Vector{Float64};
     text!(ax, 102, ylims[1] + 0.05 * (ylims[2] - ylims[1]),
           text="burn-in", color=:black)
 
-    # Outside legend: keeps the axis uncluttered when many g values are present
-    Legend(fig[1, 2], ax, merge=true)
+    # Outside legend: tight row spacing so all entries fit within PAPER_FIGSIZE_WIDE height
+    Legend(fig[1, 2], ax;
+           merge        = true,
+           labelsize    = PAPER_LEGEND_LABELSIZE,
+           rowgap       = 0,
+           patchsize    = (12, 8),
+           padding      = (3, 3, 3, 3),
+           framevisible = true,
+           framewidth   = 0.5,
+           valign       = :top)
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))
         save(save_path, fig)
         @info "Figure saved to $save_path"
     end
+
+    fig
+    end  # with_theme
 
     return fig
 end

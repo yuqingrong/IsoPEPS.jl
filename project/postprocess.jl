@@ -956,7 +956,7 @@ end
 # Analyze a single result
 J=1.0;g = 1.0; row=4 ; nqubits=3; p=3; virtual_qubits=1;D=2
 data_dir = joinpath(@__DIR__, "results")
-datafile = joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J)_J2=0.0_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json")
+datafile = joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J)_J2=0.5_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile, dmrg_bulk_file="project/results/dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json")
 
@@ -1004,11 +1004,20 @@ fig, data = plot_bond_energy_pattern("project/results/circuit_heisenberg_j1j2_J1
     )
 display(fig)
 
+# Save the heavy computation once:
+save_combined_structure_factor_data(
+     "project/results/structure_factors_sampling.json",
+     "project/results", [0.0, 0.5, 1.0];
+     use_exact=false, conv_step=100, samples=1000000
+ )
+
+# Re-plot from saved data without recomputing:
 fig, _, _ = plot_combined_structure_factors(
       "project/results", [0.0, 0.5, 1.0];
-      use_exact=false, conv_step=100, samples=1000000,save_path="project/results/figures/structure_factors_combined.pdf"
+      data_file="project/results/structure_factors_sampling.json",
+      save_path="project/results/figures/structure_factors_combined.pdf"
   )
-display(fig)
+ display(fig)
 
 # Reconstruct gates and analyze
 plot_energy_error_vs_g("project/results", [0.0, 0.1,0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];                            
@@ -1016,8 +1025,40 @@ plot_energy_error_vs_g("project/results", [0.0, 0.1,0.2, 0.3, 0.4, 0.5, 0.6, 0.7
       J1=1.0, row=4, p=3, nqubits=3,                        
       dmrg_file="project/results/dmrg_j1j2_100x4_D=2.json",save_path="project/results/figures/heisenberg_energy_vs_j2.pdf")
 
+ns, vars, errs = compute_variance_vs_samples(
+        "project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json",
+        [1000, 2000, 3000, 4000,5000,6000, 7000,8000,9000, 10000];
+        conv_step=100, n_bootstrap=200,
+        save_path="project/results/variance_vs_samples.json"   # optional
+    )
+# Step 2 — plot
+fig = plot_variance_vs_samples(ns, vars; errors=errs,
+              save_path="project/results/figures/variance_vs_samples.pdf")
+
+fig, E_mat = plot_energy_vs_inv_samples(
+                "project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.0_row=4_p=3_nqubits=3_2x2.json",
+                [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 10000];
+                conv_step=100, n_bootstrap=200,
+                save_path="project/results/figures/energy_vs_inv_samples.pdf")
+                # total_samples defaults to 20 * 10000 * 4 = 800_000 spins → ~200_000 columns pool
+
+fig, data = plot_connected_corr_vs_g(
+                    "project/results",
+                    [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 3.75, 4.0, 4.25,4.5, 5.0];
+                    J=1.0, row=3, p=3, nqubits=3,
+                    conv_step=100, samples=10000,
+                    save_path="project/results/figures/NNconnected_corr_vs_g.pdf")
+
+fig, data = plot_magnetization_vs_g(
+    "project/results",
+    [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0];
+    J=1.0, row=3, p=3, nqubits=3,
+    conv_step=100, samples=20000,
+    save_path="project/results/figures/magnetization_vs_g.pdf")
+display(fig)
+                   
  
-plot_correlation_vs_g(data_dir, [2.0,2.5,3.0,3.5,4.0,4.5,5.0];dmrg_file=joinpath(data_dir,"dmrg_tfim_100x3.json"),pepskit_file=referfile, g_c=3.04,
+ plot_correlation_vs_g(data_dir, [2.0,2.5,3.0,3.5,4.0,4.5,5.0];dmrg_file=joinpath(data_dir,"dmrg_tfim_100x3.json"),pepskit_file=referfile, g_c=3.04,
 save_path="project/results/figures/corr_length_vs_g.pdf")
 
 fig, data = plot_correlation_vs_J2("project/results", [0.0, 0.1, 0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0];
@@ -1027,8 +1068,9 @@ display(fig)
 fig, data = plot_correlation_function(datafile;
                                    max_separation=14,
                                    conv_step=100,
-                                   samples=1000000,
+                                   samples=100000,
                                    save_path="project/results/figures/correlation_function_heisenberg_2x2_J1=$(J)_J2=0.5.pdf")
+
 datafile = joinpath(data_dir, "circuit_J=$(J)_g=1.0_row=3_p=3_nqubits=$(nqubits).json")
 fig = plot_observable_convergence(datafile; save_path="convergence.pdf")
 display(fig)

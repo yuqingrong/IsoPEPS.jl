@@ -191,7 +191,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
     end
 end
 
-#=
+
 # ── Example: TFIM ──
  simulation(;
      model="heisenberg_j1j2",
@@ -210,7 +210,7 @@ end
      abstol=1e-5,
      unit_cell=:two_by_two
  )
-=#
+#=
 # ── Example: Heisenberg J1-J2 ──
 # simulation(;
 #     model="heisenberg_j1j2",
@@ -245,4 +245,4 @@ simulation(;
     conv_step=100,
     samples=40000,
     n_runs=1,
-    abstol=1e-5)
+    abstol=1e-5)=#
