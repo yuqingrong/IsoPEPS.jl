@@ -122,7 +122,6 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
         warm_params, warm_val = _find_warm_start_params(output_dir, model, scan_param, val, row, p, nqubits;
                                                          fixed_params...)
         warm_from_nqubits = nothing
-
         # 2. If no same-nqubits result, try smaller nqubits and embed
         if warm_params === nothing
             for nq in (nqubits-2):-2:3
@@ -191,26 +190,26 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
     end
 end
 
-
+#=
 # ── Example: TFIM ──
  simulation(;
      model="heisenberg_j1j2",
      scan_param=:J2,
-     scan_values=[0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59],
+     scan_values=[0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0,2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0,4.25, 4.5, 4.75, 5.0],
      J1=1.0,
-     row=4, p=3, nqubits=3,
+     row=3, p=3, nqubits=3,
      maxiter=500,
      seed=123,
      verbose=true,
      output_dir=joinpath(@__DIR__, "results"),
      share_params=true,
      conv_step=100,
-     samples=10000,
+     samples=40000,
      n_runs=1,
      abstol=1e-5,
      unit_cell=:two_by_two
  )
-#=
+
 # ── Example: Heisenberg J1-J2 ──
 # simulation(;
 #     model="heisenberg_j1j2",
@@ -228,13 +227,13 @@ end
 #     n_runs=1,
 #     abstol=1e-5
 # )
-
+=#
 simulation(;
     model="tfim",
     scan_param=:g,
-    scan_values=[3.5],
+    scan_values=[0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25,4.5,4.75,5.0],
     J=1.0,
-    row=4,
+    row=3,
     p=3,
     nqubits=3,
     maxiter=500,
@@ -242,7 +241,7 @@ simulation(;
     verbose=true,
     output_dir=joinpath(@__DIR__, "results"),
     share_params=true,
-    conv_step=100,
-    samples=40000,
+    conv_step=102,
+    samples=30000,
     n_runs=1,
-    abstol=1e-5)=#
+    abstol=1e-5)

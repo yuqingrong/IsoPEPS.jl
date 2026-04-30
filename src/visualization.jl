@@ -481,16 +481,17 @@ end
 
 function plot_training_history(steps::AbstractVector, values::AbstractVector;
                                 reference::Union{Real,Nothing}=nothing,
-                                ylabel::String="E / site",
+                                ylabel::String="E/site",
                                 title::String="",
                                 logscale::Bool=false,
-                                ylims::Union{Tuple{Real,Real},Nothing}=(-0.7, 0.0),
+                                ylims::Union{Tuple{Real,Real},Nothing}=(-0.7, 0.2),
                                 save_path::Union{String,Nothing}=nothing,
                                 g::Union{Real,Nothing}=nothing,
                                 row::Union{Int,Nothing}=nothing,
                                 nqubits::Union{Int,Nothing}=nothing,
                                 pepskit_results_file::Union{String,Nothing}=nothing,
                                 dmrg_bulk_file::Union{String,Nothing}=nothing,
+                                exact_energy::Union{Real,Nothing}=nothing,
                                 J2::Union{Real,Nothing}=nothing)
 
     ref_energy = reference
@@ -557,9 +558,10 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
                   ylabel = ylabel,
                   title  = plot_title,
                   yscale = logscale ? log10 : identity,
+                  yticks = -1.0:0.1:0.1,
                   limits = (nothing, isnothing(ylims) ? nothing : (Float64(ylims[1]), Float64(ylims[2]))))
 
-        lines!(ax, collect(steps), collect(values), label=ylabel)
+        lines!(ax, collect(steps), collect(values), label="IsoPEPS (sampling)")
 
         if !isnothing(ref_energy)
             ref_label = compact_reference_label(:pepskit, ref_energy)
@@ -567,13 +569,21 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
         end
 
         if !isnothing(dmrg_ref)
-            dmrg_label = compact_reference_label(:dmrg, dmrg_ref)
+            dmrg_label = "DMRG (4x1000 bulk)"
             hlines!(ax, [dmrg_ref], linestyle=:dash, color=:darkorange, label=dmrg_label)
         end
 
-        if !isnothing(ref_energy) || !isnothing(dmrg_ref)
-            add_paper_legend!(ax; position=:rt)
+        if !isnothing(exact_energy)
+            hlines!(ax, [exact_energy], linestyle=:dash, color=:royalblue,
+                    label="Exact contraction")
         end
+
+        hlines!(ax, [-0.495530], linestyle=:dash, color=:forestgreen,
+                linewidth=2, label="DMRG (10×10)")
+        hlines!(ax, [-0.49755], linestyle=:dot, color=:purple,
+                linewidth=2, label="VMC (10×10)")
+
+        add_paper_legend!(ax; position=:rt)
 
         if !isnothing(save_path)
             save(save_path, fig)
@@ -588,7 +598,7 @@ end
 
 function plot_training_history(result::Union{CircuitOptimizationResult, ExactOptimizationResult, ManifoldOptimizationResult}; kwargs...)
     n = length(result.energy_history)
-    plot_training_history(1:n, result.energy_history; ylabel="Energy/site", kwargs...)
+    plot_training_history(1:n, result.energy_history; ylabel="E/site", kwargs...)
 end
 
 # ============================================================================
@@ -1130,6 +1140,7 @@ fig = plot_variance_vs_samples(ns, vars; errors=errs)
 """
 function compute_variance_vs_samples(filename::String,
                                      sample_sizes::AbstractVector{Int};
+                                     total_samples::Union{Int,Nothing}=nothing,
                                      conv_step::Int=100,
                                      n_bootstrap::Int=200,
                                      save_path::Union{String,Nothing}=nothing)
@@ -1143,14 +1154,16 @@ function compute_variance_vs_samples(filename::String,
     g          = Float64(get(input_args, :g,  1.0))
     J          = Float64(get(input_args, :J,  1.0))
 
-    max_samples = maximum(sample_sizes)
+    sorted_sizes = sort(sample_sizes)
+    # Pool must be >> max(sample_sizes) so bootstrap blocks can start at different positions.
+    _pool_samples = isnothing(total_samples) ? 20 * last(sorted_sizes) : total_samples
     println("=== compute_variance_vs_samples ===")
-    println("Model: $model_str  |  max samples: $max_samples  |  conv_step: $conv_step")
+    println("Model: $model_str  |  pool: $_pool_samples spins  |  conv_step: $conv_step")
 
-    # Run circuit once at maximum sample size
+    # Run circuit once at pool size (>> max sample size so bootstrap draws can vary)
     resample_result = resample_circuit(filename;
                                        conv_step=conv_step,
-                                       samples=max_samples,
+                                       samples=_pool_samples,
                                        measure_y=is_heisenberg)
     if isnothing(resample_result)
         error("resample_circuit failed for $filename")
@@ -1178,7 +1191,6 @@ function compute_variance_vs_samples(filename::String,
 
     _block(pool, start_col, n_cols) = @view pool[(start_col-1)*row+1 : (start_col+n_cols-1)*row]
 
-    sorted_sizes = sort(sample_sizes)
     variances    = Vector{Float64}(undef, length(sorted_sizes))
     errors       = Vector{Float64}(undef, length(sorted_sizes))
 
@@ -1744,8 +1756,12 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
         end
 
         # Extract DMRG energies for each g
-        g_key = haskey(dmrg_data, "scan_values") ? "scan_values" : (haskey(dmrg_data, :scan_values) ? :scan_values : nothing)
-        e_key = haskey(dmrg_data, "energies_per_site") ? "energies_per_site" : (haskey(dmrg_data, :energies_per_site) ? :energies_per_site : nothing)
+        g_key = haskey(dmrg_data, "scan_values") ? "scan_values" :
+                haskey(dmrg_data, "J2_values")   ? "J2_values"   :
+                haskey(dmrg_data, "g_values")     ? "g_values"    : nothing
+        e_key = haskey(dmrg_data, "energies_per_site") ? "energies_per_site" :
+                haskey(dmrg_data, "e_bulk_values")      ? "e_bulk_values"     :
+                haskey(dmrg_data, "energies")           ? "energies"          : nothing
         if !isnothing(g_key) && !isnothing(e_key)
             g_dmrg = Float64.(dmrg_data[g_key])
             e_dmrg = Float64.(dmrg_data[e_key])
@@ -1753,7 +1769,7 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
                 dmrg_energies[g_val] = energy_val
             end
         else
-            @warn "DMRG JSON does not contain expected 'g_values'/'energies_per_site' arrays; skipping."
+            @warn "DMRG JSON does not contain expected scan/energy arrays; skipping."
         end
         println("Loaded $(length(dmrg_energies)) DMRG energies")
     else
@@ -1787,12 +1803,22 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
                 continue
             end
         else
-            filename = joinpath(data_dir, "circuit_J=$(J)_g=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
-        end
-
-        if !isfile(filename)
-            @warn "File not found: $(basename(filename)), skipping $scan_label=$val"
-            continue
+            candidates = [
+                joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json"),
+                joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_100*1000.json"),
+                joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
+            ]
+            filename = ""
+            for c in candidates
+                if isfile(c)
+                    filename = c
+                    break
+                end
+            end
+            if isempty(filename)
+                @warn "No file found for g=$val, tried $(length(candidates)) patterns, skipping"
+                continue
+            end
         end
 
         # Load result
@@ -2097,6 +2123,7 @@ Connected correlation at column separation r, averaged over all row positions:
 function plot_connected_corr_vs_g(data_dir::String, g_values::Vector{Float64};
                                    J::Float64=1.0,
                                    row::Int=3, p::Int=3, nqubits::Int=3,
+                                   use_exact::Bool=false,
                                    conv_step::Int=100,
                                    samples::Int=500_000,
                                    figsize=nothing,
@@ -2107,7 +2134,7 @@ function plot_connected_corr_vs_g(data_dir::String, g_values::Vector{Float64};
     C2_vals  = Float64[]
     g_found  = Float64[]
 
-    println("=== plot_connected_corr_vs_g ===")
+    println("=== plot_connected_corr_vs_g ($(use_exact ? "exact" : "sampling")) ===")
 
     for g in sorted_g
         candidates = [
@@ -2125,21 +2152,29 @@ function plot_connected_corr_vs_g(data_dir::String, g_values::Vector{Float64};
         end
 
         println("  g=$g  →  $(basename(filename))")
-        resample_result = resample_circuit(filename; conv_step=conv_step,
-                                           samples=samples, measure_y=false)
-        if isnothing(resample_result)
-            @warn "Resampling failed for g=$g, skipping"
-            continue
-        end
-        _rho, Z_all, _X_all, _params, _gates = resample_result
-        Z_pool = Z_all[conv_step+1:end]
 
-        # Average C(r) over all row positions for better statistics
-        function mean_C(r)
-            vals = [abs(correlation_function(Z_pool, row, r;
-                                             position=pos, connected=true)[r])
-                    for pos in 1:row]
-            return mean(vals)
+        if use_exact
+            result, input_args = load_result(filename)
+            virtual_qubits = (nqubits - 1) ÷ 2
+            share_params   = get(input_args, :share_params, true)
+            gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
+
+            mean_C = r -> mean(abs(correlation_function(gates, row, virtual_qubits, :Z, r;
+                                                        connected=true, position=pos)[r])
+                               for pos in 1:row)
+        else
+            resample_result = resample_circuit(filename; conv_step=conv_step,
+                                               samples=samples, measure_y=false)
+            if isnothing(resample_result)
+                @warn "Resampling failed for g=$g, skipping"
+                continue
+            end
+            _rho, Z_all, _X_all, _params, _gates = resample_result
+            Z_pool = Z_all[conv_step+1:end]
+
+            mean_C = r -> mean(abs(correlation_function(Z_pool, row, r;
+                                                        position=pos, connected=true)[r])
+                               for pos in 1:row)
         end
 
         push!(C1_vals, mean_C(1))
@@ -2237,12 +2272,9 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
 
         # Compute correlation function
         separations = 1:max_separation
-        corr_vals = Float64[]
-
-        for r in separations
-            corr = correlation_function(gates, row, virtual_qubits, :Z, r; connected=connected)
-            push!(corr_vals, real(corr[r]))
-        end
+        # Compute all separations in a single call (avoids rebuilding fixed points 20×)
+        corr_dict = correlation_function(gates, row, virtual_qubits, :Z, separations; connected=connected)
+        corr_vals = [real(corr_dict[r]) for r in separations]
 
         # Compute correlation length from transfer matrix
         _, gap, _, _ = compute_transfer_spectrum(gates, row, nqubits)

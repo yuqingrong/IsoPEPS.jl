@@ -28,14 +28,26 @@ Dominant left/right eigenvectors of `T` with biorthogonal norm `nf = l†r`
 and dominant eigenvalue `λ`.
 """
 function _fixed_points(T::AbstractMatrix)
-    eig_r = eigen(T)
-    idx_r = sortperm(abs.(eig_r.values), rev=true)
-    r_vec = eig_r.vectors[:, idx_r[1]]
-    λ     = eig_r.values[idx_r[1]]
+    n = size(T, 1)
+    if n > 256
+        v0 = randn(ComplexF64, n); v0 ./= norm(v0)
+        r_vals, r_vecs, _ = KrylovKit.eigsolve(T, v0, 1, :LM; ishermitian=false,
+                                               krylovdim=max(30, 4))
+        r_vec = r_vecs[1]
+        λ     = r_vals[1]
+        l_vals, l_vecs, _ = KrylovKit.eigsolve(T', v0, 1, :LM; ishermitian=false,
+                                               krylovdim=max(30, 4))
+        l_vec = l_vecs[1]
+    else
+        eig_r = eigen(T)
+        idx_r = sortperm(abs.(eig_r.values), rev=true)
+        r_vec = eig_r.vectors[:, idx_r[1]]
+        λ     = eig_r.values[idx_r[1]]
 
-    eig_l = eigen(T')
-    idx_l = sortperm(abs.(eig_l.values), rev=true)
-    l_vec = eig_l.vectors[:, idx_l[1]]
+        eig_l = eigen(T')
+        idx_l = sortperm(abs.(eig_l.values), rev=true)
+        l_vec = eig_l.vectors[:, idx_l[1]]
+    end
 
     nf = dot(l_vec, r_vec)
     return l_vec, r_vec, nf, λ

@@ -114,8 +114,24 @@ function compute_transfer_spectrum(op::TransferOperator;
     should_use_iterative   = use_iterative == :always || (use_iterative == :auto && sz > 256)
 
     if should_use_matrix_free
+        # Precompute tensors and contraction code once per column (not per matvec)
+        col_data = map(op.columns) do gates
+            A_tensors = gates_to_tensors(gates, op.row, op.virtual_qubits)
+            code, total_legs = _build_transfer_contraction_code(A_tensors, op.row, op.virtual_qubits)
+            tensor_ket = [A_tensors[i] for i in 1:op.row]
+            tensor_bra = [conj(A_tensors[i]) for i in 1:op.row]
+            bond_dim   = 2^op.virtual_qubits
+            (code=code, total_legs=total_legs, tensor_ket=tensor_ket, tensor_bra=tensor_bra, bond_dim=bond_dim)
+        end
+        function _matvec_precomputed(v)
+            for cd in reverse(col_data)
+                v_t = reshape(v, ntuple(_ -> cd.bond_dim, 2 * cd.total_legs)...)
+                v   = vec(apply_transfer_matvec(cd.code, cd.tensor_ket, cd.tensor_bra, v_t, cd.total_legs))
+            end
+            return v
+        end
         v0 = randn(ComplexF64, sz); v0 ./= norm(v0)
-        vals, vecs, _ = KrylovKit.eigsolve(v -> apply_transfer(op, v), v0,
+        vals, vecs, _ = KrylovKit.eigsolve(_matvec_precomputed, v0,
                                            num_eigenvalues, :LM;
                                            ishermitian=false,
                                            krylovdim=max(30, 2 * num_eigenvalues))

@@ -293,14 +293,14 @@ _g_grid = vcat(collect(4.0:-0.25:3.75), collect(3.5:-0.05:2.6),collect(2.5:-0.25
                             
                         
 
-output_file = joinpath(@__DIR__, "results", "pepskit_results_D=2_single.json")
+output_file = joinpath(@__DIR__, "results", "pepskit_results_D=2_g=4.25_4.5_4.75_5.0.json")
 
 results = run_pepskit_scan_bidirectional(
         d = 2,
         D = 2,
         J = 1.0,
-        g_values = 1.25,
-        χ = 16,
+        g_values = [4.25, 4.5, 4.75, 5.0],
+        χ = 10,
         ctmrg_tol = 1e-8,
         grad_tol = 1e-4,
         maxiter = 50,
