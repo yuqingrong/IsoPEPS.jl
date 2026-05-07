@@ -26,7 +26,7 @@ function _find_warm_start_params(output_dir, model, scan_param, scan_value, row,
     # Filename format: circuit_{model}_{fixed_params}_{scan_param}={value}_row={row}_p={p}_nqubits={nqubits}.json
     fixed_str = join(["$(k)=$(v)" for (k, v) in sort(collect(fixed_params), by=first)], "_")
     prefix = isempty(fixed_str) ? "circuit_$(model)_$(scan_param)=" : "circuit_$(model)_$(fixed_str)_$(scan_param)="
-    suffix = "_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json" # TODO: not always true
+    suffix = "_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json" # TODO: not always true
 
     best_params = nothing
     best_val = nothing
@@ -175,7 +175,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
         # Save result to JSON
         fixed_str = join(["$(k)=$(v)" for (k, v) in sort(collect(fixed_params), by=first)], "_")
         name_prefix = isempty(fixed_str) ? "circuit_$(model)" : "circuit_$(model)_$(fixed_str)"
-        filename = joinpath(output_dir, "$(name_prefix)_$(scan_param)=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json")
+        filename = joinpath(output_dir, "$(name_prefix)_$(scan_param)=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json")
         input_args = Dict{Symbol,Any}(
             :model => model, :scan_param => scan_param, scan_param => val,
             :row => row, :p => p, :nqubits => nqubits,
@@ -231,7 +231,7 @@ end
 simulation(;
     model="tfim",
     scan_param=:g,
-    scan_values=[0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25,4.5,4.75,5.0],
+    scan_values=[0.75, 1.25, 1.75, 2.25, 2.75, 3.25, 3.75, 4.25, 4.75],
     J=1.0,
     row=3,
     p=3,
@@ -242,6 +242,6 @@ simulation(;
     output_dir=joinpath(@__DIR__, "results"),
     share_params=true,
     conv_step=102,
-    samples=30000,
+    samples=60000,
     n_runs=1,
     abstol=1e-5)

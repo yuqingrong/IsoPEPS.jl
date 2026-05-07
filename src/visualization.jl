@@ -1121,7 +1121,7 @@ subsampling.  The returned vectors can be passed directly to
 # Arguments
 - `filename`: Path to a saved optimization result JSON
 - `sample_sizes`: Vector of sample counts to evaluate (e.g. `[1_000, 10_000, 100_000]`)
-- `conv_step`: Burn-in steps discarded from the front of the chain (default 100)
+- `conv_step`: Thermalization steps discarded from the front of the chain (default 100)
 - `n_bootstrap`: Number of bootstrap draws per sample size (default 200)
 - `save_path`: If provided, saves the results as JSON for later use
 
@@ -1187,7 +1187,7 @@ function compute_variance_vs_samples(filename::String,
     pool_cols   = length(Z_pool) ÷ row
     pool_cols_X = length(X_pool) ÷ row
     pool_cols_Y = is_heisenberg ? length(Y_pool) ÷ row : 0
-    println("Pool size after burn-in: $(length(Z_pool)) spins  ($pool_cols columns × row=$row)")
+    println("Pool size after thermalization: $(length(Z_pool)) spins  ($pool_cols columns × row=$row)")
 
     _block(pool, start_col, n_cols) = @view pool[(start_col-1)*row+1 : (start_col+n_cols-1)*row]
 
@@ -1257,7 +1257,7 @@ spread narrows, visually confirming the 1/√N standard-error scaling.
   Must be much smaller than `total_samples ÷ row` for the bootstrap to show spread.
 - `total_samples`: Total spin measurements to collect as the pool (default:
   `20 * maximum(sample_sizes) * row`). Must satisfy `total_samples >> max(sample_sizes)`.
-- `conv_step`: Burn-in steps to discard (default 100)
+- `conv_step`: Thermalization steps to discard (default 100)
 - `n_bootstrap`: Bootstrap draws per sample size (default 200)
 - `figsize`: Override figure size (default `PAPER_FIGSIZE`)
 - `save_path`: Optional path to save the figure
@@ -1310,7 +1310,7 @@ function plot_energy_vs_inv_samples(filename::String,
     pool_cols   = length(Z_pool) ÷ row
     pool_cols_X = length(X_pool) ÷ row
     pool_cols_Y = is_heisenberg ? length(Y_pool) ÷ row : 0
-    println("Pool size after burn-in: $(length(Z_pool)) spins  ($pool_cols columns × row=$row)")
+    println("Pool size after thermalization: $(length(Z_pool)) spins  ($pool_cols columns × row=$row)")
 
     _block(pool, start_col, n_cols) = @view pool[(start_col-1)*row+1 : (start_col+n_cols-1)*row]
 
@@ -2004,7 +2004,7 @@ in the disordered phase (g > g_c) the roles reverse.
 - `g_values`: Vector of g values to scan
 - `J`: Coupling (default 1.0)
 - `row`, `p`, `nqubits`: Circuit parameters
-- `conv_step`: Burn-in steps (default 100)
+- `conv_step`: Thermalization steps (default 100)
 - `samples`: Number of spin measurements per g (default 500_000)
 - `figsize`: Override figure size (default `PAPER_FIGSIZE`)
 - `save_path`: Optional path to save the figure
@@ -2030,7 +2030,7 @@ function plot_magnetization_vs_g(data_dir::String, g_values::Vector{Float64};
 
     for g in sorted_g
         candidates = [
-            joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json"),
+            joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json"),
             joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
             joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
         ]
@@ -2111,7 +2111,7 @@ Connected correlation at column separation r, averaged over all row positions:
 - `g_values`: Vector of g values to scan
 - `J`: Coupling (default 1.0)
 - `row`, `p`, `nqubits`: Circuit parameters
-- `conv_step`: Burn-in steps (default 100)
+- `conv_step`: Thermalization steps (default 100)
 - `samples`: Number of spin measurements per g (default 500_000)
 - `figsize`: Override figure size (default `PAPER_FIGSIZE`)
 - `save_path`: Optional path to save the figure
@@ -2122,10 +2122,10 @@ Connected correlation at column separation r, averaged over all row positions:
 """
 function plot_connected_corr_vs_g(data_dir::String, g_values::Vector{Float64};
                                    J::Float64=1.0,
-                                   row::Int=3, p::Int=3, nqubits::Int=3,
-                                   use_exact::Bool=false,
+                                   row::Int=4, p::Int=3, nqubits::Int=3,
+                                   use_exact::Bool=true,
                                    conv_step::Int=100,
-                                   samples::Int=500_000,
+                                   samples::Int=4000000,
                                    figsize=nothing,
                                    save_path::Union{String,Nothing}=nothing)
 
@@ -2234,7 +2234,7 @@ Plot correlation length ξ vs g for the TFIM from the transfer-matrix spectrum.
 - `save_path`: Path to save figure (optional)
 """
 function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
-                               J=1.0, row=3, nqubits=3, p=3,
+                               J=1.0, row=4, nqubits=3, p=3,
                                max_separation=20,
                                connected=true,
                                dmrg_file::Union{String,Nothing}=nothing,
@@ -2629,7 +2629,7 @@ The crossing/transition between the order parameters signals the phase boundary.
 - `row`, `nqubits`, `p`: Circuit parameters
 - `use_exact`: If true (default), compute M² via exact transfer matrix contraction;
   if false, use sampling-based computation
-- `conv_step`: Burn-in steps for sampling (only used when `use_exact=false`)
+- `conv_step`: Thermalization steps for sampling (only used when `use_exact=false`)
 - `samples`: Number of measurement samples (only used when `use_exact=false`)
 - `max_separation`: Max column separation for structure factor sum
 - `dmrg_file`: Optional JSON file with DMRG reference M² data
@@ -3070,7 +3070,7 @@ Brillouin-zone heatmap of the dimer static structure factor S_D(qx, qy).
 - `dimer_orientation`: `:vertical` or `:horizontal`
 - `max_separation`: Max column separation in the structure factor sum
 - `use_exact`: If true, use exact transfer matrix; if false, use sampling
-- `conv_step`: Burn-in steps for sampling (only when `use_exact=false`)
+- `conv_step`: Thermalization steps for sampling (only when `use_exact=false`)
 - `samples`: Number of measurement samples (only when `use_exact=false`)
 - `save_path`: Optional path to save the figure
 
@@ -3370,7 +3370,7 @@ Brillouin-zone heatmap of the spin-spin static structure factor S_SS(qx, qy).
 - `nq`: Number of q-points along each axis (total grid: nq × nq)
 - `max_separation`: Max column separation in the structure factor sum
 - `use_exact`: If true, use exact transfer matrix; if false, use sampling
-- `conv_step`: Burn-in steps for sampling (only when `use_exact=false`)
+- `conv_step`: Thermalization steps for sampling (only when `use_exact=false`)
 - `samples`: Number of measurement samples (only when `use_exact=false`)
 - `save_path`: Optional path to save the figure
 
@@ -3722,7 +3722,7 @@ Brillouin-zone heatmap of the plaquette static structure factor S_P(qx, qy).
 - `nq`: Number of q-points along each axis (total grid: nq × nq)
 - `max_separation`: Max column separation in the structure factor sum
 - `use_exact`: If true, use exact transfer matrix; if false, use sampling
-- `conv_step`: Burn-in steps for sampling (only when `use_exact=false`)
+- `conv_step`: Thermalization steps for sampling (only when `use_exact=false`)
 - `samples`: Number of measurement samples (only when `use_exact=false`)
 - `save_path`: Optional path to save the figure
 
@@ -3826,7 +3826,7 @@ with the reference.
 - `ref_col`: Column of the reference dimer (1-based)
 - `ref_orientation`: `:vertical` or `:horizontal`
 - `use_exact`: If true, use exact transfer matrix; if false, use sampling
-- `conv_step`: Burn-in steps for sampling (only when `use_exact=false`)
+- `conv_step`: Thermalization steps for sampling (only when `use_exact=false`)
 - `samples`: Number of measurement samples (only when `use_exact=false`)
 - `save_path`: Optional path to save the figure
 
@@ -4130,7 +4130,7 @@ cylinder lattice. Strong/weak bond alternation directly reveals VBS order.
 - `filename`: Path to a saved optimization result JSON
 - `max_cols`: Number of columns to display
 - `use_exact`: If true, use exact transfer matrix; if false, use sampling
-- `conv_step`: Burn-in steps for sampling (only when `use_exact=false`)
+- `conv_step`: Thermalization steps for sampling (only when `use_exact=false`)
 - `samples`: Number of measurement samples (only when `use_exact=false`)
 - `title`: Optional figure title
 - `save_path`: Optional path to save the figure
@@ -4996,7 +4996,7 @@ dashed horizontal line for the exact energy reference.
 - `g_values`: Vector of g values to overlay
 - `J`: Coupling constant (default 1.0)
 - `row`, `p`, `nqubits`: Circuit parameters (used to construct filenames)
-- `conv_step`: Burn-in step marked by a vertical dotted line
+- `conv_step`: Thermalization step marked by a vertical dotted line
 - `ylims`: Y-axis limits, default `(-4.0, -1.0)`
 - `save_path`: If provided, save figure to this path
 
@@ -5090,8 +5090,8 @@ spread.
 # Arguments
 - `filename`: Path to a saved result JSON file (produced by `optimize_circuit`)
 - `M`: Number of independent fresh circuit runs (default: 10_000)
-- `shots`: Shots per run after burn-in (default: 1000)
-- `conv_step`: Burn-in steps discarded at the start of each run (default: 100)
+- `shots`: Shots per run after thermalization (default: 1000)
+- `conv_step`: Thermalization steps discarded at the start of each run (default: 100)
 - `ylims`: Y-axis limits (default: `(-4.0, -1.0)`)
 - `save_path`: If provided, save figure to this path
 
@@ -5211,7 +5211,7 @@ function plot_energy_dynamics_vs_g(data_dir::String, g_values::Vector{Float64};
                :purple, :saddlebrown, :hotpink, :teal, :gray]
 
     fig = with_theme(paper_theme()) do
-    fig = Figure(size=PAPER_FIGSIZE_WIDE)
+    fig = Figure(size=PAPER_FIGSIZE)
     ax = Axis(fig[1, 1];
               xlabel  = "Channel iteration",
               ylabel  = "E / site",
@@ -5277,10 +5277,10 @@ function plot_energy_dynamics_vs_g(data_dir::String, g_values::Vector{Float64};
         hlines!(ax, [exact_E], linestyle=:dash, color=color, label=nothing)
     end
 
-    # Burn-in marker
+    # Thermalization marker
     vlines!(ax, [100], linestyle=:dash, color=:black)
     text!(ax, 102, ylims[1] + 0.05 * (ylims[2] - ylims[1]),
-          text="burn-in", color=:black)
+          text="thermalization", color=:black)
 
     # Outside legend: tight row spacing so all entries fit within PAPER_FIGSIZE_WIDE height
     Legend(fig[1, 2], ax;

@@ -127,7 +127,7 @@ Optimize a quantum circuit using sampling-based CMA-ES.
 # Keyword Arguments
 - `model`: `"tfim"` or `"heisenberg_j1j2"` (string) or an `AbstractModel` instance
 - `share_params::Bool=true`: Whether to share parameters across layers
-- `conv_step::Int=100`: Burn-in steps before sampling
+- `conv_step::Int=100`: Thermalization steps before sampling
 - `samples::Int=10000`: Samples per sampling run
 - `n_runs::Int=44`: Number of parallel sampling runs (threaded)
 - `maxiter::Int=5000`: Maximum CMA-ES generations
@@ -210,7 +210,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
                                               samples=samples,
                                               model=m)
         end
-        # Each phase now has conv_step + samples raw measurements; discard same burn-in
+        # Each phase now has conv_step + samples raw measurements; discard same thermalization
         Z_samples_all[run_idx] = result_ch[2][conv_step+1:end]
         X_samples_all[run_idx] = result_ch[3][conv_step+1:end]
         if need_y
@@ -218,15 +218,19 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         end
         end
 
-        # Combine all samples
+        # Compute energy per-run to avoid cross-chain boundary artifacts, then average
+        energies_per_run = Vector{Float64}(undef, n_runs)
+        for run_idx in 1:n_runs
+            Y_run = need_y ? Y_samples_all[run_idx] : Float64[]
+            energies_per_run[run_idx] = real(compute_energy_from_samples(
+                m, X_samples_all[run_idx], Z_samples_all[run_idx], Y_run, row))
+        end
+        energy = mean(energies_per_run)
+
+        # Combine for history storage (used by visualization for running-mean plots)
         Z_samples_combined = reduce(vcat, Z_samples_all)
         X_samples_combined = reduce(vcat, X_samples_all)
-
-        # Combine Y samples if needed
         Y_samples_combined = need_y ? reduce(vcat, Y_samples_all) : Float64[]
-
-        # Energy computation via model dispatch
-        energy = compute_energy_from_samples(m, X_samples_combined, Z_samples_combined, Y_samples_combined, row)
 
         # Store in generation arrays
         push!(generation_energies, real(energy))

@@ -825,7 +825,7 @@ end
     # Reshape samples for compute_acf (row samples per column → reshape to get horizontal correlations)
     # Z_samples is a flat vector, need to compute correlations properly
     # The sampling gives Z values site by site, so we compute correlation directly
-    Z_vec = Z_samples[conv_step+1:end]  # Discard burn-in
+    Z_vec = Z_samples[conv_step+1:end]  # Discard thermalization
     
     # Compute sample-based correlation using compute_acf
     # compute_acf expects samples in matrix form (chains × samples)

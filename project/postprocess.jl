@@ -182,22 +182,22 @@ fig, E_mat = plot_energy_vs_inv_samples(
 
 fig, data = plot_connected_corr_vs_g(
                     "project/results",
-                    [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 3.75, 4.0, 4.25,4.5, 5.0];
-                    J=1.0, row=3, p=3, nqubits=3,
+                    [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0];
+                    J=1.0, row=4, p=3, nqubits=3,
                     use_exact=true,
                     save_path="project/results/figures/NNconnected_corr_vs_g.pdf")
 
 fig, data = plot_magnetization_vs_g(
     "project/results",
-    [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0];
+    [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0];
     J=1.0, row=3, p=3, nqubits=3,
     conv_step=100, samples=40000,
     save_path="project/results/figures/magnetization_vs_g.pdf")
 display(fig)
                    
  
- plot_correlation_vs_g(data_dir, [0.5, 0.75,1.0,1.25, 1.5,1.75, 2.0,2.25,2.5, 2.75];dmrg_file=joinpath(data_dir,"dmrg_bulk_tfim_Ly3_D2_gscan.json"),pepskit_file=referfile, g_c=3.04,
-save_path="project/results/figures/corr_length_vs_g.pdf")
+ plot_correlation_vs_g(data_dir, [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0];dmrg_file=joinpath(data_dir,"dmrg_bulk_tfim_Ly4_D2_gscan.json"),pepskit_file=referfile, g_c=3.04,
+save_path="project/results/figures/corr_length_vs_g_row=4.pdf")
 
 fig, data = plot_correlation_vs_J2("project/results", [0.0, 0.1, 0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0];
 row=4, dmrg_file="project/results/dmrg_j1j2_100x4_D=2.json")
@@ -217,7 +217,7 @@ fig = plot_energy_convergence_vs_g("project/results", [0.0, 0.5, 1.0, 1.5, 2.0, 
       J=1.0, row=3, p=3, nqubits=3, conv_step=100, save_path="project/results/figures/energy_convergence_vs_g.pdf")          
 
 fig = plot_energy_dynamics(datafile;                               
-      M=1000, shots=150, conv_step=0, save_path="project/results/figures/energy_dynamics.pdf")
+      M=1000, shots=200, conv_step=0, save_path="project/results/figures/energy_dynamics.pdf")
 display(fig)
 fig = plot_energy_dynamics_vs_g("project/results", [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0];
 J=1.0, row=3, p=3, nqubits=3,                                                                                                
