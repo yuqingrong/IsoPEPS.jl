@@ -37,6 +37,46 @@ using Random
     gates_short = build_unitary_gate(params, p, row, nqubits; max_stride=1)
     @test gates_full[1] != gates_short[1]
     @test all(isapprox(g * g', I, atol=1e-6) for g in vcat(gates_full, gates_short))
+
+    # active_nqubits keeps a smaller embedded circuit's CNOT pattern intact.
+    p = 3; row = 2; nfrom = 3; nto = 5
+    params3 = rand(ppq * nfrom * p) .* 2π
+    params5 = embed_params(params3, p, nfrom, nto)
+    gates3 = build_unitary_gate(params3, p, row, nfrom)
+    gates5 = build_unitary_gate(params5, p, row, nto; active_nqubits=nfrom)
+    expected5 = kron(Matrix{ComplexF64}(I, 1 << (nto - nfrom), 1 << (nto - nfrom)), gates3[1])
+    @test gates5[1] ≈ expected5 atol=1e-10
+    @test all(isapprox(g * g', I, atol=1e-6) for g in gates5)
+
+    # Fully active 5-qubit gates use the nested D=2-plus-extra CNOT pattern.
+    params5_active = copy(params5)
+    for r in 1:p
+        for q in nfrom+1:nto
+            idx = ppq * nto * (r-1) + ppq * (q-1) + 1
+            params5_active[idx] = 0.37 + 0.11q + 0.03r
+            params5_active[idx+1] = 0.23 + 0.07q + 0.05r
+        end
+    end
+    gates5_active = build_unitary_gate(params5_active, p, row, nto; active_nqubits=nto)
+    expected_active = Matrix{ComplexF64}(I, 1 << nto, 1 << nto)
+    for r in 1:p
+        rotations = Matrix{ComplexF64}(undef, 1, 1)
+        rotations[1, 1] = 1
+        for q in 1:nto
+            idx = ppq * nto * (r-1) + ppq * (q-1) + 1
+            θx = params5_active[idx]
+            θz = params5_active[idx+1]
+            Rx = ComplexF64[cos(θx/2) -im*sin(θx/2); -im*sin(θx/2) cos(θx/2)]
+            Rz = ComplexF64[exp(-im * θz/2) 0; 0 exp(im * θz/2)]
+            rotations = kron(Rx * Rz, rotations)
+        end
+        cnot_nested = Matrix{ComplexF64}(I, 1 << nto, 1 << nto)
+        for (control, target) in [(2, 1), (3, 2), (1, 3), (4, 1), (5, 3), (5, 4)]
+            cnot_nested *= Matrix(cnot(nto, control, target))
+        end
+        expected_active *= rotations * cnot_nested
+    end
+    @test gates5_active[1] ≈ expected_active atol=1e-10
 end
 
 @testset "build_unitary_gate_2x2" begin
@@ -66,6 +106,19 @@ end
 
     # Wrong param count should throw
     @test_throws AssertionError build_unitary_gate_2x2([0.1], 2, 1, 3)
+
+    # active_nqubits also applies to every gate in a 2×2 unit cell.
+    p = 2; row = 3; nfrom = 3; nto = 5
+    chunk3 = ppq * nfrom * p
+    params3 = rand(4 * chunk3) .* 2π
+    params5 = embed_params(params3, p, nfrom, nto; unit_cell=:two_by_two)
+    odd3, even3 = build_unitary_gate_2x2(params3, p, row, nfrom)
+    odd5, even5 = build_unitary_gate_2x2(params5, p, row, nto; active_nqubits=nfrom)
+    idle = Matrix{ComplexF64}(I, 1 << (nto - nfrom), 1 << (nto - nfrom))
+    @test odd5[1] ≈ kron(idle, odd3[1]) atol=1e-10
+    @test odd5[2] ≈ kron(idle, odd3[2]) atol=1e-10
+    @test even5[1] ≈ kron(idle, even3[1]) atol=1e-10
+    @test even5[2] ≈ kron(idle, even3[2]) atol=1e-10
 end
 
 @testset "embed_params" begin

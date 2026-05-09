@@ -145,6 +145,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
     share_params=true, conv_step=100,
     samples=10000, maxiter=5000, abstol=0.01, n_runs=44,
     unit_cell::Symbol=:single,
+    active_nqubits::Int=nqubits,
     model_kwargs...)
 
     kw = Dict{Symbol,Any}(model_kwargs)
@@ -180,10 +181,13 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         # Build gates based on unit cell type
         local gates, gates_odd, gates_even
         if unit_cell == :two_by_two && model_str == "heisenberg_j1j2"
-            gates_odd, gates_even = build_unitary_gate_2x2(x, p, row, nqubits)
+            gates_odd, gates_even = build_unitary_gate_2x2(x, p, row, nqubits;
+                                                           active_nqubits=active_nqubits)
             gates = gates_odd  # for final_gates compatibility
         else
-            gates = build_unitary_gate(x, p, row, nqubits; share_params=share_params)
+            gates = build_unitary_gate(x, p, row, nqubits;
+                                       share_params=share_params,
+                                       active_nqubits=active_nqubits)
         end
 
         # Run circuit with samples
@@ -310,9 +314,12 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
     end
 
     if unit_cell == :two_by_two && model_str == "heisenberg_j1j2"
-        final_gates = build_unitary_gate_2x2(final_params, p, row, nqubits)
+        final_gates = build_unitary_gate_2x2(final_params, p, row, nqubits;
+                                             active_nqubits=active_nqubits)
     else
-        final_gates = build_unitary_gate(final_params, p, row, nqubits; share_params=share_params)
+        final_gates = build_unitary_gate(final_params, p, row, nqubits;
+                                         share_params=share_params,
+                                         active_nqubits=active_nqubits)
     end
 
     result = CircuitOptimizationResult(
@@ -337,6 +344,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         :maxiter => maxiter,
         :abstol => abstol,
         :total_generations => generation_count[],
+        :active_nqubits => active_nqubits,
     )
     merge!(input_args, Dict{Symbol,Any}(model_kwargs))
 
@@ -368,6 +376,7 @@ Optimize circuit parameters using exact tensor contraction (no sampling noise).
 function optimize_exact(params, p::Int, row::Int, nqubits::Int;
                         model::Union{String,AbstractModel}="tfim", maxiter=5000, abstol=1e-6,
                         unit_cell::Symbol=:single,
+                        active_nqubits::Int=nqubits,
                         model_kwargs...)
     kw = Dict{Symbol,Any}(model_kwargs)
 
@@ -407,12 +416,13 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
         local energy, X_cost, ZZ_vert, ZZ_horiz, gap, eigenvalues
 
         if unit_cell == :two_by_two && model_str == "heisenberg_j1j2"
-            gates_odd, gates_even = build_unitary_gate_2x2(x, p, row, nqubits)
+            gates_odd, gates_even = build_unitary_gate_2x2(x, p, row, nqubits;
+                                                           active_nqubits=active_nqubits)
             _, gap, eigenvalues, _ = compute_transfer_spectrum_2x2(gates_odd, gates_even, row, nqubits)
             energy, X_cost, ZZ_vert, ZZ_horiz = compute_exact_energy_from_gates(
                 m, gates_odd, row, virtual_qubits; unit_cell=unit_cell, gates_even=gates_even)
         else
-            gates = build_unitary_gate(x, p, row, nqubits)
+            gates = build_unitary_gate(x, p, row, nqubits; active_nqubits=active_nqubits)
             _, gap, eigenvalues, _ = compute_transfer_spectrum(gates, row, nqubits)
             energy, X_cost, ZZ_vert, ZZ_horiz = compute_exact_energy_from_gates(
                 m, gates, row, virtual_qubits; unit_cell=unit_cell)
@@ -459,9 +469,11 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
     final_ZZ_vert = ZZ_vert_history[best_idx]
     final_ZZ_horiz = ZZ_horiz_history[best_idx]
     if unit_cell == :two_by_two && model_str == "heisenberg_j1j2"
-        final_gates = build_unitary_gate_2x2(final_params, p, row, nqubits)
+        final_gates = build_unitary_gate_2x2(final_params, p, row, nqubits;
+                                             active_nqubits=active_nqubits)
     else
-        final_gates = build_unitary_gate(final_params, p, row, nqubits)
+        final_gates = build_unitary_gate(final_params, p, row, nqubits;
+                                         active_nqubits=active_nqubits)
     end
 
     @info "Best energy at iteration $best_idx: $final_cost"
@@ -486,6 +498,7 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
         :initial_params => initial_params,
         :maxiter => maxiter,
         :abstol => abstol,
+        :active_nqubits => active_nqubits,
         :best_iteration => best_idx,
         :total_iterations => length(energy_history)
     )
@@ -501,4 +514,3 @@ function optimize_exact(params, J::Float64, g::Float64, p::Int, row::Int, nqubit
     return optimize_exact(params, p, row, nqubits; model="tfim", J=J, g=g,
                           maxiter=maxiter, abstol=abstol)
 end
-

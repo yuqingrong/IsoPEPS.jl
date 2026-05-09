@@ -196,8 +196,8 @@ fig, data = plot_magnetization_vs_g(
 display(fig)
                    
  
- plot_correlation_vs_g(data_dir, [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0];dmrg_file=joinpath(data_dir,"dmrg_bulk_tfim_Ly4_D2_gscan.json"),pepskit_file=referfile, g_c=3.04,
-save_path="project/results/figures/corr_length_vs_g_row=4.pdf")
+ plot_correlation_vs_g(data_dir, [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0];row=3, nqubits=3,dmrg_file=joinpath(data_dir,"dmrg_bulk_tfim_Ly3_D2_gscan.json"),pepskit_file=referfile, g_c=3.04,
+save_path="project/results/figures/corr_length_vs_g_row=3.pdf")
 
 fig, data = plot_correlation_vs_J2("project/results", [0.0, 0.1, 0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0];
 row=4, dmrg_file="project/results/dmrg_j1j2_100x4_D=2.json")

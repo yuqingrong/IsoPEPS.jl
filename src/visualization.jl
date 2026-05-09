@@ -2234,7 +2234,7 @@ Plot correlation length ξ vs g for the TFIM from the transfer-matrix spectrum.
 - `save_path`: Path to save figure (optional)
 """
 function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
-                               J=1.0, row=4, nqubits=3, p=3,
+                               J=1.0, row=3, nqubits=3, p=3,
                                max_separation=20,
                                connected=true,
                                dmrg_file::Union{String,Nothing}=nothing,
@@ -2253,7 +2253,7 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
     skipped_g = Float64[]
 
     for (idx, g) in enumerate(g_values)
-        filename = joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json")
+        filename = joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json")
 
         if !isfile(filename)
             push!(skipped_g, g)

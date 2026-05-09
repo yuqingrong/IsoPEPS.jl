@@ -99,6 +99,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
                     maxiter::Int, seed::Int=123, verbose::Bool=true,
                     output_dir::String, share_params::Bool=true, conv_step::Int=100, samples::Int=10000,
                     n_runs::Int=44, abstol::Float64=0.01,
+                    active_nqubits::Int=nqubits,
                     unit_cell::Symbol=:single,
                     model_params...)
 
@@ -122,6 +123,12 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
         warm_params, warm_val = _find_warm_start_params(output_dir, model, scan_param, val, row, p, nqubits;
                                                          fixed_params...)
         warm_from_nqubits = nothing
+        if nqubits > 3
+            # For enlarged-D scans, start from an embedded lower-D state rather
+            # than an existing full-D result so the new virtual legs begin at 0.
+            warm_params = nothing
+            warm_val = nothing
+        end
         # 2. If no same-nqubits result, try smaller nqubits and embed
         if warm_params === nothing
             for nq in (nqubits-2):-2:3
@@ -149,6 +156,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
             else
                 verbose && println("Starting $(scan_param) = $(val), warm-started from saved $(scan_param) = $(warm_val)")
             end
+
         else
             Random.seed!(seed)
             n_params = unit_cell == :two_by_two ? 4 * 2* nqubits * p : PARAMS_PER_QUBIT_PER_LAYER * nqubits * p
@@ -167,6 +175,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
                                   samples=samples,
                                   n_runs=n_runs,
                                   abstol=abstol,
+                                  active_nqubits=active_nqubits,
                                   unit_cell=unit_cell,
                                   model_kw...)
 
@@ -175,13 +184,15 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
         # Save result to JSON
         fixed_str = join(["$(k)=$(v)" for (k, v) in sort(collect(fixed_params), by=first)], "_")
         name_prefix = isempty(fixed_str) ? "circuit_$(model)" : "circuit_$(model)_$(fixed_str)"
-        filename = joinpath(output_dir, "$(name_prefix)_$(scan_param)=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json")
+        filename = joinpath(output_dir, "$(name_prefix)_$(scan_param)=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_randomtest42.json")
         input_args = Dict{Symbol,Any}(
             :model => model, :scan_param => scan_param, scan_param => val,
             :row => row, :p => p, :nqubits => nqubits,
             :maxiter => maxiter,
+            :active_nqubits => active_nqubits,
             :share_params => share_params, :seed => seed,
-            :warm_started_from => warm_val
+            :warm_started_from => warm_val,
+            :warm_started_from_nqubits => warm_from_nqubits
         )
         merge!(input_args, fixed_params)
         save_result(filename, result, input_args)
@@ -231,17 +242,17 @@ end
 simulation(;
     model="tfim",
     scan_param=:g,
-    scan_values=[0.75, 1.25, 1.75, 2.25, 2.75, 3.25, 3.75, 4.25, 4.75],
+    scan_values=[3.5,3.75,4.0,4.25,4.5],
     J=1.0,
     row=3,
     p=3,
     nqubits=3,
     maxiter=500,
-    seed=123,
+    seed=42,
     verbose=true,
     output_dir=joinpath(@__DIR__, "results"),
     share_params=true,
     conv_step=102,
-    samples=60000,
-    n_runs=1,
+    samples=6000,
+    n_runs=10,
     abstol=1e-5)
