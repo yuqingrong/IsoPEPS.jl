@@ -139,6 +139,103 @@ end
     @test legend.nbanks[] == 1
 end
 
+@testset "plot_correlation_vs_g loads 6w circuit results" begin
+    source_dir = joinpath(@__DIR__, "..", "project", "results")
+    data_dir = mktempdir()
+    cp(
+        joinpath(source_dir, "circuit_tfim_J=1.0_g=2.0_row=3_p=3_nqubits=3_1x1_6w.json"),
+        joinpath(data_dir, "circuit_tfim_J=1.0_g=2.0_row=3_p=3_nqubits=3_1x1_6w.json"),
+    )
+
+    fig, data = plot_correlation_vs_g(data_dir, [2.0]; max_separation=1)
+
+    @test fig isa Figure
+    @test haskey(data, 2.0)
+end
+
+@testset "plot_correlation_vs_g uses transfer spectrum only" begin
+    data_dir = mktempdir()
+    source_file = joinpath(@__DIR__, "..", "project", "results",
+        "circuit_tfim_J=1.0_g=2.0_row=3_p=3_nqubits=3_1x1_6w.json")
+    target_file = joinpath(data_dir,
+        "circuit_tfim_J=1.0_g=2.0_row=3_p=3_nqubits=3_1x1_6w.json")
+    cp(source_file, target_file)
+
+    fig, data = plot_correlation_vs_g(data_dir, [2.0];
+        spectrum_krylovdim=8,
+        spectrum_tol=1e-6,
+        spectrum_maxiter=100,
+        spectrum_eager=false)
+
+    @test fig isa Figure
+    @test haskey(data, 2.0)
+    @test isempty(data[2.0].separations)
+    @test isempty(data[2.0].correlations)
+    @test data[2.0].correlation_length_fitted === nothing
+    @test isfinite(data[2.0].correlation_length)
+end
+
+@testset "plot_energy_error_vs_g supports multiple circuit and reference series" begin
+    data_dir = mktempdir()
+    scan_values = [1.0, 2.0]
+
+    function write_circuit(path, energy; nqubits=3)
+        params = zeros(2 * nqubits * 3)
+        result = CircuitOptimizationResult(
+            [energy], Matrix{ComplexF64}[], params, energy,
+            Float64[], Float64[], Float64[], true
+        )
+        input_args = Dict{Symbol,Any}(
+            :model => "tfim", :J => 1.0, :row => 3, :p => 3,
+            :nqubits => nqubits, :share_params => true, :scan_param => "g"
+        )
+        save_result(path, result, input_args)
+    end
+
+    for (g, energy) in zip(scan_values, [-2.0, -3.0])
+        write_circuit(joinpath(data_dir, "circuit_tfim_J=1.0_g=$(g)_row=3_p=3_nqubits=3_1x1.json"), energy)
+    end
+
+    for (g, energy) in zip(scan_values, [-1.9, -2.8])
+        write_circuit(joinpath(data_dir, "circuit_tfim_J=1.0_g=$(g)_row=3_p=3_nqubits=5_1x1_6w.json"), energy; nqubits=5)
+    end
+
+    dmrg_d2 = joinpath(data_dir, "dmrg_bulk_tfim_Ly3_D2_gscan.json")
+    dmrg_d4 = joinpath(data_dir, "dmrg_bulk_tfim_Ly3_D4_gscan.json")
+    save_results(dmrg_d2; scan_values=scan_values, e_bulk_values=[-2.1, -3.1])
+    save_results(dmrg_d4; scan_values=scan_values, e_bulk_values=[-2.05, -3.05])
+
+    fig, data = plot_energy_error_vs_g(data_dir, scan_values;
+        energy_source=:saved,
+        dmrg_file=[
+            (file=dmrg_d2, label="DMRG D=2"),
+            (file=dmrg_d4, label="DMRG D=4"),
+        ],
+        circuit_series=[
+            (label="IsoPEPS χ=5", nqubits=5, suffixes=["_1x1_6w"], energy_source=:saved),
+        ])
+
+    @test fig isa Figure
+    @test haskey(data.series, "IsoPEPS")
+    @test haskey(data.series, "IsoPEPS χ=5")
+    @test haskey(data.series, "DMRG D=2")
+    @test haskey(data.series, "DMRG D=4")
+    @test data.series["IsoPEPS χ=5"].energies == [-1.9, -2.8]
+    @test data.errors_by_reference["IsoPEPS χ=5 − DMRG D=4"].errors ≈ [0.15, 0.25]
+    @test data.energies_dmrg == [-2.1, -3.1]
+end
+
+@testset "plot_energy_error_vs_g energy mode selection" begin
+    @test IsoPEPS._circuit_energy_mode("tfim", 3, :computed) == :exact
+    @test IsoPEPS._circuit_energy_mode("tfim", 3, :computed; row=3) == :exact
+    @test IsoPEPS._circuit_energy_mode("tfim", 5, :computed; row=3) == :sampled
+    @test IsoPEPS._circuit_energy_mode("tfim", 5, :computed; row=2) == :exact
+    @test IsoPEPS._circuit_energy_mode("tfim", 7, :computed; row=3) == :sampled
+    @test IsoPEPS._circuit_energy_mode("tfim", 5, :resampled) == :sampled
+    @test IsoPEPS._circuit_energy_mode("heisenberg_j1j2", 5, :computed) == :sampled
+    @test IsoPEPS._circuit_energy_mode("tfim", 5, :saved) == :saved
+end
+
 @testset "plot_M2_comparison legend stays inside blank region" begin
     repo = joinpath(@__DIR__, "..")
     fig = plot_M2_comparison(exact_file=joinpath(repo, "project", "results", "M2_exact.json"),

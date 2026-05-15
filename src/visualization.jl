@@ -1665,14 +1665,337 @@ end
 # Multi-g comparison plots
 # ============================================================================
 
+function _dict_from_series_spec(spec)
+    if spec isa AbstractString
+        return Dict{Symbol,Any}(:file => String(spec))
+    elseif spec isa NamedTuple
+        return Dict{Symbol,Any}(Symbol(k) => v for (k, v) in pairs(spec))
+    elseif spec isa AbstractDict
+        return Dict{Symbol,Any}(Symbol(k) => v for (k, v) in pairs(spec))
+    else
+        error("Series specs must be strings, NamedTuples, or Dicts; got $(typeof(spec))")
+    end
+end
+
+function _series_spec_list(specs)
+    if isnothing(specs)
+        return Dict{Symbol,Any}[]
+    elseif specs isa AbstractString || specs isa NamedTuple || specs isa AbstractDict
+        return [_dict_from_series_spec(specs)]
+    else
+        return [_dict_from_series_spec(spec) for spec in specs]
+    end
+end
+
+function _json_get_any(data, keys; default=nothing)
+    for key in keys
+        if haskey(data, key)
+            return data[key]
+        end
+        skey = string(key)
+        if haskey(data, skey)
+            return data[skey]
+        end
+        symkey = Symbol(key)
+        if haskey(data, symkey)
+            return data[symkey]
+        end
+    end
+    return default
+end
+
+function _auto_reference_label(file::String, fallback::String)
+    base = basename(file)
+    lower = lowercase(base)
+    d_match = match(r"D=?(\d+)", base)
+    ly_match = match(r"Ly(\d+)", base)
+
+    if occursin("dmrg", lower)
+        label = "DMRG"
+        if !isnothing(ly_match)
+            label *= " Ly=$(ly_match.captures[1])"
+        end
+        if !isnothing(d_match)
+            label *= " D=$(d_match.captures[1])"
+        end
+        return label
+    elseif occursin("pepskit", lower) || occursin("ipeps", lower)
+        label = "iPEPS"
+        if !isnothing(d_match)
+            label *= " D=$(d_match.captures[1])"
+        end
+        return label
+    end
+
+    return fallback
+end
+
+function _unique_label(label::String, used::Set{String})
+    if !(label in used)
+        push!(used, label)
+        return label
+    end
+
+    i = 2
+    candidate = "$label ($i)"
+    while candidate in used
+        i += 1
+        candidate = "$label ($i)"
+    end
+    push!(used, candidate)
+    return candidate
+end
+
+function _load_scan_energy_series(file::String; label::Union{String,Nothing}=nothing,
+                                  fallback_label::String="Reference",
+                                  kind::Symbol=:reference)
+    if !isfile(file)
+        @warn "Reference file not found, skipping" file
+        return nothing
+    end
+
+    data = open(file, "r") do io
+        JSON3.read(io, Dict)
+    end
+
+    scan_vals = _json_get_any(data, ("scan_values", "J2_values", "g_values"))
+    energies = _json_get_any(data, ("energies_per_site", "e_bulk_values", "energies", "Lx2_energies_per_site"))
+    if isnothing(scan_vals) || isnothing(energies)
+        @warn "Reference JSON does not contain expected scan/energy arrays; skipping." file
+        return nothing
+    end
+
+    series_label = isnothing(label) ? _auto_reference_label(file, fallback_label) : label
+    return (
+        label = series_label,
+        scan_values = Float64.(collect(scan_vals)),
+        energies = Float64.(collect(energies)),
+        files = [file],
+        kind = kind,
+    )
+end
+
+function _format_scan_value(val)
+    return string(val)
+end
+
+function _expand_file_template(template::String, data_dir::String, val)
+    path = replace(template,
+                   "{val}" => _format_scan_value(val),
+                   "{g}" => _format_scan_value(val),
+                   "{J2}" => _format_scan_value(val))
+    return isabspath(path) ? path : joinpath(data_dir, path)
+end
+
+function _find_circuit_result_file(data_dir::String, val, spec::Dict{Symbol,Any})
+    if haskey(spec, :file_template)
+        path = _expand_file_template(String(spec[:file_template]), data_dir, val)
+        return isfile(path) ? path : ""
+    end
+
+    model = String(get(spec, :model, "tfim"))
+    J = get(spec, :J, 1.0)
+    J1 = Float64(get(spec, :J1, 1.0))
+    row = Int(get(spec, :row, 3))
+    p = Int(get(spec, :p, 3))
+    nqubits = Int(get(spec, :nqubits, 3))
+
+    if model == "heisenberg_j1j2"
+        suffixes = collect(get(spec, :suffixes, ["_2x2", "_1x1", ""]))
+        candidates = String[]
+        for suffix in suffixes
+            push!(candidates, joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)$(suffix).json"))
+        end
+        push!(candidates, joinpath(data_dir, "circuit_heisenberg_j1j2_J=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"))
+
+        for candidate in candidates
+            if isfile(candidate)
+                return candidate
+            end
+        end
+        return ""
+    else
+        suffixes = collect(get(spec, :suffixes, ["_1x1", "_1x1_100*1000", "_1x1_6w", ""]))
+        candidates = String[]
+        for suffix in suffixes
+            push!(candidates, joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)$(suffix).json"))
+        end
+        push!(candidates, joinpath(data_dir, "circuit_J=$(J)_g=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"))
+        push!(candidates, joinpath(data_dir, "circuit_J=$(J)_g=$(val)_row=$(row)_nqubits=$(nqubits).json"))
+
+        for candidate in candidates
+            if isfile(candidate)
+                return candidate
+            end
+        end
+        return ""
+    end
+end
+
+function _circuit_energy_mode(model::String, nqubits::Int, energy_source::Symbol; row::Int=3)
+    if energy_source == :saved
+        return :saved
+    elseif energy_source in (:resampled, :sampled)
+        return :sampled
+    elseif energy_source != :computed
+        error("Unsupported circuit energy_source=$energy_source. Use :computed, :resampled, or :saved.")
+    elseif model == "heisenberg_j1j2"
+        return :sampled
+    end
+    virtual_qubits = (nqubits - 1) ÷ 2
+    bond_dim = 2^virtual_qubits
+    ms = bond_dim^(2 * (row + 1))
+    ms <= 20_000 && return :exact
+    return :sampled
+end
+
+function _resampled_tfim_energy(filename::String, val, J, row::Int;
+                                conv_step::Int, samples::Int, repeats::Int=1,
+                                result::Union{CircuitOptimizationResult,Nothing}=nothing)
+    energies = Float64[]
+    for _ in 1:repeats
+        resample_result = resample_circuit(filename; conv_step=conv_step, samples=samples)
+        if isnothing(resample_result)
+            continue
+        end
+        _rho, Z_samples, X_samples, _params, _gates = resample_result
+        Z_samples = Z_samples[conv_step+1:end]
+        X_samples = X_samples[conv_step+1:end]
+        push!(energies, compute_tfim_energy(X_samples, Z_samples, Float64(val), Float64(J), row))
+    end
+
+    return isempty(energies) ? nothing : median(energies)
+end
+
+function _compute_circuit_energy_from_result(filename::String, result, input_args,
+                                             val, spec::Dict{Symbol,Any},
+                                             conv_step::Int, samples::Int)
+    model = String(get(spec, :model, get(input_args, :model, "tfim")))
+    nqubits = Int(get(spec, :nqubits, get(input_args, :nqubits, 3)))
+    row = Int(get(spec, :row, get(input_args, :row, 3)))
+    source = _circuit_energy_mode(model, nqubits, Symbol(get(spec, :energy_source, :computed)); row=row)
+
+    if source == :saved
+        return result.final_cost
+    end
+
+    J = get(spec, :J, get(input_args, :J, 1.0))
+    J1 = Float64(get(spec, :J1, get(input_args, :J1, 1.0)))
+    p = Int(get(spec, :p, get(input_args, :p, 3)))
+    share_params = get(input_args, :share_params, get(spec, :share_params, true))
+    virtual_qubits = (nqubits - 1) ÷ 2
+
+    if model == "heisenberg_j1j2"
+        resample_result = resample_circuit(filename; conv_step=conv_step, samples=samples, measure_y=true)
+        if isnothing(resample_result)
+            return nothing
+        end
+        _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
+        Z_samples = Z_samples[conv_step+1:end]
+        X_samples = X_samples[conv_step+1:end]
+        Y_samples = Y_samples[conv_step+1:end]
+        return compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, Float64(val), row)
+    elseif source == :sampled
+        resample_repeats = Int(get(spec, :resample_repeats, 1))
+        return _resampled_tfim_energy(filename, val, J, row;
+                                      conv_step=conv_step, samples=samples,
+                                      repeats=resample_repeats, result=result)
+    else
+        gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
+        X_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, :X; position=i)) for i in 1:row)
+
+        if row > 1
+            ZZ_vert_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, Dict(i => :Z, i % row + 1 => :Z))) for i in 1:row)
+        else
+            ZZ_vert_exact = 0.0
+        end
+
+        ZZ_horiz_vals = Float64[]
+        for pos in 1:row
+            correlations = correlation_function(gates, row, virtual_qubits, :Z, 1; position=pos)
+            if haskey(correlations, 1)
+                push!(ZZ_horiz_vals, real(correlations[1]))
+            end
+        end
+        ZZ_horiz_exact = isempty(ZZ_horiz_vals) ? 0.0 : mean(ZZ_horiz_vals)
+
+        g = Float64(val)
+        return -g * X_exact - Float64(J) * (row == 1 ? ZZ_horiz_exact : ZZ_vert_exact + ZZ_horiz_exact)
+    end
+end
+
+function _load_circuit_energy_series(data_dir::String, scan_values::Vector{Float64},
+                                     spec::Dict{Symbol,Any}, conv_step::Int, samples::Int)
+    label = String(get(spec, :label, "IsoPEPS"))
+    found_vals = Float64[]
+    energies = Float64[]
+    files = String[]
+
+    for val in scan_values
+        filename = _find_circuit_result_file(data_dir, val, spec)
+        if isempty(filename)
+            @warn "No circuit file found, skipping" label val
+            continue
+        end
+
+        result, input_args = load_result(filename)
+        energy = _compute_circuit_energy_from_result(filename, result, input_args, val, spec, conv_step, samples)
+        if isnothing(energy)
+            @warn "Energy computation failed, skipping" label val filename
+            continue
+        end
+
+        push!(found_vals, Float64(val))
+        push!(energies, Float64(energy))
+        push!(files, filename)
+    end
+
+    if isempty(found_vals)
+        return nothing
+    end
+
+    return (
+        label = label,
+        scan_values = found_vals,
+        energies = energies,
+        files = files,
+        kind = :circuit,
+    )
+end
+
+function _lookup_series_energy(series, val; atol=1e-8)
+    idx = findfirst(x -> isapprox(x, val; atol=atol, rtol=0), series.scan_values)
+    return isnothing(idx) ? NaN : series.energies[idx]
+end
+
+function _series_errors(circuit_series, reference_series)
+    errors = Float64[]
+    vals = Float64[]
+    for (val, energy) in zip(circuit_series.scan_values, circuit_series.energies)
+        ref_energy = _lookup_series_energy(reference_series, val)
+        if isnan(ref_energy)
+            push!(errors, NaN)
+        else
+            push!(errors, abs(energy - ref_energy))
+        end
+        push!(vals, val)
+    end
+    return (scan_values=vals, errors=errors)
+end
+
 """
     plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
                            model="tfim", J=1.0, J1=1.0, row=3, nqubits=5, p=3,
-                           conv_step=100, samples=1000,
-                           pepskit_file=nothing, dmrg_file=nothing, save_path=nothing)
+                           conv_step=100, samples=1000, resample_repeats=1,
+                           pepskit_file=nothing, dmrg_file=nothing,
+                           circuit_series=[], energy_source=:computed,
+                           save_path=nothing)
 
 Plot energy error for different scan parameter values. Supports TFIM (scan over g)
-and Heisenberg J1-J2 (scan over J2).
+and Heisenberg J1-J2 (scan over J2). The default call plots one IsoPEPS
+series, with optional PEPSKit and DMRG references. Additional circuit or
+reference series can be overlaid with `circuit_series`, vector-valued
+`dmrg_file`/`pepskit_file`, or `reference_files`.
 
 # Arguments
 - `data_dir`: Directory containing result JSON files
@@ -1685,13 +2008,16 @@ and Heisenberg J1-J2 (scan over J2).
 - `p`: Circuit depth (default: 3)
 - `conv_step`: Convergence steps for resampling (default: 100)
 - `samples`: Number of samples for resampling (default: 1000)
-- `pepskit_file`: Path to PEPSKit reference results JSON (optional)
-- `dmrg_file`: Path to DMRG results JSON (optional)
+- `resample_repeats`: Number of independent resampling runs to median for TFIM sampled energies (default: 1)
+- `pepskit_file`: Path, vector of paths, or specs `(file=..., label=...)` for PEPSKit references
+- `dmrg_file`: Path, vector of paths, or specs `(file=..., label=...)` for DMRG references
+- `circuit_series`: Additional circuit specs, e.g. `(label="IsoPEPS χ=5", nqubits=5, suffixes=["_1x1_6w"])`
+- `energy_source`: `:computed` recomputes energies; TFIM uses exact contraction up to `nqubits=3` and resampling from optimized parameters for `nqubits>=5`. `:resampled` always resamples from optimized parameters. `:saved` reads JSON `energy`
 - `save_path`: Path to save figure (optional)
 
 # Returns
 - `fig`: Makie Figure object
-- `data`: NamedTuple with (scan_values, energies_exact, energies_ref, energies_dmrg, errors)
+- `data`: NamedTuple with legacy fields and richer `series`/`errors_by_reference` dictionaries
 
 # Example
 ```julia
@@ -1708,9 +2034,15 @@ fig, data = plot_energy_error_vs_g("project/results", [0.0, 0.1, 0.2, 0.5];
 function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
                                 model::String="tfim",
                                 J=1.0, J1::Float64=1.0, row=3, nqubits=3, p=3,
-                                conv_step::Int=100, samples::Int=1000000,
-                                pepskit_file::Union{String,Nothing}=nothing,
-                                dmrg_file::Union{String,Nothing}=nothing,
+                                conv_step::Int=102, samples::Int=300000,
+                                resample_repeats::Int=1,
+                                pepskit_file=nothing,
+                                dmrg_file=nothing,
+                                reference_files=nothing,
+                                circuit_series=[],
+                                include_default_circuit::Bool=true,
+                                energy_source::Symbol=:computed,
+                                error_reference=:all,
                                 figsize=nothing,
                                 save_path::Union{String,Nothing}=nothing)
 
@@ -1722,181 +2054,130 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
     println("Energy Error vs $scan_label Analysis (model=$model)")
     println("="^70)
 
-    # Load PEPSKit reference energies if provided
-    ref_energies = Dict{Float64, Float64}()
-    if !isnothing(pepskit_file) && isfile(pepskit_file)
-        println("Loading PEPSKit reference from: $(basename(pepskit_file))")
-        ref_data = open(pepskit_file, "r") do io
-            JSON3.read(io, Dict)
-        end
+    used_labels = Set{String}()
 
-        # Extract reference energies for each g (parallel arrays format)
-        g_key   = haskey(ref_data, "g_values") ? "g_values" : (haskey(ref_data, :g_values) ? :g_values : nothing)
-        e_key   = haskey(ref_data, "energies")  ? "energies"  : (haskey(ref_data, :energies)  ? :energies  : nothing)
-        if !isnothing(g_key) && !isnothing(e_key)
-            g_refs = Float64.(ref_data[g_key])
-            e_refs = Float64.(ref_data[e_key])
-            for (g_ref, energy_ref) in zip(g_refs, e_refs)
-                ref_energies[g_ref] = energy_ref
-            end
-        else
-            @warn "PEPSKit JSON does not contain expected 'g_values'/'energies' arrays; skipping."
-        end
-        println("Loaded $(length(ref_energies)) reference energies")
-    else
-        println("No PEPSKit reference file provided - will only show exact energies")
+    circuit_specs = Dict{Symbol,Any}[]
+    if include_default_circuit
+        push!(circuit_specs, Dict{Symbol,Any}(
+            :label => "IsoPEPS",
+            :model => model,
+            :J => J,
+            :J1 => J1,
+            :row => row,
+            :p => p,
+            :nqubits => nqubits,
+            :energy_source => energy_source,
+            :resample_repeats => resample_repeats,
+        ))
+    end
+    append!(circuit_specs, _series_spec_list(circuit_series))
+    for spec in circuit_specs
+        spec[:model] = get(spec, :model, model)
+        spec[:J] = get(spec, :J, J)
+        spec[:J1] = get(spec, :J1, J1)
+        spec[:row] = get(spec, :row, row)
+        spec[:p] = get(spec, :p, p)
+        spec[:nqubits] = get(spec, :nqubits, nqubits)
+        spec[:energy_source] = get(spec, :energy_source, energy_source)
+        spec[:resample_repeats] = get(spec, :resample_repeats, resample_repeats)
+        spec[:label] = _unique_label(String(get(spec, :label, "IsoPEPS")), used_labels)
     end
 
-    # Load DMRG energies if provided
-    dmrg_energies = Dict{Float64, Float64}()
-    if !isnothing(dmrg_file) && isfile(dmrg_file)
-        println("Loading DMRG results from: $(basename(dmrg_file))")
-        dmrg_data = open(dmrg_file, "r") do io
-            JSON3.read(io, Dict)
-        end
-
-        # Extract DMRG energies for each g
-        g_key = haskey(dmrg_data, "scan_values") ? "scan_values" :
-                haskey(dmrg_data, "J2_values")   ? "J2_values"   :
-                haskey(dmrg_data, "g_values")     ? "g_values"    : nothing
-        e_key = haskey(dmrg_data, "energies_per_site") ? "energies_per_site" :
-                haskey(dmrg_data, "e_bulk_values")      ? "e_bulk_values"     :
-                haskey(dmrg_data, "energies")           ? "energies"          : nothing
-        if !isnothing(g_key) && !isnothing(e_key)
-            g_dmrg = Float64.(dmrg_data[g_key])
-            e_dmrg = Float64.(dmrg_data[e_key])
-            for (g_val, energy_val) in zip(g_dmrg, e_dmrg)
-                dmrg_energies[g_val] = energy_val
-            end
-        else
-            @warn "DMRG JSON does not contain expected scan/energy arrays; skipping."
-        end
-        println("Loaded $(length(dmrg_energies)) DMRG energies")
-    else
-        println("No DMRG file provided")
-    end
-
-    # Load circuit optimization results and compute exact energies
-    energies_exact = Float64[]
-    energies_ref = Float64[]
-    energies_dmrg = Float64[]
-    errors = Float64[]
-    g_vals_found = Float64[]
-
-    for val in scan_values
-        # Build filename based on model
-        if is_heisenberg
-            candidates = [
-                joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json"),
-                joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
-                joinpath(data_dir, "circuit_heisenberg_j1j2_J=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
-            ]
-            filename = ""
-            for c in candidates
-                if isfile(c)
-                    filename = c
-                    break
-                end
-            end
-            if isempty(filename)
-                @warn "No file found for J2=$val, tried $(length(candidates)) patterns, skipping"
-                continue
-            end
-        else
-            candidates = [
-                joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json"),
-                joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_100*1000.json"),
-                joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
-            ]
-            filename = ""
-            for c in candidates
-                if isfile(c)
-                    filename = c
-                    break
-                end
-            end
-            if isempty(filename)
-                @warn "No file found for g=$val, tried $(length(candidates)) patterns, skipping"
-                continue
-            end
-        end
-
-        # Load result
-        result, input_args = load_result(filename)
-
-        # Compute exact energy from optimized parameters
-        virtual_qubits = (nqubits - 1) ÷ 2
-        share_params = get(input_args, :share_params, true)
-
-        if is_heisenberg
-            # Use resample-based energy for Heisenberg
-            resample_result = resample_circuit(filename; conv_step=conv_step, samples=samples, measure_y=true)
-            if isnothing(resample_result)
-                @warn "Resampling failed for $scan_label=$val, skipping"
-                continue
-            end
-            _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
-            Z_samples = Z_samples[conv_step+1:end] 
-            X_samples = X_samples[conv_step+1:end]
-            Y_samples = Y_samples[conv_step+1:end]
-            energy_exact = compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, val, row)
-        else
-            g = val
-            gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
-
-            X_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, :X; position=i)) for i in 1:row)
-
-            if row > 1
-                ZZ_vert_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, Dict(i => :Z, i % row + 1 => :Z))) for i in 1:row)
-            else
-                ZZ_vert_exact = 0.0
-            end
-
-            ZZ_horiz_vals = Float64[]
-            for pos in 1:row
-                correlations = correlation_function(gates, row, virtual_qubits, :Z, 1; position=pos)
-                if haskey(correlations, 1)
-                    push!(ZZ_horiz_vals, real(correlations[1]))
-                end
-            end
-            ZZ_horiz_exact = isempty(ZZ_horiz_vals) ? 0.0 : mean(ZZ_horiz_vals)
-
-            energy_exact = -g*X_exact - J*(row == 1 ? ZZ_horiz_exact : ZZ_vert_exact + ZZ_horiz_exact)
-        end
-
-        push!(g_vals_found, val)
-        push!(energies_exact, energy_exact)
-
-        # Get reference energy and compute error
-        if haskey(ref_energies, val)
-            energy_ref = ref_energies[val]
-            error = abs(energy_exact - energy_ref)
-            push!(energies_ref, energy_ref)
-            push!(errors, error)
-            println("$scan_label=$val: E_exact=$(round(energy_exact, digits=6)), E_ref=$(round(energy_ref, digits=6)), Error=$(round(error, digits=6))")
-        else
-            push!(energies_ref, NaN)
-            push!(errors, NaN)
-            println("$scan_label=$val: E_exact=$(round(energy_exact, digits=6)), No reference")
-        end
-
-        # Get DMRG energy
-        if haskey(dmrg_energies, val)
-            push!(energies_dmrg, dmrg_energies[val])
-            println("       E_dmrg=$(round(dmrg_energies[val], digits=6))")
-        else
-            push!(energies_dmrg, NaN)
+    circuits = []
+    for spec in circuit_specs
+        println("Loading circuit series: $(spec[:label])")
+        series = _load_circuit_energy_series(data_dir, scan_values, spec, conv_step, samples)
+        if !isnothing(series)
+            push!(circuits, series)
+            println("  loaded $(length(series.scan_values)) points")
         end
     end
 
-    if isempty(g_vals_found)
+    references = []
+    for spec in _series_spec_list(pepskit_file)
+        file = String(spec[:file])
+        label = haskey(spec, :label) ? String(spec[:label]) : nothing
+        series = _load_scan_energy_series(file; label=label, fallback_label="iPEPS", kind=:reference)
+        if !isnothing(series)
+            label = _unique_label(series.label, used_labels)
+            push!(references, (label=label, scan_values=series.scan_values,
+                              energies=series.energies, files=series.files,
+                              kind=series.kind))
+            println("Loaded reference $label with $(length(series.scan_values)) points")
+        end
+    end
+
+    for spec in _series_spec_list(dmrg_file)
+        file = String(spec[:file])
+        label = haskey(spec, :label) ? String(spec[:label]) : nothing
+        series = _load_scan_energy_series(file; label=label, fallback_label="DMRG", kind=:reference)
+        if !isnothing(series)
+            label = _unique_label(series.label, used_labels)
+            push!(references, (label=label, scan_values=series.scan_values,
+                              energies=series.energies, files=series.files,
+                              kind=series.kind))
+            println("Loaded reference $label with $(length(series.scan_values)) points")
+        end
+    end
+
+    for spec in _series_spec_list(reference_files)
+        file = String(spec[:file])
+        label = haskey(spec, :label) ? String(spec[:label]) : nothing
+        fallback = String(get(spec, :fallback_label, "Reference"))
+        series = _load_scan_energy_series(file; label=label, fallback_label=fallback, kind=:reference)
+        if !isnothing(series)
+            label = _unique_label(series.label, used_labels)
+            push!(references, (label=label, scan_values=series.scan_values,
+                              energies=series.energies, files=series.files,
+                              kind=series.kind))
+            println("Loaded reference $label with $(length(series.scan_values)) points")
+        end
+    end
+
+    if isempty(circuits)
         error("No valid results found for any $scan_label value")
+    end
+
+    primary = first(circuits)
+    primary_ref = isempty(references) ? nothing : first(references)
+    primary_dmrg = findfirst(s -> startswith(s.label, "DMRG"), references)
+    primary_dmrg_series = isnothing(primary_dmrg) ? nothing : references[primary_dmrg]
+
+    g_vals_found = primary.scan_values
+    energies_exact = primary.energies
+    energies_ref = isnothing(primary_ref) ? fill(NaN, length(g_vals_found)) :
+                   [_lookup_series_energy(primary_ref, val) for val in g_vals_found]
+    errors = isnothing(primary_ref) ? fill(NaN, length(g_vals_found)) :
+             [isnan(ref) ? NaN : abs(energy - ref) for (energy, ref) in zip(energies_exact, energies_ref)]
+    energies_dmrg = isnothing(primary_dmrg_series) ? fill(NaN, length(g_vals_found)) :
+                    [_lookup_series_energy(primary_dmrg_series, val) for val in g_vals_found]
+
+    reference_subset = if error_reference == :all
+        references
+    elseif error_reference == :first
+        isempty(references) ? [] : [first(references)]
+    else
+        wanted = String(error_reference)
+        filter(s -> s.label == wanted, references)
+    end
+
+    errors_by_reference = Dict{String,Any}()
+    for circuit in circuits
+        for reference in reference_subset
+            err = _series_errors(circuit, reference)
+            if !all(isnan.(err.errors))
+                errors_by_reference["$(circuit.label) − $(reference.label)"] = err
+            end
+        end
     end
 
     xlabel_str = is_heisenberg ? "J₂ / J₁" : "g"
 
     _w, _h = PAPER_FIGSIZE                       # 246 × 170 pt
     _figsize = isnothing(figsize) ? (_w, 2_h - 20) : figsize   # ~(246, 320) for 2 panels
+
+    colors = [:steelblue, :darkorange, :purple, :teal, :brown, :gray40, :dodgerblue4, :tomato3]
+    markers = [:circle, :rect, :diamond, :utriangle, :dtriangle, :cross, :xcross, :star5]
 
     fig = with_theme(paper_theme()) do
         fig = Figure(size=_figsize)
@@ -1908,27 +2189,27 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
                    xgridvisible = true,
                    ygridvisible = true)
 
-        scatterlines!(ax1, g_vals_found, energies_exact;
-                      label="IsoPEPS", color=:steelblue,
-                      marker=:circle, linestyle=:solid)
-
-        if !all(isnan.(energies_ref))
-            mask = .!isnan.(energies_ref)
-            scatterlines!(ax1, g_vals_found[mask], energies_ref[mask];
-                          label="iPEPS", color=:firebrick,
-                          marker=:diamond, linestyle=:dash)
+        for (idx, series) in enumerate(circuits)
+            scatterlines!(ax1, series.scan_values, series.energies;
+                          label=series.label,
+                          color=colors[mod1(idx, length(colors))],
+                          marker=markers[mod1(idx, length(markers))],
+                          linestyle=:solid)
         end
 
-        if !all(isnan.(energies_dmrg))
-            mask = .!isnan.(energies_dmrg)
-            scatterlines!(ax1, g_vals_found[mask], energies_dmrg[mask];
-                          label="DMRG", color=:seagreen,
-                          marker=:utriangle, linestyle=:dot)
+        for (idx, series) in enumerate(references)
+            ref_color = colors[mod1(idx + length(circuits), length(colors))]
+            ref_style = startswith(series.label, "DMRG") ? :dot : :dash
+            scatterlines!(ax1, series.scan_values, series.energies;
+                          label=series.label,
+                          color=ref_color,
+                          marker=markers[mod1(idx + length(circuits), length(markers))],
+                          linestyle=ref_style)
         end
 
         text!(ax1, 0.03, 0.97; text="(a)", space=:relative,
               align=(:left, :top), fontsize=PAPER_TITLESIZE, font=:bold)
-        add_paper_legend!(ax1; position=(:left, 0.82))
+        add_paper_legend!(ax1; position=:lb)
 
         # ── Panel (b): energy error (log scale) ─────────────────────────────
         ax2 = Axis(fig[2, 1];
@@ -1940,25 +2221,18 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
 
         has_error = false
 
-        if !all(isnan.(errors))
-            mask = .!isnan.(errors)
-            scatterlines!(ax2, g_vals_found[mask], errors[mask];
-                          label="IsoPEPS − iPEPS", color=:firebrick,
-                          marker=:diamond, linestyle=:dash)
-            has_error = true
-        end
-
-        if !all(isnan.(energies_dmrg))
-            mask = .!isnan.(energies_dmrg)
-            err_dmrg = abs.(energies_exact[mask] .- energies_dmrg[mask])
-            scatterlines!(ax2, g_vals_found[mask], err_dmrg;
-                          label="IsoPEPS − DMRG", color=:seagreen,
-                          marker=:utriangle, linestyle=:dot)
+        for (idx, (label, err)) in enumerate(sort(collect(errors_by_reference); by=first))
+            mask = .!isnan.(err.errors)
+            scatterlines!(ax2, err.scan_values[mask], err.errors[mask];
+                          label=label,
+                          color=colors[mod1(idx, length(colors))],
+                          marker=markers[mod1(idx, length(markers))],
+                          linestyle=:solid)
             has_error = true
         end
 
         if has_error
-            add_paper_legend!(ax2; position=(:left, 0.82))
+            add_paper_legend!(ax2; position=:rb)
         else
             text!(ax2, 0.5, 0.5; text="No reference data",
                   align=(:center, :center), space=:relative,
@@ -1979,12 +2253,19 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
         fig
     end
 
+    series_data = Dict{String,Any}()
+    for series in vcat(circuits, references)
+        series_data[series.label] = series
+    end
+
     data = (
         scan_values = g_vals_found,
         energies_exact = energies_exact,
         energies_ref = energies_ref,
         energies_dmrg = energies_dmrg,
-        errors = errors
+        errors = errors,
+        series = series_data,
+        errors_by_reference = errors_by_reference,
     )
 
     return fig, data
@@ -2227,8 +2508,9 @@ Plot correlation length ξ vs g for the TFIM from the transfer-matrix spectrum.
 - `g_values`: Vector of g values to plot
 - `J`: Coupling strength (default 1.0)
 - `row`, `p`, `nqubits`: Circuit parameters
-- `max_separation`: Maximum separation (default 20)
-- `connected`: Use connected correlator (default true)
+- `max_separation`: Accepted for API compatibility; fitted correlations are no longer computed
+- `connected`: Accepted for API compatibility; fitted correlations are no longer computed
+- `spectrum_krylovdim`, `spectrum_tol`, `spectrum_maxiter`, `spectrum_eager`: Krylov controls for `compute_transfer_spectrum`
 - `dmrg_file`, `pepskit_file`: Optional reference data files
 - `g_c`: Optional critical field value for annotation
 - `save_path`: Path to save figure (optional)
@@ -2237,25 +2519,39 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
                                J=1.0, row=3, nqubits=3, p=3,
                                max_separation=20,
                                connected=true,
+                               spectrum_krylovdim=60,
+                               spectrum_tol=1e-8,
+                               spectrum_maxiter=1000,
+                               spectrum_eager=false,
                                dmrg_file::Union{String,Nothing}=nothing,
                                pepskit_file::Union{String,Nothing}=nothing,
                                g_c::Union{Float64,Nothing}=nothing,
                                save_path::Union{String,Nothing}=nothing)
 
     println("="^70)
-    println("Correlation Function vs g Analysis")
+    println("Correlation Length vs g Analysis")
     println("="^70)
-    println("Connected: $connected")
+    println("Source: transfer-matrix spectrum")
 
-    # Load results and compute correlations
+    # Load results and compute transfer-spectrum correlation lengths.
     correlation_data = Dict{Float64, NamedTuple}()
     colors = [:blue, :green, :red, :orange, :purple, :brown, :pink, :gray]
     skipped_g = Float64[]
 
     for (idx, g) in enumerate(g_values)
-        filename = joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json")
+        candidates = [
+            joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_randomtest123.json"),
+            joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json"),
+        ]
+        filename = ""
+        for candidate in candidates
+            if isfile(candidate)
+                filename = candidate
+                break
+            end
+        end
 
-        if !isfile(filename)
+        if isempty(filename)
             push!(skipped_g, g)
             continue
         end
@@ -2266,36 +2562,27 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
         result, input_args = load_result(filename)
 
         # Reconstruct gates
-        virtual_qubits = (nqubits - 1) ÷ 2
         share_params = get(input_args, :share_params, true)
         gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
 
-        # Compute correlation function
-        separations = 1:max_separation
-        # Compute all separations in a single call (avoids rebuilding fixed points 20×)
-        corr_dict = correlation_function(gates, row, virtual_qubits, :Z, separations; connected=connected)
-        corr_vals = [real(corr_dict[r]) for r in separations]
-
         # Compute correlation length from transfer matrix
-        _, gap, _, _ = compute_transfer_spectrum(gates, row, nqubits)
+        _, gap, _, _ = compute_transfer_spectrum(
+            gates, row, nqubits;
+            matrix_free=:always,
+            krylovdim=spectrum_krylovdim,
+            tol=spectrum_tol,
+            maxiter=spectrum_maxiter,
+            eager=spectrum_eager,
+        )
         ξ = 1.0 / gap
 
-        # Fit correlation to get fitted ξ
-        ξ_fitted = nothing
-        try
-            exp_fit_range = (1, min(max_separation, max(5, ceil(Int, 2 * ξ))))
-            fit_params = fit_acf(collect(separations), corr_vals; include_zero=false, fit_range=exp_fit_range)
-            ξ_fitted = fit_params.ξ
-            println("  ξ_transfer = $(round(ξ, digits=3)), ξ_fitted = $(round(ξ_fitted, digits=3))")
-        catch e
-            println("  ξ_transfer = $(round(ξ, digits=3)), fitting failed")
-        end
+        println("  ξ_transfer = $(round(ξ, digits=3))")
 
         correlation_data[g] = (
-            separations = collect(separations),
-            correlations = corr_vals,
+            separations = Int[],
+            correlations = Float64[],
             correlation_length = ξ,
-            correlation_length_fitted = ξ_fitted,
+            correlation_length_fitted = nothing,
             color = colors[mod1(idx, length(colors))]
         )
     end

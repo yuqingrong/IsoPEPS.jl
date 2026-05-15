@@ -160,8 +160,35 @@ fig, _, _ = plot_combined_structure_factors(
 plot_energy_error_vs_g("project/results", [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0];                            
       model="tfim",                                              
       J1=1.0, row=3, p=3, nqubits=3,                        
+      energy_source=:resampled,
+      conv_step=102,
+      samples=30000,
       dmrg_file="project/results/dmrg_bulk_tfim_Ly3_D2_gscan.json",save_path="project/results/figures/tfim_energy_vs_g.pdf")
-
+    
+fig, data = plot_energy_error_vs_g("project/results", [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0];
+      model="tfim",
+      J=1.0,
+      row=3,
+      p=3,
+      nqubits=3,
+      energy_source=:resampled,
+      conv_step=102,
+      samples=30000,
+      resample_repeats=30,
+      dmrg_file=[
+          (file="project/results/dmrg_bulk_tfim_Ly3_D2_gscan.json", label="DMRG Ly=3 D=2"),
+          (file="project/results/dmrg_bulk_tfim_Ly3_D4_gscan.json", label="DMRG Ly=3 D=4"),
+      ],
+      circuit_series=[
+          (
+              label="IsoPEPS qubits=5",
+              nqubits=5,
+              suffixes=["_1x1_6w"],
+              energy_source=:resampled,
+          ),
+      ],
+      save_path="project/results/figures/tfim_energy_error_nq3_nq5.pdf",
+  )
 
 ns, vars, errs = compute_variance_vs_samples(
         "project/results/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json",
@@ -196,7 +223,10 @@ fig, data = plot_magnetization_vs_g(
 display(fig)
                    
  
- plot_correlation_vs_g(data_dir, [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0];row=3, nqubits=3,dmrg_file=joinpath(data_dir,"dmrg_bulk_tfim_Ly3_D2_gscan.json"),pepskit_file=referfile, g_c=3.04,
+plot_correlation_vs_g(data_dir, [0.5, 0.75, 1.0];row=3, nqubits=5,dmrg_file=joinpath(data_dir,"dmrg_bulk_tfim_Ly3_D2_gscan.json"),pepskit_file=referfile, g_c=3.04,
+spectrum_krylovdim=200,
+spectrum_tol=1e-7,
+spectrum_maxiter=2000,
 save_path="project/results/figures/corr_length_vs_g_row=3.pdf")
 
 fig, data = plot_correlation_vs_J2("project/results", [0.0, 0.1, 0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0];

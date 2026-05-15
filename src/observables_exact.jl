@@ -95,7 +95,7 @@ Single-site expectation ⟨O_{col,pos}⟩ for an N-column unit cell.
 function expect(op::TransferOperator, obs;
                 col::Int=1, position::Int=1, optimizer=GreedyMethod())
     O = _resolve_op(obs)
-    T_combined = reduce(*, _column_transfer_matrices(op))
+    T_combined = prod(_column_transfer_matrices(op))
     l_vec, r_vec, nf, _ = _fixed_points(T_combined)
     T̃ = get_transfer_matrix_with_operator(op, Dict((col, position) => O);
                                           optimizer=optimizer)
@@ -112,7 +112,7 @@ function expect(op::TransferOperator, sites::Dict{Tuple{Int,Int},<:Any};
                 optimizer=GreedyMethod())
     ops = Dict{Tuple{Int,Int}, Matrix{ComplexF64}}(
         k => _resolve_op(v) for (k, v) in sites)
-    T_combined = reduce(*, _column_transfer_matrices(op))
+    T_combined = prod(_column_transfer_matrices(op))
     l_vec, r_vec, nf, _ = _fixed_points(T_combined)
     T̃ = get_transfer_matrix_with_operator(op, ops; optimizer=optimizer)
     return dot(l_vec, T̃ * r_vec) / nf
@@ -170,7 +170,7 @@ function correlation_function(op::TransferOperator,
     seps = separations isa Integer ? [separations] : collect(separations)
     isempty(seps) && return Dict{Int, ComplexF64}()
 
-    T_combined = reduce(*, _column_transfer_matrices(op))
+    T_combined = prod(_column_transfer_matrices(op))
     l_vec, r_vec, nf, _ = _fixed_points(T_combined)
     E_O = get_transfer_matrix_with_operator(
         op, Dict((col, position) => O); optimizer=optimizer)
@@ -237,7 +237,7 @@ function compute_exact_energy(m::TFIM, op::TransferOperator;
     σz  = _resolve_op(:Z)
 
     T_cols     = _column_transfer_matrices(op)
-    T_combined = reduce(*, T_cols)
+    T_combined = prod(T_cols)
     l_vec, r_vec, nf, _ = _fixed_points(T_combined)
     l_pre, r_suf = _precompute_shifted_vectors(T_cols, l_vec, r_vec)
 
@@ -415,7 +415,7 @@ function compute_exact_heisenberg_energy(op::TransferOperator,
     vq  = op.virtual_qubits
 
     T_cols     = _column_transfer_matrices(op)
-    T_combined = reduce(*, T_cols)
+    T_combined = prod(T_cols)
     l_vec, r_vec, nf, _ = _fixed_points(T_combined)
     l_pre, r_suf = _precompute_shifted_vectors(T_cols, l_vec, r_vec)
 
@@ -550,7 +550,7 @@ function spin_spin_correlation(op::TransferOperator, separations;
     isempty(seps) && return Dict{Int, ComplexF64}()
 
     T_cols     = _column_transfer_matrices(op)
-    T_combined = reduce(*, T_cols)
+    T_combined = prod(T_cols)
     l_vec, r_vec, nf, _ = _fixed_points(T_combined)
 
     # Build per-Pauli period transfer matrices with operator at (col, pos)
@@ -636,7 +636,7 @@ function dimer_dimer_correlation(op::TransferOperator, separations;
     pos2 = pos % row + 1  # vertical partner (periodic)
 
     T_cols     = _column_transfer_matrices(op)
-    T_combined = reduce(*, T_cols)
+    T_combined = prod(T_cols)
     l_vec, r_vec, nf, _ = _fixed_points(T_combined)
 
     if dimer_orientation == :vertical
@@ -650,8 +650,8 @@ function dimer_dimer_correlation(op::TransferOperator, separations;
         end
         T_D_col ./= 4.0
 
-        T_before = col > 1 ? reduce(*, T_cols[1:col-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
-        T_after  = col < N ? reduce(*, T_cols[col+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_before = col > 1 ? prod(T_cols[1:col-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_after  = col < N ? prod(T_cols[col+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
         T_D_period = T_before * T_D_col * T_after
 
     elseif dimer_orientation == :horizontal
@@ -667,8 +667,8 @@ function dimer_dimer_correlation(op::TransferOperator, separations;
         end
         T_D_2col ./= 4.0
 
-        T_before = col > 1 ? reduce(*, T_cols[1:col-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
-        T_after  = col2 < N ? reduce(*, T_cols[col2+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_before = col > 1 ? prod(T_cols[1:col-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_after  = col2 < N ? prod(T_cols[col2+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
         T_D_period = T_before * T_D_2col * T_after
     else
         error("dimer_orientation must be :vertical or :horizontal, got $dimer_orientation")
@@ -689,8 +689,8 @@ function dimer_dimer_correlation(op::TransferOperator, separations;
                 E_OO = get_transfer_matrix_with_operator(
                     op.columns[col], row, vq, Dict(pos => O_pos, pos2 => O_pos2);
                     optimizer=optimizer)
-                T_after_local = col < N ? reduce(*, T_cols[col+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
-                T_before_local = col > 1 ? reduce(*, T_cols[1:col-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+                T_after_local = col < N ? prod(T_cols[col+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+                T_before_local = col > 1 ? prod(T_cols[1:col-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
                 val += dot(l_vec, T_before_local * E_OO * T_after_local * r_vec) / nf
             end
             correlations[sep] = val / 16.0
@@ -814,7 +814,7 @@ function plaquette_plaquette_correlation(op::TransferOperator, separations;
     pos2 = pos % row + 1  # periodic wrap
 
     T_cols     = _column_transfer_matrices(op)
-    T_combined = reduce(*, T_cols)
+    T_combined = prod(T_cols)
     l_vec, r_vec, nf, _ = _fixed_points(T_combined)
 
     # Precompute single-operator E_O for columns 1,2 at pos and pos2
@@ -830,7 +830,7 @@ function plaquette_plaquette_correlation(op::TransferOperator, separations;
     #   Bond 3 (right vert): (pos,2)-(pos',2)    → two-op in col 2
     #   Bond 4 (top):        (pos,1)-(pos,2)     → single-op in col 1 × single-op in col 2
 
-    T_tail = N > 2 ? reduce(*, T_cols[3:end]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+    T_tail = N > 2 ? prod(T_cols[3:end]) : Matrix{ComplexF64}(I, size(T_cols[1]))
 
     T_Q_period = zeros(ComplexF64, size(T_cols[1]))
     for (si, σ) in enumerate(paulis)
@@ -1022,7 +1022,7 @@ function _dimer_cross_correlation(op::TransferOperator, separations,
     vq  = op.virtual_qubits
 
     T_cols     = _column_transfer_matrices(op)
-    T_combined = reduce(*, T_cols)
+    T_combined = prod(T_cols)
     l_vec, r_vec, nf, _ = _fixed_points(T_combined)
 
     if dimer_orientation == :vertical
@@ -1048,12 +1048,12 @@ function _dimer_cross_correlation(op::TransferOperator, separations,
         T_D2_col ./= 4.0
 
         # Build full-period transfer matrices
-        T_before1 = col1 > 1 ? reduce(*, T_cols[1:col1-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
-        T_after1  = col1 < N ? reduce(*, T_cols[col1+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_before1 = col1 > 1 ? prod(T_cols[1:col1-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_after1  = col1 < N ? prod(T_cols[col1+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
         T_D1 = T_before1 * T_D1_col * T_after1
 
-        T_before2 = col2 > 1 ? reduce(*, T_cols[1:col2-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
-        T_after2  = col2 < N ? reduce(*, T_cols[col2+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_before2 = col2 > 1 ? prod(T_cols[1:col2-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_after2  = col2 < N ? prod(T_cols[col2+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
         T_D2 = T_before2 * T_D2_col * T_after2
 
     else  # :horizontal
@@ -1071,13 +1071,13 @@ function _dimer_cross_correlation(op::TransferOperator, separations,
         end
         T_D1_2col ./= 4.0
         T_D2_2col ./= 4.0
-        T_before1 = col1 > 1 ? reduce(*, T_cols[1:col1-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_before1 = col1 > 1 ? prod(T_cols[1:col1-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
         col1b = col1 < N ? col1 + 1 : 1
-        T_after1  = col1b < N ? reduce(*, T_cols[col1b+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_after1  = col1b < N ? prod(T_cols[col1b+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
         T_D1 = T_before1 * T_D1_2col * T_after1
-        T_before2 = col2 > 1 ? reduce(*, T_cols[1:col2-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_before2 = col2 > 1 ? prod(T_cols[1:col2-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
         col2b = col2 < N ? col2 + 1 : 1
-        T_after2  = col2b < N ? reduce(*, T_cols[col2b+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+        T_after2  = col2b < N ? prod(T_cols[col2b+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
         T_D2 = T_before2 * T_D2_2col * T_after2
     end
 
@@ -1106,8 +1106,8 @@ function _dimer_cross_correlation(op::TransferOperator, separations,
         else  # :horizontal — both horizontal dimers in same column pair
             val0 = zero(ComplexF64)
             col1b_h = col1 < N ? col1 + 1 : 1
-            T_before_h = col1 > 1 ? reduce(*, T_cols[1:col1-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
-            T_after_h = col1b_h < N ? reduce(*, T_cols[col1b_h+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+            T_before_h = col1 > 1 ? prod(T_cols[1:col1-1]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+            T_after_h = col1b_h < N ? prod(T_cols[col1b_h+1:N]) : Matrix{ComplexF64}(I, size(T_cols[1]))
             for σa in paulis, σb in paulis
                 E_col1 = get_transfer_matrix_with_operator(
                     op.columns[col1], row, vq, Dict(pos1 => σa, pos2 => σb); optimizer=optimizer)
@@ -1153,7 +1153,7 @@ function _dimer_general_correlation(op::TransferOperator, separations,
     vq  = op.virtual_qubits
 
     T_cols     = _column_transfer_matrices(op)
-    T_combined = reduce(*, T_cols)
+    T_combined = prod(T_cols)
     l_vec, r_vec, nf, _ = _fixed_points(T_combined)
 
     # Build T_D for a dimer with given orientation and position
@@ -1167,7 +1167,7 @@ function _dimer_general_correlation(op::TransferOperator, separations,
                 T_D_col .+= E
             end
             T_D_col ./= 4.0
-            T_tail = N > 1 ? reduce(*, T_cols[2:end]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+            T_tail = N > 1 ? prod(T_cols[2:end]) : Matrix{ComplexF64}(I, size(T_cols[1]))
             return T_D_col * T_tail
         else  # :horizontal
             T_D_2col = zeros(ComplexF64, size(T_cols[1]))
@@ -1179,7 +1179,7 @@ function _dimer_general_correlation(op::TransferOperator, separations,
                 T_D_2col .+= E1 * E2
             end
             T_D_2col ./= 4.0
-            T_tail = N > 2 ? reduce(*, T_cols[3:end]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+            T_tail = N > 2 ? prod(T_cols[3:end]) : Matrix{ComplexF64}(I, size(T_cols[1]))
             return T_D_2col * T_tail
         end
     end
@@ -1227,9 +1227,9 @@ function plaquette_structure_factor(op::TransferOperator, q::Tuple{Real,Real};
     vq  = op.virtual_qubits
 
     T_cols     = _column_transfer_matrices(op)
-    T_combined = reduce(*, T_cols)
+    T_combined = prod(T_cols)
     l_vec, r_vec, nf, _ = _fixed_points(T_combined)
-    T_tail = N > 2 ? reduce(*, T_cols[3:end]) : Matrix{ComplexF64}(I, size(T_cols[1]))
+    T_tail = N > 2 ? prod(T_cols[3:end]) : Matrix{ComplexF64}(I, size(T_cols[1]))
 
     for pos in 1:row
         pos2 = pos % row + 1

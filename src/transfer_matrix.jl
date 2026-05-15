@@ -64,15 +64,23 @@ function apply_transfer(op::TransferOperator, v)
 end
 
 """
-    Matrix(op::TransferOperator)
+    Matrix(op::TransferOperator; max_size=4096)
 
 Build the explicit combined transfer matrix (product of per-column matrices).
 Uses the raw contraction convention (no transpose) consistent with `apply_transfer`.
+For large systems, prefer `compute_transfer_spectrum(...; matrix_free=:always)`.
 """
-function Base.Matrix(op::TransferOperator)
+function Base.Matrix(op::TransferOperator; max_size=4096)
     bond_dim = 2^op.virtual_qubits
     total_legs = op.row + 1
     ms = bond_dim^(2 * total_legs)
+    if ms > max_size
+        error("""
+            Refusing to build explicit transfer matrix of size $(ms)×$(ms).
+            This would allocate about $(round(ms * ms * sizeof(ComplexF64) / 2.0^40; digits=3)) TiB.
+            Use compute_transfer_spectrum(op; matrix_free=:always) or raise max_size explicitly.
+            """)
+    end
     mats = map(op.columns) do gates
         A_tensors = gates_to_tensors(gates, op.row, op.virtual_qubits)
         _, T = contract_transfer_matrix([A_tensors[i] for i in 1:op.row],
@@ -108,7 +116,12 @@ function compute_transfer_spectrum(op::TransferOperator;
                                    num_eigenvalues=2,
                                    use_iterative=:auto,
                                    matrix_free=:auto,
-                                   check_normalization=false)
+                                   check_normalization=false,
+                                   krylovdim=max(30, 2 * num_eigenvalues),
+                                   tol=1e-10,
+                                   maxiter=300,
+                                   eager=true,
+                                   explicit_matrix_max_size=4096)
     sz = matrix_size(op)
     should_use_matrix_free = matrix_free == :always || (matrix_free == :auto && sz > 1024)
     should_use_iterative   = use_iterative == :always || (use_iterative == :auto && sz > 256)
@@ -134,23 +147,29 @@ function compute_transfer_spectrum(op::TransferOperator;
         vals, vecs, _ = KrylovKit.eigsolve(_matvec_precomputed, v0,
                                            num_eigenvalues, :LM;
                                            ishermitian=false,
-                                           krylovdim=max(30, 2 * num_eigenvalues))
+                                           krylovdim=krylovdim,
+                                           tol=tol,
+                                           maxiter=maxiter,
+                                           eager=eager)
         sorted          = sortperm(abs.(vals), rev=true)
         eigenvalues_raw = vals[sorted]
         eigenvalues     = abs.(eigenvalues_raw)
         fixed_point     = reshape(vecs[sorted[1]], isqrt(sz), isqrt(sz))
 
     elseif should_use_iterative
-        vals, vecs, _ = KrylovKit.eigsolve(Matrix(op), num_eigenvalues, :LM;
+        vals, vecs, _ = KrylovKit.eigsolve(Matrix(op; max_size=explicit_matrix_max_size), num_eigenvalues, :LM;
                                            ishermitian=false,
-                                           krylovdim=max(30, 2 * num_eigenvalues))
+                                           krylovdim=krylovdim,
+                                           tol=tol,
+                                           maxiter=maxiter,
+                                           eager=eager)
         sorted          = sortperm(abs.(vals), rev=true)
         eigenvalues_raw = vals[sorted]
         eigenvalues     = abs.(eigenvalues_raw)
         fixed_point     = reshape(vecs[sorted[1]], isqrt(sz), isqrt(sz))
 
     else
-        eig             = LinearAlgebra.eigen(Matrix(op))
+        eig             = LinearAlgebra.eigen(Matrix(op; max_size=explicit_matrix_max_size))
         sorted          = sortperm(abs.(eig.values), rev=true)
         eigenvalues_raw = eig.values[sorted]
         eigenvalues     = abs.(eigenvalues_raw)
@@ -182,12 +201,18 @@ Legacy 1×1 API — delegates to `TransferOperator` path.
 function compute_transfer_spectrum(gates, row, nqubits;
                                    num_eigenvalues=2, use_iterative=:auto,
                                    matrix_free=:auto, channel_type=:virtual,
-                                   check_normalization=false)
+                                   check_normalization=false,
+                                   krylovdim=max(30, 2 * num_eigenvalues),
+                                   tol=1e-10,
+                                   maxiter=300,
+                                   eager=true,
+                                   explicit_matrix_max_size=4096)
     channel_type == :virtual ||
         error("channel_type=$channel_type is no longer supported; use TransferOperator API")
     return compute_transfer_spectrum(TransferOperator(gates, row, nqubits);
                                     num_eigenvalues, use_iterative, matrix_free,
-                                    check_normalization)
+                                    check_normalization, krylovdim, tol, maxiter,
+                                    eager, explicit_matrix_max_size)
 end
 
 
@@ -306,14 +331,15 @@ function build_transfer_code(tensor_ket, tensor_bra, row; for_matvec=false, opti
             end
         end
         
-        # Build tensor index list with input vector
+        # Build tensor index list with input vector.  Seed the input boundary
+        # dimensions directly so planning does not allocate a large dummy vector.
         all_indices = [index_ket..., index_bra..., collect(input_indices)]
         # Infer bond dimension from tensors (index 2 is 'down' which has bond_dim size)
         bond_dim = size(tensor_ket[1], 2)
-        dummy_input = zeros(ComplexF64, ntuple(_ -> bond_dim, 2*total_legs)...)
-        all_tensors = [tensor_ket..., tensor_bra..., dummy_input]
+        all_tensors = [tensor_ket..., tensor_bra...]
         
-        size_dict = OMEinsum.get_size_dict(all_indices, all_tensors)
+        size_dict = Dict(idx => bond_dim for idx in input_indices)
+        OMEinsum.get_size_dict!([index_ket..., index_bra...], all_tensors, size_dict)
         code = optimize_code(DynamicEinCode(all_indices, output_indices), size_dict, optimizer)
         
         return code, total_legs

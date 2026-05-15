@@ -210,6 +210,30 @@ end
     end
 end
 
+@testset "large_transfer_matrix_safety" begin
+    virtual_qubits = 2
+    nqubits = 1 + 2*virtual_qubits
+    row = 2
+    gate = Matrix(YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits)))
+    gates = [gate for _ in 1:row]
+    op = TransferOperator(gates, row, nqubits)
+
+    @test_throws ErrorException Matrix(op; max_size=matrix_size(op) - 1)
+
+    rho, gap, eigs = compute_transfer_spectrum(
+        op;
+        num_eigenvalues=1,
+        matrix_free=:always,
+        krylovdim=8,
+        tol=1e-6,
+        maxiter=100,
+        eager=false,
+    )
+    @test tr(rho) ≈ 1.0
+    @test isinf(gap)
+    @test length(eigs) == 1
+end
+
 @testset "transfer_matrix_advanced_tests" begin
     virtual_qubits = 1
     nqubits = 1 + 2*virtual_qubits
