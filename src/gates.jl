@@ -38,7 +38,7 @@ function _cnot_pattern_layers(nqubits::Int; max_stride::Int=nqubits-1, active_nq
     for s in 1:max_stride
         layer = Tuple{Int,Int}[]
         if s == active_nqubits - 1
-            push!(layer, (1, active_nqubits))
+            push!(layer, (1,active_nqubits))
         else
             for i in 1:active_nqubits-s
                 push!(layer, (i+s, i))

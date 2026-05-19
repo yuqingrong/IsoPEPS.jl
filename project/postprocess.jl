@@ -255,21 +255,21 @@ fig = plot_local_xz_dynamics_vs_g("project/results", [0.5];
     M=10000, shots=20, conv_step=0,
     save_path="project/results/figures/local_xz_dynamics_vs_g_D=4.pdf")
 
-fig = plot_energy_dynamics_vs_g("project/results", [0.0];
+fig = plot_energy_dynamics_vs_g("project/results", [5.0];
     J=1.0, row=3, p=3, nqubits=3,
     M=10000, shots=100, conv_step=0,
     parameter_source=:random,
-    random_seed=42,
+    random_seed=234,
     save_path="project/results/figures/energy_dynamics_vs_g_random.pdf")
 
 fig = plot_local_xz_dynamics_vs_g("project/results", [4.0];
-    J=1.0, row=3, p=3, nqubits=3,
+    J=1.0, row=3, p=3, nqubits=5,
     M=10000, shots=100, conv_step=0,
     parameter_source=:random,
     random_seed=123,
     save_path="project/results/figures/local_xz_dynamics_vs_g_random.pdf")
 
-fig = plot_circuit_block(3, 5; save_path="project/results/figures/circuit_block_3x5.pdf")
+fig = plot_circuit_block(3, 3; save_path="project/results/figures/circuit_block_3x3.pdf")
 display(fig)
 
 plot_channel_circuit(3, 3, 5;

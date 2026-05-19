@@ -5870,7 +5870,7 @@ function plot_energy_dynamics_vs_g(data_dir::String, g_values::Vector{Float64};
 
     shots >= 2 || throw(ArgumentError("shots must be at least 2 channel iterations"))
     effective_ylims = ylims === :auto ?
-        (parameter_source === :random ? (-1.0, 1.0) : (-5.0, -3.0)) :
+        (parameter_source === :random ? (-1.5, 1.0) : (-5.0, -3.0)) :
         ylims
 
     palette = [:steelblue, :firebrick, :seagreen, :darkorange,
