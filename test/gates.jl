@@ -79,6 +79,45 @@ using Random
     @test gates5_active[1] ≈ expected_active atol=1e-10
 end
 
+@testset "local circuit structure" begin
+    @test cnot_pattern(1) == Tuple{Int,Int}[]
+    @test cnot_pattern(3) == [(2, 1), (3, 2), (1, 3)]
+    @test cnot_pattern(4; max_stride=1) == [(2, 1), (3, 2), (4, 3)]
+    @test cnot_pattern(5) == [(2, 1), (3, 2), (1, 3), (4, 1), (5, 3), (5, 4)]
+    @test cnot_pattern(5; active_nqubits=3) == [(2, 1), (3, 2), (1, 3)]
+
+    ops = local_circuit_ops(2, 3)
+    @test length(ops) == 18
+    @test ops[1] == LocalCircuitOp(:rx, (1,), 1, 1)
+    @test ops[2] == LocalCircuitOp(:rz, (1,), 1, 2)
+    @test ops[5] == LocalCircuitOp(:rx, (3,), 1, 5)
+    @test ops[6] == LocalCircuitOp(:rz, (3,), 1, 6)
+    @test ops[7:9] == [
+        LocalCircuitOp(:cnot, (2, 1), 1, nothing),
+        LocalCircuitOp(:cnot, (3, 2), 1, nothing),
+        LocalCircuitOp(:cnot, (1, 3), 1, nothing),
+    ]
+    @test ops[10] == LocalCircuitOp(:rx, (1,), 2, 7)
+
+    embedded_ops = local_circuit_ops(1, 5; active_nqubits=3)
+    @test all(op.kind == :cnot || only(op.qubits) <= 3 for op in embedded_ops)
+    @test count(op -> op.kind == :rx, embedded_ops) == 3
+    @test count(op -> op.kind == :rz, embedded_ops) == 3
+
+    one_qubit_ops = local_circuit_ops(1, 1)
+    @test one_qubit_ops == [
+        LocalCircuitOp(:rx, (1,), 1, 1),
+        LocalCircuitOp(:rz, (1,), 1, 2),
+    ]
+
+    tex = circuit_quantikz(1, 3)
+    @test occursin("\\begin{quantikz}", tex)
+    @test occursin("\\gate{R_x(\\theta_{1})}", tex)
+    @test occursin("\\gate{R_z(\\theta_{6})}", tex)
+    @test occursin("\\ctrl{-1}", tex)
+    @test occursin("\\targ{}", tex)
+end
+
 @testset "build_unitary_gate_2x2" begin
     Random.seed!(5678)
     ppq = IsoPEPS.PARAMS_PER_QUBIT_PER_LAYER

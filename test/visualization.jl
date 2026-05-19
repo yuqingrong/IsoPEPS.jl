@@ -236,6 +236,43 @@ end
     @test IsoPEPS._circuit_energy_mode("tfim", 5, :saved) == :saved
 end
 
+@testset "random-parameter dynamics plots smoke test" begin
+    data_dir = mktempdir()
+    g = 0.5
+    row = 1
+    p = 1
+    nqubits = 5
+    params = zeros(2 * nqubits * p)
+    result = CircuitOptimizationResult(
+        [0.0], Matrix{ComplexF64}[], params, 0.0,
+        Float64[], Float64[], Float64[], true
+    )
+    input_args = Dict{Symbol,Any}(
+        :model => "tfim", :J => 1.0, :g => g,
+        :row => row, :p => p, :nqubits => nqubits,
+        :share_params => true,
+    )
+    filename = joinpath(data_dir,
+        "circuit_tfim_J=1.0_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json")
+    save_result(filename, result, input_args)
+
+    random_params = IsoPEPS._select_plot_params(result, :random, 1; random_seed=1)
+    @test length(random_params) == length(result.final_params)
+    @test all(x -> 0 <= x < 2π, random_params)
+
+    fig_energy = plot_energy_dynamics_vs_g(data_dir, [g];
+        J=1.0, row=row, p=p, nqubits=nqubits,
+        M=1, shots=2, conv_step=0,
+        parameter_source=:random, random_seed=1)
+    @test fig_energy isa Figure
+
+    fig_xz = plot_local_xz_dynamics_vs_g(data_dir, [g];
+        J=1.0, row=row, p=p, nqubits=nqubits,
+        M=1, shots=2, conv_step=0,
+        parameter_source=:random, random_seed=1)
+    @test fig_xz isa Figure
+end
+
 @testset "plot_M2_comparison legend stays inside blank region" begin
     repo = joinpath(@__DIR__, "..")
     fig = plot_M2_comparison(exact_file=joinpath(repo, "project", "results", "M2_exact.json"),

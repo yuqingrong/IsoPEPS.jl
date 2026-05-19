@@ -828,6 +828,5 @@ function compute_theoretical_lambda_eff(eigenvalues, coefficients, max_lag::Int)
             lambda_eff[r] = NaN
         end
     end
-    @show mean(lambda_eff)
     return collect(lags), lambda_eff
 end

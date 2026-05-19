@@ -7,33 +7,164 @@ const PARAMS_PER_QUBIT_PER_LAYER = 2
 # Cache for the parameter-independent CNOT entangling product.
 const _CNOT_PRODUCT_CACHE = Dict{Tuple{Int,Int,Int}, Matrix{ComplexF64}}()
 
+"""
+    LocalCircuitOp
+
+Symbolic operation in one local circuit block.
+
+Fields:
+- `kind`: `:rx`, `:rz`, or `:cnot`
+- `qubits`: acted-on qubits; one entry for rotations, `(control, target)` for CNOTs
+- `layer`: circuit layer index
+- `param_index`: index into the parameter vector for rotations, or `nothing` for CNOTs
+"""
+struct LocalCircuitOp
+    kind::Symbol
+    qubits::Tuple{Vararg{Int}}
+    layer::Int
+    param_index::Union{Int,Nothing}
+end
+
+function _cnot_pattern_layers(nqubits::Int; max_stride::Int=nqubits-1, active_nqubits::Int=nqubits)
+    1 <= active_nqubits <= nqubits || throw(ArgumentError("active_nqubits must be between 1 and nqubits"))
+    active_nqubits == 1 && return Vector{Tuple{Int,Int}}[]
+    max_stride = clamp(max_stride, 1, active_nqubits-1)
+
+    if nqubits == 5 && active_nqubits == 5 && max_stride == 4
+        return [[(2, 1), (3, 2), (1, 3), (4, 1), (5, 3), (5, 4)]]
+    end
+
+    layers = Vector{Vector{Tuple{Int,Int}}}()
+    for s in 1:max_stride
+        layer = Tuple{Int,Int}[]
+        if s == active_nqubits - 1
+            push!(layer, (1, active_nqubits))
+        else
+            for i in 1:active_nqubits-s
+                push!(layer, (i+s, i))
+            end
+        end
+        push!(layers, layer)
+    end
+    return layers
+end
+
+"""
+    cnot_pattern(nqubits; max_stride=nqubits-1, active_nqubits=nqubits)
+
+Return the ordered CNOT `(control, target)` pairs used by the local circuit
+block. This is the same entangling pattern used internally by
+`build_unitary_gate`.
+"""
+function cnot_pattern(nqubits::Int; max_stride::Int=nqubits-1, active_nqubits::Int=nqubits)
+    return reduce(vcat, _cnot_pattern_layers(nqubits;
+                                             max_stride=max_stride,
+                                             active_nqubits=active_nqubits);
+                  init=Tuple{Int,Int}[])
+end
+
 """Return (and cache) the combined CNOT entangler for the first `active_nqubits` qubits."""
 function _get_cnot_product(nqubits::Int; max_stride::Int=nqubits-1, active_nqubits::Int=nqubits)
     1 <= active_nqubits <= nqubits || throw(ArgumentError("active_nqubits must be between 1 and nqubits"))
-    max_stride = clamp(max_stride, 1, active_nqubits-1)
+    max_stride = active_nqubits == 1 ? 0 : clamp(max_stride, 1, active_nqubits-1)
     get!(_CNOT_PRODUCT_CACHE, (nqubits, max_stride, active_nqubits)) do
         dim = 1 << nqubits
         result = Matrix{ComplexF64}(I, dim, dim)
-        if nqubits == 5 && active_nqubits == 5 && max_stride == 4
-            for (control, target) in ((2, 1), (3, 2), (1, 3), (4, 1), (5, 3), (5, 4))
-                result *= Matrix(cnot(nqubits, control, target))
-            end
-            return result
-        end
-
-        for s in 1:max_stride
+        for cnot_layer in _cnot_pattern_layers(nqubits;
+                                               max_stride=max_stride,
+                                               active_nqubits=active_nqubits)
             layer = Matrix{ComplexF64}(I, dim, dim)
-            if s == active_nqubits - 1
-                layer *= Matrix(cnot(nqubits, 1, active_nqubits))
-            else
-                for i in 1:active_nqubits-s
-                    layer *= Matrix(cnot(nqubits, i+s, i))
-                end
+            for (control, target) in cnot_layer
+                layer *= Matrix(cnot(nqubits, control, target))
             end
             result *= layer
         end
         result
     end
+end
+
+"""
+    local_circuit_ops(p, nqubits; max_stride=nqubits-1, active_nqubits=nqubits)
+
+Return a symbolic trace of the local circuit block built by
+`build_unitary_gate`: per-layer `Rx`, `Rz`, then the ordered CNOT entangler.
+The trace is intended for drawing and documentation; numerical optimization
+continues to use the dense matrix builder.
+"""
+function local_circuit_ops(p::Int, nqubits::Int; max_stride::Int=nqubits-1,
+                           active_nqubits::Int=nqubits)
+    1 <= active_nqubits <= nqubits || throw(ArgumentError("active_nqubits must be between 1 and nqubits"))
+    ppq = PARAMS_PER_QUBIT_PER_LAYER
+    ops = LocalCircuitOp[]
+
+    for r in 1:p
+        for q in 1:active_nqubits
+            idx = ppq*nqubits*(r-1) + ppq*(q-1) + 1
+            push!(ops, LocalCircuitOp(:rx, (q,), r, idx))
+            push!(ops, LocalCircuitOp(:rz, (q,), r, idx + 1))
+        end
+        for (control, target) in cnot_pattern(nqubits;
+                                              max_stride=max_stride,
+                                              active_nqubits=active_nqubits)
+            push!(ops, LocalCircuitOp(:cnot, (control, target), r, nothing))
+        end
+    end
+
+    return ops
+end
+
+function _quantikz_gate(op::LocalCircuitOp)
+    if op.kind == :rx
+        return "\\gate{R_x(\\theta_{$(op.param_index)})}"
+    elseif op.kind == :rz
+        return "\\gate{R_z(\\theta_{$(op.param_index)})}"
+    end
+    return "\\qw"
+end
+
+"""
+    circuit_quantikz(p, nqubits; max_stride=nqubits-1, active_nqubits=nqubits)
+
+Generate a Quantikz diagram for the local circuit block. The diagram is built
+from `local_circuit_ops`, so it follows the same gate ordering as
+`build_unitary_gate`.
+"""
+function circuit_quantikz(p::Int, nqubits::Int; max_stride::Int=nqubits-1,
+                          active_nqubits::Int=nqubits)
+    ops = local_circuit_ops(p, nqubits;
+                            max_stride=max_stride,
+                            active_nqubits=active_nqubits)
+    columns = Vector{Vector{String}}()
+    for r in 1:p
+        rx_column = fill("\\qw", nqubits)
+        rz_column = fill("\\qw", nqubits)
+        for op in ops
+            op.layer == r || continue
+            if op.kind == :rx
+                rx_column[op.qubits[1]] = _quantikz_gate(op)
+            elseif op.kind == :rz
+                rz_column[op.qubits[1]] = _quantikz_gate(op)
+            end
+        end
+        push!(columns, rx_column)
+        push!(columns, rz_column)
+
+        for op in ops
+            op.layer == r && op.kind == :cnot || continue
+            control, target = op.qubits
+            cnot_column = fill("\\qw", nqubits)
+            cnot_column[control] = "\\ctrl{$(target - control)}"
+            cnot_column[target] = "\\targ{}"
+            push!(columns, cnot_column)
+        end
+    end
+
+    lines = String[]
+    for q in 1:nqubits
+        cells = [column[q] for column in columns]
+        push!(lines, "\\lstick{q_$q} & " * join(cells, " & ") * " & \\qw")
+    end
+    return "\\begin{quantikz}\n" * join(lines, " \\\\\n") * "\n\\end{quantikz}"
 end
 
 """

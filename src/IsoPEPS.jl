@@ -34,6 +34,7 @@ module IsoPEPS
 # =============================================================================
 using LinearAlgebra
 using Statistics
+using Random
 using KrylovKit
 using Yao, Yao.EasyBuild
 using OMEinsum
@@ -133,6 +134,7 @@ export compute_energy_from_samples, compute_exact_energy_from_gates
 
 # Gate Construction
 export build_unitary_gate, build_unitary_gate_2x2, embed_params
+export LocalCircuitOp, cnot_pattern, local_circuit_ops, circuit_quantikz
 
 # Sampling-Based Observables
 export compute_energy, compute_tfim_energy, compute_heisenberg_energy, compute_acf
@@ -176,6 +178,7 @@ export reconstruct_gates
 
 # Visualization (loaded via CairoMakie extension)
 export paper_theme, PAPER_FIGSIZE, PAPER_FIGSIZE_WIDE
+export plot_circuit_block, plot_channel_circuit
 export plot_acf, fit_acf, fit_acf_power, fit_acf_oscillatory
 export plot_training_history, plot_variance_vs_samples, plot_expectation_values
 export plot_corr_scale
@@ -184,7 +187,7 @@ export plot_energy_error_vs_g, plot_correlation_vs_g, plot_correlation_vs_J2, pl
 export plot_connected_corr_vs_g, plot_magnetization_vs_g
 export save_M2_vs_J2, plot_M2_comparison
 export plot_dimer_structure_factor, plot_spin_structure_factor, plot_plaquette_structure_factor, plot_combined_structure_factors, save_combined_structure_factor_data
-export plot_dimer_bond_pattern, plot_bond_energy_pattern, plot_observable_convergence, plot_energy_convergence_vs_g, plot_energy_dynamics, plot_energy_dynamics_vs_g
+export plot_dimer_bond_pattern, plot_bond_energy_pattern, plot_observable_convergence, plot_energy_convergence_vs_g, plot_energy_dynamics, plot_energy_dynamics_vs_g, plot_local_xz_dynamics_vs_g
 export compute_variance_vs_samples, plot_energy_vs_inv_samples
 export bond_expectation, all_bond_expectations
 export plot_dmrg_spin_structure_factor, plot_dmrg_dimer_structure_factor

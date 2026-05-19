@@ -58,10 +58,10 @@ function analyze_result(filename::String; pepskit_results_file::Union{String,Not
     # Note: passing datafile=filename triggers expensive resampling with 1M samples
     # For nqubits=5, this can take 10-30 minutes. Set datafile=nothing to skip.
     skip_resample = (nqubits >= 5)  # Skip resampling for large systems
-    #fig_exp = plot_expectation_values(result; g=g, J=J, row=row, p=p, nqubits=nqubits, use_exact=use_exact,
-    #                                  model=model, J1=J1, J2=J2,
-    #                                  datafile=skip_resample ? nothing : filename)
-    #display(fig_exp)
+    fig_exp = plot_expectation_values(result; g=g, J=J, row=row, p=p, nqubits=nqubits, use_exact=use_exact,
+                                      model=model, J1=J1, J2=J2,
+                                      datafile=skip_resample ? nothing : filename)
+    display(fig_exp)
     
     
     # Save figures to project/results/figures
@@ -77,9 +77,9 @@ function analyze_result(filename::String; pepskit_results_file::Union{String,Not
     println("\nSaved training history figure to: $training_fig_path")
     
     # Save expectation values figure
-    #exp_fig_path = joinpath(figures_dir, "$(base_name)_expectation_values.pdf")
-    #save(exp_fig_path, fig_exp)
-    #println("Saved expectation values figure to: $exp_fig_path")
+    exp_fig_path = joinpath(figures_dir, "$(base_name)_expectation_values.pdf")
+    save(exp_fig_path, fig_exp)
+    println("Saved expectation values figure to: $exp_fig_path")
     
     return result, input_args
 end
@@ -91,9 +91,9 @@ end
 # Uncomment the block below (remove #= and =#) to run analysis examples
 
 # Analyze a single result
-J=1.0;g = 1.0; row=4 ; nqubits=3; p=3; virtual_qubits=1;D=2
+J=1.0;g = 2.0; row=3 ; nqubits=5; p=3; virtual_qubits=1;D=2
 data_dir = joinpath(@__DIR__, "results")
-datafile = joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J)_J2=0.5_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json")
+datafile = joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile, dmrg_bulk_file="project/results/dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json")
 
@@ -223,7 +223,7 @@ fig, data = plot_magnetization_vs_g(
 display(fig)
                    
  
-plot_correlation_vs_g(data_dir, [0.5, 0.75, 1.0];row=3, nqubits=5,dmrg_file=joinpath(data_dir,"dmrg_bulk_tfim_Ly3_D2_gscan.json"),pepskit_file=referfile, g_c=3.04,
+plot_correlation_vs_g(data_dir, [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0];row=3, nqubits=5,dmrg_file=joinpath(data_dir,"dmrg_bulk_tfim_Ly3_D2_gscan.json"),pepskit_file=referfile, g_c=3.04,
 spectrum_krylovdim=200,
 spectrum_tol=1e-7,
 spectrum_maxiter=2000,
@@ -246,9 +246,33 @@ display(fig)
 fig = plot_energy_convergence_vs_g("project/results", [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0];                                                      
       J=1.0, row=3, p=3, nqubits=3, conv_step=100, save_path="project/results/figures/energy_convergence_vs_g.pdf")          
 
-fig = plot_energy_dynamics(datafile;                               
-      M=1000, shots=200, conv_step=0, save_path="project/results/figures/energy_dynamics.pdf")
+fig = plot_energy_dynamics_vs_g("project/results", [0.5, 1.0, 1.5, 2.0, 2.5, 3.0];
+J=1.0, row=3, p=3, nqubits=5,                                                                                                
+M=10000, shots=20, conv_step=0, save_path="project/results/figures/energy_dynamics_vs_g_D=4.pdf")
+
+fig = plot_local_xz_dynamics_vs_g("project/results", [0.5];
+    J=1.0, row=3, p=3, nqubits=5,
+    M=10000, shots=20, conv_step=0,
+    save_path="project/results/figures/local_xz_dynamics_vs_g_D=4.pdf")
+
+fig = plot_energy_dynamics_vs_g("project/results", [0.0];
+    J=1.0, row=3, p=3, nqubits=3,
+    M=10000, shots=100, conv_step=0,
+    parameter_source=:random,
+    random_seed=42,
+    save_path="project/results/figures/energy_dynamics_vs_g_random.pdf")
+
+fig = plot_local_xz_dynamics_vs_g("project/results", [4.0];
+    J=1.0, row=3, p=3, nqubits=3,
+    M=10000, shots=100, conv_step=0,
+    parameter_source=:random,
+    random_seed=123,
+    save_path="project/results/figures/local_xz_dynamics_vs_g_random.pdf")
+
+fig = plot_circuit_block(3, 5; save_path="project/results/figures/circuit_block_3x5.pdf")
 display(fig)
-fig = plot_energy_dynamics_vs_g("project/results", [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0];
-J=1.0, row=3, p=3, nqubits=3,                                                                                                
-M=1000, shots=200, conv_step=0, save_path="project/results/figures/energy_dynamics_vs_g.pdf")
+
+plot_channel_circuit(3, 3, 5;
+    cycles=2,
+    expanded=false,
+    save_path="project/results/figures/circuit_full_3x3x5.pdf")
