@@ -118,28 +118,30 @@ function _circuit_plot_columns(p::Int, nqubits::Int; max_stride::Int=nqubits-1,
                             active_nqubits=active_nqubits)
     columns = Vector{Vector{Union{LocalCircuitOp,Nothing}}}()
 
-    for r in 1:p
-        rx_column = Vector{Union{LocalCircuitOp,Nothing}}(nothing, nqubits)
-        rz_column = Vector{Union{LocalCircuitOp,Nothing}}(nothing, nqubits)
-        for op in ops
-            op.layer == r || continue
-            if op.kind == :rx
-                rx_column[op.qubits[1]] = op
-            elseif op.kind == :rz
-                rz_column[op.qubits[1]] = op
-            end
-        end
-        push!(columns, rx_column)
-        push!(columns, rz_column)
-
-        for op in ops
-            op.layer == r && op.kind == :cnot || continue
+    i = 1
+    while i <= length(ops)
+        op = ops[i]
+        if op.kind == :cnot
             column = Vector{Union{LocalCircuitOp,Nothing}}(nothing, nqubits)
             control, target = op.qubits
             column[control] = op
             column[target] = op
             push!(columns, column)
+            i += 1
+            continue
         end
+
+        rx_column = Vector{Union{LocalCircuitOp,Nothing}}(nothing, nqubits)
+        rz_column = Vector{Union{LocalCircuitOp,Nothing}}(nothing, nqubits)
+        layer = op.layer
+        while i <= length(ops) && ops[i].kind != :cnot && ops[i].layer == layer
+            rot_op = ops[i]
+            rot_op.kind == :rx && (rx_column[rot_op.qubits[1]] = rot_op)
+            rot_op.kind == :rz && (rz_column[rot_op.qubits[1]] = rot_op)
+            i += 1
+        end
+        push!(columns, rx_column)
+        push!(columns, rz_column)
     end
 
     return columns
@@ -316,7 +318,9 @@ function plot_channel_circuit(row::Int, p::Int, nqubits::Int;
                               save_path::Union{String,Nothing}=nothing)
     cycles >= 1 || throw(ArgumentError("cycles must be at least 1"))
     qpositions, total_qubits = _channel_gate_positions(row, nqubits)
-    chunk = PARAMS_PER_QUBIT_PER_LAYER * nqubits * p
+    chunk = _gate_param_count(p, nqubits;
+                              max_stride=max_stride,
+                              active_nqubits=active_nqubits)
 
     columns = Vector{Vector{Union{LocalCircuitOp,Nothing}}}()
     labels = String[]
@@ -1095,7 +1099,7 @@ function plot_expectation_values(result::CircuitOptimizationResult;
 
     if can_compute_exact && !skip_exact
         is_two_by_two = (m isa HeisenbergJ1J2) &&
-            (length(result.final_params) == 4 * PARAMS_PER_QUBIT_PER_LAYER * nqubits * p)
+            (length(result.final_params) == gate_parameter_count(p, nqubits; unit_cell=:two_by_two))
         if is_two_by_two
             gates_odd, gates_even = build_unitary_gate_2x2(result.final_params, p, row, nqubits)
             op = TransferOperator(gates_odd, gates_even, row, nqubits)
@@ -1814,7 +1818,7 @@ function plot_correlation_function(filename::String;
 
     # Detect 2x2 unit cell
     is_2x2 = is_heisenberg &&
-        (length(params) == 4 * PARAMS_PER_QUBIT_PER_LAYER * nqubits * p)
+        (length(params) == gate_parameter_count(p, nqubits; unit_cell=:two_by_two))
 
     if is_2x2
         gates_odd, gates_even = build_unitary_gate_2x2(params, p, row, nqubits)
@@ -2894,8 +2898,8 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
 
     for (idx, g) in enumerate(g_values)
         candidates = [
-            joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_randomtest234.json"),
             joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json"),
+
         ]
         filename = ""
         for candidate in candidates

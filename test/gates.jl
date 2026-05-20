@@ -7,7 +7,7 @@ using Random
 
 @testset "build_unitary_gate" begin
     Random.seed!(1234)
-    ppq = IsoPEPS.PARAMS_PER_QUBIT_PER_LAYER  # 2
+    ppq = IsoPEPS.PARAMS_PER_QUBIT_PER_LAYER
 
     for row in 3:6, p in 2:4, nqubits in [3]
         # Shared parameters: all gates should be identical
@@ -28,6 +28,8 @@ using Random
     # Wrong param count should throw
     @test_throws AssertionError build_unitary_gate([0.1], 2, 1, 3)
     @test_throws AssertionError build_unitary_gate([0.1], 2, 2, 3; share_params=false)
+    @test gate_parameter_count(2, 5) == 2 * ppq * 5 * 2
+    @test gate_parameter_count(2, 5; active_nqubits=3) == ppq * 5 * 2
 
     # max_stride kwarg: stride=1 restricts entangling structure
     Random.seed!(42)
@@ -41,40 +43,52 @@ using Random
     # active_nqubits keeps a smaller embedded circuit's CNOT pattern intact.
     p = 3; row = 2; nfrom = 3; nto = 5
     params3 = rand(ppq * nfrom * p) .* 2π
-    params5 = embed_params(params3, p, nfrom, nto)
+    params5 = embed_params(params3, p, nfrom, nto; active_nqubits_to=nfrom)
     gates3 = build_unitary_gate(params3, p, row, nfrom)
     gates5 = build_unitary_gate(params5, p, row, nto; active_nqubits=nfrom)
     expected5 = kron(Matrix{ComplexF64}(I, 1 << (nto - nfrom), 1 << (nto - nfrom)), gates3[1])
     @test gates5[1] ≈ expected5 atol=1e-10
     @test all(isapprox(g * g', I, atol=1e-6) for g in gates5)
 
-    # Fully active 5-qubit gates use the nested D=2-plus-extra CNOT pattern.
-    params5_active = copy(params5)
+    # Fully active 5-qubit gates insert an extra Rx-Rz block before CNOT layer 4.
+    params5_active = embed_params(params3, p, nfrom, nto)
     for r in 1:p
-        for q in nfrom+1:nto
+        for q in 1:nto
             idx = ppq * nto * (r-1) + ppq * (q-1) + 1
             params5_active[idx] = 0.37 + 0.11q + 0.03r
             params5_active[idx+1] = 0.23 + 0.07q + 0.05r
+            extra_idx = ppq * nto * p + ppq * nto * (r-1) + ppq * (q-1) + 1
+            params5_active[extra_idx] = 0.19 + 0.13q + 0.02r
+            params5_active[extra_idx+1] = 0.31 + 0.05q + 0.04r
         end
     end
     gates5_active = build_unitary_gate(params5_active, p, row, nto; active_nqubits=nto)
     expected_active = Matrix{ComplexF64}(I, 1 << nto, 1 << nto)
-    for r in 1:p
+    rotations_from = function(offset, layer)
         rotations = Matrix{ComplexF64}(undef, 1, 1)
         rotations[1, 1] = 1
         for q in 1:nto
-            idx = ppq * nto * (r-1) + ppq * (q-1) + 1
+            idx = offset + ppq * nto * (layer-1) + ppq * (q-1) + 1
             θx = params5_active[idx]
             θz = params5_active[idx+1]
             Rx = ComplexF64[cos(θx/2) -im*sin(θx/2); -im*sin(θx/2) cos(θx/2)]
             Rz = ComplexF64[exp(-im * θz/2) 0; 0 exp(im * θz/2)]
             rotations = kron(Rx * Rz, rotations)
         end
-        cnot_nested = Matrix{ComplexF64}(I, 1 << nto, 1 << nto)
-        for (control, target) in [(2, 1), (3, 2), (1, 3), (4, 1), (5, 3), (5, 4)]
-            cnot_nested *= Matrix(cnot(nto, control, target))
+        return rotations
+    end
+    for r in 1:p
+        cnot_before_extra = Matrix{ComplexF64}(I, 1 << nto, 1 << nto)
+        for (control, target) in [(2, 1), (3, 2), (1, 3)]
+            cnot_before_extra *= Matrix(cnot(nto, control, target))
         end
-        expected_active *= rotations * cnot_nested
+        cnot_after_extra = Matrix{ComplexF64}(I, 1 << nto, 1 << nto)
+        for (control, target) in [(4, 1), (4, 2), (5, 3), (5, 4)]
+            cnot_after_extra *= Matrix(cnot(nto, control, target))
+        end
+        rotations = rotations_from(0, r)
+        extra_rotations = rotations_from(ppq * nto * p, r)
+        expected_active *= rotations * cnot_before_extra * extra_rotations * cnot_after_extra
     end
     @test gates5_active[1] ≈ expected_active atol=1e-10
 end
@@ -83,7 +97,7 @@ end
     @test cnot_pattern(1) == Tuple{Int,Int}[]
     @test cnot_pattern(3) == [(2, 1), (3, 2), (1, 3)]
     @test cnot_pattern(4; max_stride=1) == [(2, 1), (3, 2), (4, 3)]
-    @test cnot_pattern(5) == [(2, 1), (3, 2), (1, 3), (4, 1), (5, 3), (5, 4)]
+    @test cnot_pattern(5) == [(2, 1), (3, 2), (1, 3), (4, 1), (4, 2), (5, 3), (5, 4)]
     @test cnot_pattern(5; active_nqubits=3) == [(2, 1), (3, 2), (1, 3)]
 
     ops = local_circuit_ops(2, 3)
@@ -104,6 +118,24 @@ end
     @test count(op -> op.kind == :rx, embedded_ops) == 3
     @test count(op -> op.kind == :rz, embedded_ops) == 3
 
+    ops5 = local_circuit_ops(1, 5)
+    fourth_cnot = findall(op -> op.kind == :cnot, ops5)[4]
+    @test count(op -> op.kind == :rx, ops5) == 10
+    @test count(op -> op.kind == :rz, ops5) == 10
+    @test ops5[fourth_cnot-10:fourth_cnot-1] == [
+        LocalCircuitOp(:rx, (1,), 1, 11),
+        LocalCircuitOp(:rz, (1,), 1, 12),
+        LocalCircuitOp(:rx, (2,), 1, 13),
+        LocalCircuitOp(:rz, (2,), 1, 14),
+        LocalCircuitOp(:rx, (3,), 1, 15),
+        LocalCircuitOp(:rz, (3,), 1, 16),
+        LocalCircuitOp(:rx, (4,), 1, 17),
+        LocalCircuitOp(:rz, (4,), 1, 18),
+        LocalCircuitOp(:rx, (5,), 1, 19),
+        LocalCircuitOp(:rz, (5,), 1, 20),
+    ]
+    @test ops5[fourth_cnot] == LocalCircuitOp(:cnot, (4, 1), 1, nothing)
+
     one_qubit_ops = local_circuit_ops(1, 1)
     @test one_qubit_ops == [
         LocalCircuitOp(:rx, (1,), 1, 1),
@@ -123,7 +155,7 @@ end
     ppq = IsoPEPS.PARAMS_PER_QUBIT_PER_LAYER
 
     for row in 2:5, p in 1:3, nqubits in [3]
-        n_params = 4 * ppq * nqubits * p
+        n_params = gate_parameter_count(p, nqubits; unit_cell=:two_by_two)
         params = rand(n_params) .* 2π
         gates_odd, gates_even = build_unitary_gate_2x2(params, p, row, nqubits)
 
@@ -150,7 +182,8 @@ end
     p = 2; row = 3; nfrom = 3; nto = 5
     chunk3 = ppq * nfrom * p
     params3 = rand(4 * chunk3) .* 2π
-    params5 = embed_params(params3, p, nfrom, nto; unit_cell=:two_by_two)
+    params5 = embed_params(params3, p, nfrom, nto; unit_cell=:two_by_two,
+                           active_nqubits_to=nfrom)
     odd3, even3 = build_unitary_gate_2x2(params3, p, row, nfrom)
     odd5, even5 = build_unitary_gate_2x2(params5, p, row, nto; active_nqubits=nfrom)
     idle = Matrix{ComplexF64}(I, 1 << (nto - nfrom), 1 << (nto - nfrom))
@@ -171,27 +204,33 @@ end
         # Single unit cell
         params_from = rand(chunk_from)
         params_to   = embed_params(params_from, p, nfrom, nto)
-        @test length(params_to) == ppq * nto * p
+        @test length(params_to) == gate_parameter_count(p, nto)
 
         # Original qubit rotations preserved layer-by-layer
         for r in 1:p, i in 1:nfrom
             old_idx = ppq * nfrom * (r-1) + ppq*(i-1) + 1
             new_idx = ppq * nto   * (r-1) + ppq*(i-1) + 1
-            @test params_from[old_idx]   == params_to[new_idx]
-            @test params_from[old_idx+1] == params_to[new_idx+1]
+            for k in 0:ppq-1
+                @test params_from[old_idx+k] == params_to[new_idx+k]
+            end
         end
 
         # Extra qubits (nfrom+1 : nto) default to 0 in every layer
         for r in 1:p, i in nfrom+1:nto
             new_idx = ppq * nto * (r-1) + ppq*(i-1) + 1
-            @test params_to[new_idx]   == 0.0
-            @test params_to[new_idx+1] == 0.0
+            for k in 0:ppq-1
+                @test params_to[new_idx+k] == 0.0
+            end
         end
+
+        # Fully active 5-qubit targets include an extra all-zero Rx-Rz block.
+        extra_offset = ppq * nto * p
+        @test all(params_to[extra_offset+1:end] .== 0.0)
 
         # 2×2 unit cell
         params_from4 = rand(4 * chunk_from)
         params_to4   = embed_params(params_from4, p, nfrom, nto; unit_cell=:two_by_two)
-        @test length(params_to4) == 4 * ppq * nto * p
+        @test length(params_to4) == gate_parameter_count(p, nto; unit_cell=:two_by_two)
 
         # nqubits_to > nqubits_from required
         @test_throws ErrorException embed_params(params_from, p, nfrom, nfrom)
@@ -250,7 +289,7 @@ end
             # Test 2: build_unitary_gate with RANDOM parameters
             println("\n[2] build_unitary_gate with RANDOM params:")
             for p in [1, 2, 3, 4, 5]
-                n_params = 2 * nqubits * p
+                n_params = gate_parameter_count(p, nqubits)
                 params_rand = rand(n_params)
                 gates_built = build_unitary_gate(params_rand, p, row, nqubits)
 
@@ -271,7 +310,7 @@ end
             println("\n[3] build_unitary_gate with SMALL params (near identity):")
             for scale in [0.01, 0.1, 0.5, 1.0]
                 p = 2
-                n_params = 2 * nqubits * p
+                n_params = gate_parameter_count(p, nqubits)
                 params_small = scale * randn(n_params)
                 gates_small = build_unitary_gate(params_small, p, row, nqubits)
 
@@ -308,7 +347,7 @@ end
             gaps_built = Float64[]
             for _ in 1:10
                 p = 2
-                n_params = 2 * nqubits * p
+                n_params = gate_parameter_count(p, nqubits)
                 params_b = rand(n_params) .* 2π
                 gates_b = build_unitary_gate(params_b, p, row, nqubits)
                 A_b = IsoPEPS.gates_to_tensors(gates_b, row, virtual_qubits)

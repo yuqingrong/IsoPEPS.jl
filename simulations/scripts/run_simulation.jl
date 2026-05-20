@@ -76,7 +76,10 @@ function run_simulation(config_path::String)
 
         # Initialize parameters
         Random.seed!(seed)
-        n_params = unit_cell == :two_by_two ? 4 * 2 * nqubits * p : IsoPEPS.PARAMS_PER_QUBIT_PER_LAYER * nqubits * p
+        n_params = IsoPEPS.gate_parameter_count(p, nqubits;
+                                                unit_cell=unit_cell,
+                                                row=row,
+                                                share_params=share_params)
         params = rand(n_params)
 
         println("\nRunning $scan_param = $val ...")

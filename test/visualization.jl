@@ -180,7 +180,7 @@ end
     scan_values = [1.0, 2.0]
 
     function write_circuit(path, energy; nqubits=3)
-        params = zeros(2 * nqubits * 3)
+        params = zeros(gate_parameter_count(3, nqubits))
         result = CircuitOptimizationResult(
             [energy], Matrix{ComplexF64}[], params, energy,
             Float64[], Float64[], Float64[], true
@@ -242,7 +242,7 @@ end
     row = 1
     p = 1
     nqubits = 5
-    params = zeros(2 * nqubits * p)
+    params = zeros(gate_parameter_count(p, nqubits))
     result = CircuitOptimizationResult(
         [0.0], Matrix{ComplexF64}[], params, 0.0,
         Float64[], Float64[], Float64[], true

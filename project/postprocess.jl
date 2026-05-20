@@ -223,7 +223,7 @@ fig, data = plot_magnetization_vs_g(
 display(fig)
                    
  
-plot_correlation_vs_g(data_dir, [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0];row=3, nqubits=5,dmrg_file=joinpath(data_dir,"dmrg_bulk_tfim_Ly3_D2_gscan.json"),pepskit_file=referfile, g_c=3.04,
+plot_correlation_vs_g(data_dir, [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0];row=3, nqubits=3,p=3,dmrg_file=joinpath(data_dir,"dmrg_bulk_tfim_Ly3_D2_gscan.json"),pepskit_file=referfile, g_c=3.04,
 spectrum_krylovdim=200,
 spectrum_tol=1e-7,
 spectrum_maxiter=2000,
@@ -272,7 +272,7 @@ fig = plot_local_xz_dynamics_vs_g("project/results", [4.0];
 fig = plot_circuit_block(3, 3; save_path="project/results/figures/circuit_block_3x3.pdf")
 display(fig)
 
-plot_channel_circuit(3, 3, 5;
+plot_channel_circuit(3, 3, 3;
     cycles=2,
     expanded=false,
-    save_path="project/results/figures/circuit_full_3x3x5.pdf")
+    save_path="project/results/figures/circuit_full_3x3x3.pdf")

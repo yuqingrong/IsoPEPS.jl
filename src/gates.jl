@@ -6,6 +6,7 @@ const PARAMS_PER_QUBIT_PER_LAYER = 2
 
 # Cache for the parameter-independent CNOT entangling product.
 const _CNOT_PRODUCT_CACHE = Dict{Tuple{Int,Int,Int}, Matrix{ComplexF64}}()
+const _PRE_FOURTH_CNOT_RXRZ_LAYER = 4
 
 """
     LocalCircuitOp
@@ -31,7 +32,7 @@ function _cnot_pattern_layers(nqubits::Int; max_stride::Int=nqubits-1, active_nq
     max_stride = clamp(max_stride, 1, active_nqubits-1)
 
     if nqubits == 5 && active_nqubits == 5 && max_stride == 4
-        return [[(2, 1), (3, 2), (1, 3), (4, 1), (5, 3), (5, 4)]]
+        return [[(2, 1)], [(3, 2)], [(1, 3)], [(4, 1)], [(4, 2)], [(5, 3)], [(5, 4)]]
     end
 
     layers = Vector{Vector{Tuple{Int,Int}}}()
@@ -47,6 +48,59 @@ function _cnot_pattern_layers(nqubits::Int; max_stride::Int=nqubits-1, active_nq
         push!(layers, layer)
     end
     return layers
+end
+
+function _has_pre_fourth_cnot_rxrz(nqubits::Int; max_stride::Int=nqubits-1,
+                                   active_nqubits::Int=nqubits)
+    1 <= active_nqubits <= nqubits || throw(ArgumentError("active_nqubits must be between 1 and nqubits"))
+    active_nqubits == 1 && return false
+    clamped_stride = clamp(max_stride, 1, active_nqubits-1)
+    return nqubits == 5 && active_nqubits == 5 && clamped_stride == 4
+end
+
+_rotation_blocks_per_layer(nqubits::Int; max_stride::Int=nqubits-1,
+                           active_nqubits::Int=nqubits) =
+    1 + (_has_pre_fourth_cnot_rxrz(nqubits;
+                                   max_stride=max_stride,
+                                   active_nqubits=active_nqubits) ? 1 : 0)
+
+function _gate_param_count(p::Int, nqubits::Int; max_stride::Int=nqubits-1,
+                           active_nqubits::Int=nqubits)
+    return PARAMS_PER_QUBIT_PER_LAYER * nqubits * p *
+           _rotation_blocks_per_layer(nqubits;
+                                      max_stride=max_stride,
+                                      active_nqubits=active_nqubits)
+end
+
+"""
+    gate_parameter_count(p, nqubits; unit_cell=:single, row=1, share_params=true,
+                         max_stride=nqubits-1, active_nqubits=nqubits)
+
+Return the number of variational parameters required by the gate builders.
+For the fully active 5-qubit ansatz, each layer includes an additional Rx-Rz
+rotation block before the fourth CNOT layer.
+"""
+function gate_parameter_count(p::Int, nqubits::Int; unit_cell::Symbol=:single,
+                              row::Int=1, share_params::Bool=true,
+                              max_stride::Int=nqubits-1,
+                              active_nqubits::Int=nqubits)
+    chunk = _gate_param_count(p, nqubits;
+                              max_stride=max_stride,
+                              active_nqubits=active_nqubits)
+    if unit_cell === :single
+        return share_params ? chunk : row * chunk
+    elseif unit_cell === :two_by_two
+        return 4 * chunk
+    else
+        throw(ArgumentError("unit_cell must be :single or :two_by_two"))
+    end
+end
+
+function _rotation_param_index(p::Int, nqubits::Int, r::Int, q::Int, block::Int)
+    ppq = PARAMS_PER_QUBIT_PER_LAYER
+    block_offset = ppq * nqubits * p * (block - 1)
+    layer_offset = ppq * nqubits * (r - 1)
+    return block_offset + layer_offset + ppq * (q - 1) + 1
 end
 
 """
@@ -94,23 +148,51 @@ continues to use the dense matrix builder.
 function local_circuit_ops(p::Int, nqubits::Int; max_stride::Int=nqubits-1,
                            active_nqubits::Int=nqubits)
     1 <= active_nqubits <= nqubits || throw(ArgumentError("active_nqubits must be between 1 and nqubits"))
-    ppq = PARAMS_PER_QUBIT_PER_LAYER
     ops = LocalCircuitOp[]
 
-    for r in 1:p
+    function push_rxrz_block!(block::Int, r::Int)
         for q in 1:active_nqubits
-            idx = ppq*nqubits*(r-1) + ppq*(q-1) + 1
+            idx = _rotation_param_index(p, nqubits, r, q, block)
             push!(ops, LocalCircuitOp(:rx, (q,), r, idx))
             push!(ops, LocalCircuitOp(:rz, (q,), r, idx + 1))
         end
-        for (control, target) in cnot_pattern(nqubits;
-                                              max_stride=max_stride,
-                                              active_nqubits=active_nqubits)
-            push!(ops, LocalCircuitOp(:cnot, (control, target), r, nothing))
+    end
+
+    cnot_layers = _cnot_pattern_layers(nqubits;
+                                       max_stride=max_stride,
+                                       active_nqubits=active_nqubits)
+    add_pre_fourth_rxrz = _has_pre_fourth_cnot_rxrz(nqubits;
+                                                    max_stride=max_stride,
+                                                    active_nqubits=active_nqubits)
+
+    for r in 1:p
+        push_rxrz_block!(1, r)
+        for (layer_index, cnot_layer) in enumerate(cnot_layers)
+            if add_pre_fourth_rxrz && layer_index == _PRE_FOURTH_CNOT_RXRZ_LAYER
+                push_rxrz_block!(2, r)
+            end
+            for (control, target) in cnot_layer
+                push!(ops, LocalCircuitOp(:cnot, (control, target), r, nothing))
+            end
         end
     end
 
     return ops
+end
+
+function _push_rotation_columns!(columns, rotation_ops::Vector{LocalCircuitOp}, nqubits::Int)
+    isempty(rotation_ops) && return
+    rx_column = fill("\\qw", nqubits)
+    rz_column = fill("\\qw", nqubits)
+    for op in rotation_ops
+        if op.kind == :rx
+            rx_column[op.qubits[1]] = _quantikz_gate(op)
+        elseif op.kind == :rz
+            rz_column[op.qubits[1]] = _quantikz_gate(op)
+        end
+    end
+    push!(columns, rx_column)
+    push!(columns, rz_column)
 end
 
 function _quantikz_gate(op::LocalCircuitOp)
@@ -135,27 +217,25 @@ function circuit_quantikz(p::Int, nqubits::Int; max_stride::Int=nqubits-1,
                             max_stride=max_stride,
                             active_nqubits=active_nqubits)
     columns = Vector{Vector{String}}()
-    for r in 1:p
-        rx_column = fill("\\qw", nqubits)
-        rz_column = fill("\\qw", nqubits)
-        for op in ops
-            op.layer == r || continue
-            if op.kind == :rx
-                rx_column[op.qubits[1]] = _quantikz_gate(op)
-            elseif op.kind == :rz
-                rz_column[op.qubits[1]] = _quantikz_gate(op)
-            end
-        end
-        push!(columns, rx_column)
-        push!(columns, rz_column)
 
-        for op in ops
-            op.layer == r && op.kind == :cnot || continue
+    i = 1
+    while i <= length(ops)
+        op = ops[i]
+        if op.kind == :cnot
             control, target = op.qubits
             cnot_column = fill("\\qw", nqubits)
             cnot_column[control] = "\\ctrl{$(target - control)}"
             cnot_column[target] = "\\targ{}"
             push!(columns, cnot_column)
+            i += 1
+        else
+            rotation_ops = LocalCircuitOp[]
+            layer = op.layer
+            while i <= length(ops) && ops[i].kind != :cnot && ops[i].layer == layer
+                push!(rotation_ops, ops[i])
+                i += 1
+            end
+            _push_rotation_columns!(columns, rotation_ops, nqubits)
         end
     end
 
@@ -186,24 +266,25 @@ with full SU(2) single-qubit rotations and brick-wall CNOT entangling layers.
 - Vector of unitary gate matrices
 
 # Notes
-- When `share_params=true`: requires `$(PARAMS_PER_QUBIT_PER_LAYER)*nqubits*p` parameters
-- When `share_params=false`: requires `$(PARAMS_PER_QUBIT_PER_LAYER)*nqubits*p*row` parameters
+- Use `gate_parameter_count(p, nqubits; share_params, row, max_stride, active_nqubits)`
+  to compute the required number of parameters.
 """
 function build_unitary_gate(params, p, row, nqubits; share_params=true, max_stride::Int=nqubits-1,
                             active_nqubits::Int=nqubits)
     1 <= active_nqubits <= nqubits || throw(ArgumentError("active_nqubits must be between 1 and nqubits"))
     A_matrix = Vector{Matrix{ComplexF64}}(undef, row)
     dim = 2^nqubits
-    params_per_layer = PARAMS_PER_QUBIT_PER_LAYER * nqubits
     
     for i in 1:row
         A_matrix[i] = Matrix(Array{ComplexF64}(I, dim, dim))
     end
     
-    ppq = PARAMS_PER_QUBIT_PER_LAYER  # 2
+    chunk = _gate_param_count(p, nqubits;
+                              max_stride=max_stride,
+                              active_nqubits=active_nqubits)
     if share_params
-        @assert length(params) >= ppq*nqubits*p "Need at least $(ppq*nqubits*p) parameters for shared parameters mode"
-        shared_params = params[1:ppq*nqubits*p]
+        @assert length(params) >= chunk "Need at least $chunk parameters for shared parameters mode"
+        shared_params = params[1:chunk]
         for i in 1:row
             for r in 1:p
                 A_matrix[i] *= _build_layer(shared_params, r, nqubits;
@@ -211,9 +292,9 @@ function build_unitary_gate(params, p, row, nqubits; share_params=true, max_stri
             end
         end
     else
-        @assert length(params) >= ppq*nqubits*p*row "Need at least $(ppq*nqubits*p*row) parameters for independent parameters mode"
+        @assert length(params) >= chunk*row "Need at least $(chunk*row) parameters for independent parameters mode"
         for i in 1:row
-            params_i = params[ppq*nqubits*p*(i-1)+1:ppq*nqubits*p*i]
+            params_i = params[chunk*(i-1)+1:chunk*i]
             for r in 1:p
                 A_matrix[i] *= _build_layer(params_i, r, nqubits;
                                             max_stride=max_stride, active_nqubits=active_nqubits)
@@ -239,7 +320,7 @@ The 4 gates tile the lattice as:
     even columns: [C, D, C, D, ...]
 
 # Arguments
-- `params`: Parameter vector of length `4 * PARAMS_PER_QUBIT_PER_LAYER * nqubits * p`
+- `params`: Parameter vector of length `gate_parameter_count(p, nqubits; unit_cell=:two_by_two)`
 - `p`: Number of layers per gate
 - `row`: Number of rows
 - `nqubits`: Number of qubits per gate
@@ -252,8 +333,9 @@ The 4 gates tile the lattice as:
 function build_unitary_gate_2x2(params, p, row, nqubits; max_stride::Int=nqubits-1,
                                 active_nqubits::Int=nqubits)
     1 <= active_nqubits <= nqubits || throw(ArgumentError("active_nqubits must be between 1 and nqubits"))
-    ppq = PARAMS_PER_QUBIT_PER_LAYER  # 2
-    chunk = ppq * nqubits * p
+    chunk = _gate_param_count(p, nqubits;
+                              max_stride=max_stride,
+                              active_nqubits=active_nqubits)
     @assert length(params) >= 4 * chunk "Need at least $(4*chunk) parameters for 2×2 unit cell"
 
     dim = 2^nqubits
@@ -281,19 +363,14 @@ function build_unitary_gate_2x2(params, p, row, nqubits; max_stride::Int=nqubits
     return gates_odd, gates_even
 end
 
-"""
-Build a single layer: raw Rx·Rz rotations ⊗ cached CNOT product.
-No Yao objects created — pure matrix arithmetic.
-"""
-function _build_layer(params, r, nqubits; max_stride::Int=nqubits-1, active_nqubits::Int=nqubits)
-    # Compute Rx(θx)·Rz(θz) for each qubit as a raw 2×2 matrix
-    # 2 parameters per qubit per layer
-    ppq = PARAMS_PER_QUBIT_PER_LAYER  # 2
+function _rotation_block(params, p::Int, r::Int, nqubits::Int, block::Int;
+                         active_nqubits::Int=nqubits)
+    # Compute Rx(θx)·Rz(θz) for each qubit as a raw 2×2 matrix.
     gate = Matrix{ComplexF64}(undef, 1, 1)
     gate[1,1] = one(ComplexF64)
 
     for i in 1:nqubits
-        idx = ppq*nqubits*(r-1) + ppq*(i-1) + 1
+        idx = _rotation_param_index(p, nqubits, r, i, block)
         if i <= active_nqubits
             θx = params[idx]; θz = params[idx+1]
             # Rx(θx)
@@ -312,14 +389,59 @@ function _build_layer(params, r, nqubits; max_stride::Int=nqubits-1, active_nqub
         gate = kron(sq, gate)
     end
 
-    return gate * _get_cnot_product(nqubits; max_stride=max_stride, active_nqubits=active_nqubits)
+    return gate
+end
+
+function _cnot_layers_product(nqubits::Int, cnot_layers)
+    dim = 1 << nqubits
+    result = Matrix{ComplexF64}(I, dim, dim)
+    for cnot_layer in cnot_layers
+        layer = Matrix{ComplexF64}(I, dim, dim)
+        for (control, target) in cnot_layer
+            layer *= Matrix(cnot(nqubits, control, target))
+        end
+        result *= layer
+    end
+    return result
 end
 
 """
-    embed_params(params, p, nqubits_from, nqubits_to; unit_cell=:single)
+Build a single layer: raw Rx·Rz rotations ⊗ CNOT product.
+For the fully active 5-qubit ansatz, insert one extra Rx·Rz block before the
+fourth CNOT layer.
+"""
+function _build_layer(params, r, nqubits; max_stride::Int=nqubits-1, active_nqubits::Int=nqubits)
+    p = length(params) ÷ (PARAMS_PER_QUBIT_PER_LAYER * nqubits *
+                          _rotation_blocks_per_layer(nqubits;
+                                                     max_stride=max_stride,
+                                                     active_nqubits=active_nqubits))
+    rotations = _rotation_block(params, p, r, nqubits, 1; active_nqubits=active_nqubits)
+
+    if _has_pre_fourth_cnot_rxrz(nqubits;
+                                 max_stride=max_stride,
+                                 active_nqubits=active_nqubits)
+        cnot_layers = _cnot_pattern_layers(nqubits;
+                                           max_stride=max_stride,
+                                           active_nqubits=active_nqubits)
+        before = _cnot_layers_product(nqubits, cnot_layers[1:_PRE_FOURTH_CNOT_RXRZ_LAYER-1])
+        after = _cnot_layers_product(nqubits, cnot_layers[_PRE_FOURTH_CNOT_RXRZ_LAYER:end])
+        extra_rotations = _rotation_block(params, p, r, nqubits, 2; active_nqubits=active_nqubits)
+        return rotations * before * extra_rotations * after
+    end
+
+    return rotations * _get_cnot_product(nqubits;
+                                         max_stride=max_stride,
+                                         active_nqubits=active_nqubits)
+end
+
+"""
+    embed_params(params, p, nqubits_from, nqubits_to; unit_cell=:single,
+                 active_nqubits_from=nqubits_from, active_nqubits_to=nqubits_to)
 
 Embed parameters from a smaller nqubits into a larger nqubits parameter space.
 Copies existing qubit rotations and sets new qubits to identity (θ=0).
+When the target is the fully active 5-qubit ansatz, the extra Rx-Rz block is
+initialized to identity rotations.
 
 Works for both `:single` (shared params) and `:two_by_two` (4 gate chunks) unit cells.
 
@@ -331,12 +453,26 @@ params_5 = embed_params(params_3, p, 3, 5; unit_cell=:two_by_two)
 ```
 """
 function embed_params(params::Vector{Float64}, p::Int, nqubits_from::Int, nqubits_to::Int;
-                      unit_cell::Symbol=:single)
+                      unit_cell::Symbol=:single,
+                      max_stride_from::Int=nqubits_from-1,
+                      max_stride_to::Int=nqubits_to-1,
+                      active_nqubits_from::Int=nqubits_from,
+                      active_nqubits_to::Int=nqubits_to)
     nqubits_to > nqubits_from || error("nqubits_to ($nqubits_to) must be > nqubits_from ($nqubits_from)")
-    ppq = PARAMS_PER_QUBIT_PER_LAYER  # 2
+    ppq = PARAMS_PER_QUBIT_PER_LAYER
 
-    chunk_from = ppq * nqubits_from * p
-    chunk_to   = ppq * nqubits_to * p
+    chunk_from = _gate_param_count(p, nqubits_from;
+                                   max_stride=max_stride_from,
+                                   active_nqubits=active_nqubits_from)
+    chunk_to = _gate_param_count(p, nqubits_to;
+                                 max_stride=max_stride_to,
+                                 active_nqubits=active_nqubits_to)
+    blocks_from = _rotation_blocks_per_layer(nqubits_from;
+                                             max_stride=max_stride_from,
+                                             active_nqubits=active_nqubits_from)
+    blocks_to = _rotation_blocks_per_layer(nqubits_to;
+                                           max_stride=max_stride_to,
+                                           active_nqubits=active_nqubits_to)
 
     n_chunks = unit_cell == :two_by_two ? 4 : 1
     @assert length(params) >= n_chunks * chunk_from "Expected $(n_chunks * chunk_from) params, got $(length(params))"
@@ -344,15 +480,18 @@ function embed_params(params::Vector{Float64}, p::Int, nqubits_from::Int, nqubit
     new_params = zeros(Float64, n_chunks * chunk_to)
 
     for c in 0:(n_chunks-1)
-        old_chunk = params[c*chunk_from+1 : (c+1)*chunk_from]
         for r in 1:p
-            for i in 1:nqubits_from
-                old_idx = ppq * nqubits_from * (r-1) + ppq * (i-1) + 1
-                new_idx = c * chunk_to + ppq * nqubits_to * (r-1) + ppq * (i-1) + 1
-                new_params[new_idx]   = old_chunk[old_idx]
-                new_params[new_idx+1] = old_chunk[old_idx+1]
+            for block in 1:min(blocks_from, blocks_to)
+                for i in 1:nqubits_from
+                    old_idx = c * chunk_from + _rotation_param_index(p, nqubits_from, r, i, block)
+                    new_idx = c * chunk_to + _rotation_param_index(p, nqubits_to, r, i, block)
+                    for k in 0:ppq-1
+                        new_params[new_idx+k] = params[old_idx+k]
+                    end
+                end
             end
             # Qubits nqubits_from+1 : nqubits_to stay at 0 (identity rotation)
+            # Extra target rotation blocks also stay at 0 unless copied above.
         end
     end
 

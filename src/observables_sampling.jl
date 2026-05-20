@@ -933,10 +933,11 @@ function resample_circuit(filename::String; conv_step=100, samples=1000000, meas
     println("Measure first: $measure_first")
     println("Conv steps: $conv_step, Samples: $samples")
 
-    # Detect unit cell type: 2x2 if param count matches 4*3*nqubits*p
+    # Detect unit cell type from the parameter count expected by the gate builder.
     model_str = get(input_args, :model, "tfim")
     m = _construct_model(model_str, Dict{Symbol,Any}(k => v for (k,v) in input_args if k in (:J, :g, :J1, :J2)))
-    is_two_by_two = (model_str == "heisenberg_j1j2") && (length(params) == 4 * PARAMS_PER_QUBIT_PER_LAYER * nqubits * p)
+    is_two_by_two = (model_str == "heisenberg_j1j2") &&
+        (length(params) == gate_parameter_count(p, nqubits; unit_cell=:two_by_two))
 
     # Reconstruct gates from parameters
     if is_two_by_two

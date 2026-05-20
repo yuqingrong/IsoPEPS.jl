@@ -10,15 +10,17 @@ using Random
     # Test all modes return correct size
     for mode in [:meanfield, :entangled, :random]
         params = initialize_tfim_params(p, nqubits, g; mode=mode)
-        @test length(params) == 2 * nqubits * p
+        @test length(params) == gate_parameter_count(p, nqubits)
     end
+    @test length(initialize_tfim_params(p, 5, g; mode=:meanfield)) == gate_parameter_count(p, 5)
     
     # Test entangled mode creates GHZ/Bell state
     # Only layer 1, last qubit has Rx(π/2); all others are identity
     entangled_params = initialize_tfim_params(p, nqubits, g; mode=:entangled)
+    ppq = IsoPEPS.PARAMS_PER_QUBIT_PER_LAYER
     for layer in 1:p
         for q in 1:nqubits
-            idx = 2*nqubits*(layer-1) + 2*(q-1) + 1
+            idx = ppq*nqubits*(layer-1) + ppq*(q-1) + 1
             if layer == 1 && q == nqubits
                 # Layer 1, last qubit: creates superposition
                 @test entangled_params[idx] ≈ π/2      # Rx(π/2)
@@ -36,7 +38,7 @@ using Random
     θ_mf = atan(1.0 / g)
     for layer in 1:p
         for q in 1:nqubits
-            idx = 2*nqubits*(layer-1) + 2*(q-1) + 1
+            idx = ppq*nqubits*(layer-1) + ppq*(q-1) + 1
             @test abs(meanfield_params[idx] - θ_mf) < 0.5  # Rx near mean-field
         end
     end
@@ -46,8 +48,7 @@ end
     # Small test: 2 iterations only
     g, J = 2.0, 1.0
     p, row, nqubits = 1, 2, 3
-    # Uses 3 params per qubit per layer (Rz-Ry-Rz decomposition)
-    params = rand(3 * nqubits * p)
+    params = rand(gate_parameter_count(p, nqubits))
     
     result = optimize_circuit(params, p, row, nqubits;
                               model=TFIM(J=J, g=g),
@@ -67,8 +68,7 @@ end
     # Small test: 2 iterations only
     g, J = 2.0, 1.0
     p, row, nqubits = 1, 2, 3
-    # Uses 3 params per qubit per layer (Rz-Ry-Rz decomposition)
-    params = rand(3 * nqubits * p)
+    params = rand(gate_parameter_count(p, nqubits))
     
     result = optimize_exact(params, J, g, p, row, nqubits; maxiter=2)
     

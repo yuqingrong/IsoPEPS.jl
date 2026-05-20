@@ -114,6 +114,39 @@ function _flush_generation!(generation_energies, generation_params,
 end
 
 """
+    initialize_tfim_params(p, nqubits, g; mode=:meanfield, rng=Random.default_rng())
+
+Create an initial Rx-Rz parameter vector for TFIM circuit optimization.
+
+Modes:
+- `:meanfield`: set each Rx angle to the mean-field tilt `atan(1 / g)`, with Rz zero
+- `:entangled`: set the first layer's final-qubit Rx angle to `π/2`, with all other angles zero
+- `:random`: draw all angles uniformly from `[0, 2π)`
+"""
+function initialize_tfim_params(p::Int, nqubits::Int, g::Real;
+                                mode::Symbol=:meanfield,
+                                rng::AbstractRNG=Random.default_rng())
+    params = zeros(Float64, gate_parameter_count(p, nqubits))
+    blocks = _rotation_blocks_per_layer(nqubits)
+
+    if mode === :meanfield
+        θ_mf = atan(1.0 / Float64(g))
+        for block in 1:blocks, layer in 1:p, q in 1:nqubits
+            idx = _rotation_param_index(p, nqubits, layer, q, block)
+            params[idx] = θ_mf
+        end
+    elseif mode === :entangled
+        params[_rotation_param_index(p, nqubits, 1, nqubits, 1)] = π/2
+    elseif mode === :random
+        params .= 2π .* rand(rng, length(params))
+    else
+        throw(ArgumentError("mode must be :meanfield, :entangled, or :random"))
+    end
+
+    return params
+end
+
+"""
     optimize_circuit(params, p, row, nqubits; model="tfim", model_kwargs...)
 
 Optimize a quantum circuit using sampling-based CMA-ES.
