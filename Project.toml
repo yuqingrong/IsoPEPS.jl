@@ -65,8 +65,12 @@ YaoBlocks = "0.13, 0.14"
 julia = "1.10"
 
 [extras]
+MPSKitModels = "ca635005-6f8c-4cd1-b51d-8491250ef2ab"
+Manifolds = "1cead3c2-87b3-11e9-0ccd-23c62b72b94e"
+Manopt = "0fc0a36d-df90-57f3-8f93-d78a9fc72bb5"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+TensorKit = "07d1fe3e-3e46-537d-9eac-e9e13d0d4cec"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "Random"]
+test = ["Test", "Random", "TensorKit", "MPSKitModels", "Manifolds", "Manopt"]

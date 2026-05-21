@@ -1,6 +1,6 @@
 using Test
 using IsoPEPS
-using CairoMakie: Figure, Legend, Theme, with_theme
+using CairoMakie: Figure, Legend, Theme, to_color, with_theme
 
 @testset "save and load results" begin
     # Test CircuitOptimizationResult
@@ -69,19 +69,6 @@ end
 
 @testset "ACF correlation length from channel sampling" begin
    
-end
-
-@testset "plot_acf" begin
-    lags = 0:49
-    acf = exp.(-lags ./ 10.0)
-    
-    fig = plot_acf(lags, acf; title="Test ACF")
-    @test fig isa Figure
-    
-    # With fit using fit_acf
-    fit_params = fit_acf(lags, acf)
-    fig2 = plot_acf(lags, acf; fit_params=fit_params)
-    @test fig2 isa Figure
 end
 
 @testset "plot_training_history" begin

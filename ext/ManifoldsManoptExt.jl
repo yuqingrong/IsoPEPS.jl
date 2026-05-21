@@ -4,8 +4,8 @@ using IsoPEPS
 using Manifolds
 using Manopt
 
-function IsoPEPS.optimize_manifold(gate, row::Int, nqubits::Int, manifold::AbstractManifold,
-                           J::Float64, g::Float64; maxiter=3000)
+function IsoPEPS.optimize_manifold(gate, row::Int, nqubits::Int, manifold,
+                           J::Float64, g::Float64; maxiter=3000, swarm_size=20)
     initial_gate = copy(gate)
     virtual_qubits = (nqubits - 1) ÷ 2
 
@@ -42,7 +42,7 @@ function IsoPEPS.optimize_manifold(gate, row::Int, nqubits::Int, manifold::Abstr
     @assert is_point(manifold, Matrix(gate)) "Initial gate must be on manifold"
 
     result = Manopt.particle_swarm(manifold, f;
-        swarm_size = 20,
+        swarm_size = swarm_size,
         stopping_criterion = StopAfterIteration(maxiter) | StopWhenSwarmVelocityLess(1e-6),
         record = [:Iteration, :Cost],
         return_state = true
@@ -65,6 +65,7 @@ function IsoPEPS.optimize_manifold(gate, row::Int, nqubits::Int, manifold::Abstr
         :g => g, :J => J, :row => row, :nqubits => nqubits,
         :initial_gate => initial_gate,
         :maxiter => maxiter,
+        :swarm_size => swarm_size,
         :manifold_type => string(typeof(manifold))
     )
     IsoPEPS.save_result("data/manifold_g=$(g)_row=$(row).json", opt_result, input_args)

@@ -1,31 +1,23 @@
 using IsoPEPS
 using Test
 
-@testset "gates" begin
-    include("gates.jl")
-end
+const TEST_FILES = [
+    "gates" => "gates.jl",
+    "transfer_matrix" => "transfer_matrix.jl",
+    "observables" => "observables.jl",
+    "quantum_channels" => "quantum_channels.jl",
+    "reference" => "reference.jl",
+    "training" => "training.jl",
+    "visualization" => "visualization.jl",
+]
 
-@testset "transfer_matrix" begin
-    include("transfer_matrix.jl")
-end
+const REQUESTED_TESTS = isempty(ARGS) ? first.(TEST_FILES) : ARGS
 
-@testset "observables" begin
-    include("observables.jl")
-end
+for name in REQUESTED_TESTS
+    file_idx = findfirst(==(name), first.(TEST_FILES))
+    isnothing(file_idx) && error("Unknown test set: $name")
 
-
-@testset "quantum_channels" begin
-    include("quantum_channels.jl")
-end
-
-@testset "reference" begin
-    include("reference.jl")
-end
-
-@testset "training" begin
-    include("training.jl")
-end
-
-@testset "visualization" begin
-    include("visualization.jl")
+    @testset "$name" begin
+        include(TEST_FILES[file_idx].second)
+    end
 end

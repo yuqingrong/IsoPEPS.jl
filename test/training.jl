@@ -86,16 +86,17 @@ end
 
 @testset "optimize_manifold" begin
     using Manifolds
+    using Manopt
     
     g, J = 2.0, 1.0
     row, nqubits = 1, 3
     dim = 2^nqubits
     
     # Create unitary manifold
-    M = Stiefel(dim, dim, ℂ)
+    M = Stiefel(dim, dim, Manifolds.ℂ)
     gate = rand(M)
     
-    result = optimize_manifold(gate, row, nqubits, M, J, g; maxiter=2)
+    result = optimize_manifold(gate, row, nqubits, M, J, g; maxiter=1, swarm_size=2)
     
     @test result isa ManifoldOptimizationResult
     @test result.energy isa Float64

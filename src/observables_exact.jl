@@ -85,6 +85,15 @@ end
 # Section 2: Core expect API
 # =============================================================================
 
+function _expect_with_ops(op::TransferOperator,
+                          ops::Dict{Tuple{Int,Int},<:AbstractMatrix};
+                          optimizer=GreedyMethod())
+    T_combined = prod(_column_transfer_matrices(op))
+    l_vec, r_vec, nf, _ = _fixed_points(T_combined)
+    T_op = get_transfer_matrix_with_operator(op, ops; optimizer=optimizer)
+    return dot(l_vec, T_op * r_vec) / nf
+end
+
 """
     expect(op::TransferOperator, obs; col=1, position=1, optimizer=GreedyMethod())
 
@@ -94,12 +103,8 @@ Single-site expectation ⟨O_{col,pos}⟩ for an N-column unit cell.
 """
 function expect(op::TransferOperator, obs;
                 col::Int=1, position::Int=1, optimizer=GreedyMethod())
-    O = _resolve_op(obs)
-    T_combined = prod(_column_transfer_matrices(op))
-    l_vec, r_vec, nf, _ = _fixed_points(T_combined)
-    T̃ = get_transfer_matrix_with_operator(op, Dict((col, position) => O);
-                                          optimizer=optimizer)
-    return dot(l_vec, T̃ * r_vec) / nf
+    return _expect_with_ops(op, Dict((col, position) => _resolve_op(obs));
+                            optimizer=optimizer)
 end
 
 """
@@ -112,10 +117,7 @@ function expect(op::TransferOperator, sites::Dict{Tuple{Int,Int},<:Any};
                 optimizer=GreedyMethod())
     ops = Dict{Tuple{Int,Int}, Matrix{ComplexF64}}(
         k => _resolve_op(v) for (k, v) in sites)
-    T_combined = prod(_column_transfer_matrices(op))
-    l_vec, r_vec, nf, _ = _fixed_points(T_combined)
-    T̃ = get_transfer_matrix_with_operator(op, ops; optimizer=optimizer)
-    return dot(l_vec, T̃ * r_vec) / nf
+    return _expect_with_ops(op, ops; optimizer=optimizer)
 end
 
 # --- Backward-compat wrappers (1×1 UC) ---
@@ -127,8 +129,8 @@ Single-operator expectation for a 1×1 unit cell (legacy interface).
 """
 function expect(gates, row, virtual_qubits, observable::Union{Symbol,AbstractMatrix};
                 position::Int=1, optimizer=GreedyMethod())
-    return expect(gates, row, virtual_qubits,
-                  Dict(position => observable); optimizer=optimizer)
+    op = TransferOperator([gates], row, virtual_qubits)
+    return expect(op, observable; col=1, position=position, optimizer=optimizer)
 end
 
 """
@@ -139,9 +141,9 @@ Multi-operator expectation within a single column (legacy interface).
 function expect(gates, row, virtual_qubits,
                 operators::Dict{Int,<:Union{Symbol,AbstractMatrix}};
                 optimizer=GreedyMethod())
-    sites = Dict{Tuple{Int,Int}, Any}((1, pos) => op for (pos, op) in operators)
-    return expect(TransferOperator([gates], row, virtual_qubits), sites;
-                  optimizer=optimizer)
+    op = TransferOperator([gates], row, virtual_qubits)
+    sites = Dict((1, pos) => obs for (pos, obs) in operators)
+    return expect(op, sites; optimizer=optimizer)
 end
 
 # =============================================================================
@@ -312,6 +314,29 @@ function compute_exact_energy(gates, row, virtual_qubits, J, g;
     return -g * X_total - J * (row == 1 ? ZZ_horiz : ZZ_vert + ZZ_horiz)
 end
 
+"""
+    compute_exact_energy(params, g, J, p, row, nqubits; kwargs...)
+
+Build a 1×1 circuit from `params` and return `(gap, energy)`.
+This keeps the historical parameter-vector test helper available.
+"""
+function compute_exact_energy(params::AbstractVector, g::Real, J::Real,
+                              p::Int, row::Int, nqubits::Int;
+                              share_params::Bool=true,
+                              max_stride::Int=nqubits-1,
+                              active_nqubits::Int=nqubits,
+                              optimizer=GreedyMethod())
+    gates = build_unitary_gate(params, p, row, nqubits;
+                               share_params=share_params,
+                               max_stride=max_stride,
+                               active_nqubits=active_nqubits)
+    _, gap, _ = compute_transfer_spectrum(gates, row, nqubits)
+    virtual_qubits = (nqubits - 1) ÷ 2
+    energy = compute_exact_energy(gates, row, virtual_qubits, J, g;
+                                  optimizer=optimizer)
+    return gap, real(energy)
+end
+
 function _compute_pauli_total(gates, row, virtual_qubits, obs::Symbol; optimizer=GreedyMethod())
     total = 0.0
     for pos in 1:row
@@ -324,22 +349,22 @@ end
 """
     compute_X_expectation(rho, gates, row, virtual_qubits; optimizer)
 
-Total ⟨X⟩ = Σ_pos ⟨X_pos⟩ summed over all row positions.
+Mean ⟨X⟩ over row positions.
 `rho` is accepted for API compatibility but unused.
 """
 compute_X_expectation(rho, gates, row, virtual_qubits;
                       optimizer=GreedyMethod()) =
-    _compute_pauli_total(gates, row, virtual_qubits, :X; optimizer=optimizer)
+    _compute_pauli_total(gates, row, virtual_qubits, :X; optimizer=optimizer) / row
 
 """
     compute_Z_expectation(rho, gates, row, virtual_qubits; optimizer)
 
-Total ⟨Z⟩ = Σ_pos ⟨Z_pos⟩ summed over all row positions.
+Mean ⟨Z⟩ over row positions.
 `rho` is accepted for API compatibility but unused.
 """
 compute_Z_expectation(rho, gates, row, virtual_qubits;
                       optimizer=GreedyMethod()) =
-    _compute_pauli_total(gates, row, virtual_qubits, :Z; optimizer=optimizer)
+    _compute_pauli_total(gates, row, virtual_qubits, :Z; optimizer=optimizer) / row
 
 """
     compute_single_expectation(rho, gates, row, virtual_qubits, observable;
@@ -359,8 +384,8 @@ compute_single_expectation(rho, gates, row, virtual_qubits, observable;
 Vertical and horizontal ZZ correlations for a single column.
 
 Returns `(ZZ_vert, ZZ_horiz)`:
-- `ZZ_vert`:  Σ ⟨Z_i Z_{i+1}⟩ over vertical bonds (periodic boundary)
-- `ZZ_horiz`: Σ ⟨Z_pos(col) Z_pos(col+1)⟩ over horizontal bonds
+- `ZZ_vert`:  mean ⟨Z_i Z_{i+1}⟩ over vertical bonds (periodic boundary)
+- `ZZ_horiz`: mean ⟨Z_pos(col) Z_pos(col+1)⟩ over horizontal bonds
 """
 function compute_ZZ_expectation(rho, gates, row, virtual_qubits;
                                 optimizer=GreedyMethod())
@@ -382,7 +407,7 @@ function compute_ZZ_expectation(rho, gates, row, virtual_qubits;
                                     position=pos, optimizer=optimizer)
         ZZ_horiz += real(corr[1])
     end
-    return ZZ_vert, ZZ_horiz
+    return row > 1 ? ZZ_vert / row : 0.0, ZZ_horiz / row
 end
 
 # =============================================================================
@@ -780,98 +805,6 @@ function all_bond_expectations(op::TransferOperator; optimizer=GreedyMethod())
     end
     return (vert, horiz)
 end
-
-"""
-    plaquette_plaquette_correlation(op::TransferOperator, separations;
-                                    pos::Int=1, connected::Bool=true,
-                                    optimizer=GreedyMethod())
-
-Exact plaquette-plaquette correlation on a cylinder.
-
-The plaquette operator on the 2×2 square with corners
-(pos,c), (pos',c), (pos',c+1), (pos,c+1) where pos' = pos%row+1 is:
-
-    Q_□ = S_{pos,c}·S_{pos',c} + S_{pos',c}·S_{pos',c+1}
-        + S_{pos',c+1}·S_{pos,c+1} + S_{pos,c+1}·S_{pos,c}
-
-Each bond is S_i·S_j = Σ_α σ^α_i σ^α_j / 4. The plaquette spans columns (1, 2)
-of the unit cell. Separations are in units of full unit-cell periods.
-
-# Returns
-- `Dict{Int, ComplexF64}` mapping separation → plaquette-plaquette correlation
-"""
-function plaquette_plaquette_correlation(op::TransferOperator, separations;
-                                          pos::Int=1,
-                                          connected::Bool=true,
-                                          optimizer=GreedyMethod())
-    paulis = [_resolve_op(:X), _resolve_op(:Y), _resolve_op(:Z)]
-    seps = separations isa Integer ? [separations] : collect(separations)
-    isempty(seps) && return Dict{Int, ComplexF64}()
-
-    N   = length(op.columns)
-    row = op.row
-    vq  = op.virtual_qubits
-    pos2 = pos % row + 1  # periodic wrap
-
-    T_cols     = _column_transfer_matrices(op)
-    T_combined = prod(T_cols)
-    l_vec, r_vec, nf, _ = _fixed_points(T_combined)
-
-    # Precompute single-operator E_O for columns 1,2 at pos and pos2
-    E_O = Dict{Tuple{Int,Int,Int}, Matrix{ComplexF64}}()
-    for c in 1:min(N, 2), (si, σ) in enumerate(paulis), p in (pos, pos2)
-        E_O[(c, si, p)] = get_transfer_matrix_with_operator(
-            op.columns[c], row, vq, σ; position=p, optimizer=optimizer)
-    end
-
-    # Q_□ spans columns (1, 2) with 4 bonds:
-    #   Bond 1 (left vert):  (pos,1)-(pos',1)   → two-op in col 1
-    #   Bond 2 (bottom):     (pos',1)-(pos',2)   → single-op in col 1 × single-op in col 2
-    #   Bond 3 (right vert): (pos,2)-(pos',2)    → two-op in col 2
-    #   Bond 4 (top):        (pos,1)-(pos,2)     → single-op in col 1 × single-op in col 2
-
-    T_tail = N > 2 ? prod(T_cols[3:end]) : Matrix{ComplexF64}(I, size(T_cols[1]))
-
-    T_Q_period = zeros(ComplexF64, size(T_cols[1]))
-    for (si, σ) in enumerate(paulis)
-        # Bond 1: vertical in col 1
-        E_vert1 = get_transfer_matrix_with_operator(
-            op.columns[1], row, vq, Dict(pos => σ, pos2 => σ); optimizer=optimizer)
-        T_Q_period .+= E_vert1 * T_cols[2] * T_tail
-
-        # Bond 2: horizontal at pos2 across (col1, col2)
-        T_Q_period .+= E_O[(1, si, pos2)] * E_O[(2, si, pos2)] * T_tail
-
-        # Bond 3: vertical in col 2
-        E_vert2 = get_transfer_matrix_with_operator(
-            op.columns[2], row, vq, Dict(pos => σ, pos2 => σ); optimizer=optimizer)
-        T_Q_period .+= T_cols[1] * E_vert2 * T_tail
-
-        # Bond 4: horizontal at pos across (col1, col2)
-        T_Q_period .+= E_O[(1, si, pos)] * E_O[(2, si, pos)] * T_tail
-    end
-    T_Q_period ./= 4.0
-
-    # Compute correlations: l† T_Q T^{r-1} T_Q r / nf
-    l_TQ = T_Q_period' * l_vec
-    correlations = Dict{Int, ComplexF64}()
-    for sep in sort(seps)
-        current = T_Q_period * r_vec
-        for _ in 1:max(sep - 1, 0)
-            current = T_combined * current
-        end
-        correlations[sep] = dot(l_TQ, current) / nf
-    end
-
-    if connected
-        μ_Q = dot(l_vec, T_Q_period * r_vec) / nf
-        for k in keys(correlations)
-            correlations[k] -= μ_Q^2
-        end
-    end
-    return correlations
-end
-
 # =============================================================================
 # Section 5c: Structure Factors (exact, via transfer matrix correlations)
 # =============================================================================
@@ -1201,87 +1134,6 @@ function _dimer_general_correlation(op::TransferOperator, separations,
     end
     return correlations
 end
-
-"""
-    plaquette_structure_factor(op::TransferOperator, q::Tuple{Real,Real};
-                               max_separation::Int=20, optimizer=GreedyMethod())
-
-Exact plaquette static structure factor (connected) on a cylinder:
-
-    S_P(q) = (1/N_p) Σ_{□,□'} [⟨Q_□ Q_{□'}⟩ - ⟨Q_□⟩⟨Q_{□'}⟩] e^{iq·(r_□ - r_{□'})}
-
-Sums over all row positions for the plaquette top-left corner and column separations.
-"""
-function plaquette_structure_factor(op::TransferOperator, q::Tuple{Real,Real};
-                                     max_separation::Int=20,
-                                     optimizer=GreedyMethod())
-    qx, qy = Float64(q[1]), Float64(q[2])
-    row = op.row
-
-    # Build T_Q_period for each row position
-    T_Q = Dict{Int, Matrix{ComplexF64}}()
-    μ_Q = Dict{Int, ComplexF64}()
-
-    paulis = [_resolve_op(:X), _resolve_op(:Y), _resolve_op(:Z)]
-    N   = length(op.columns)
-    vq  = op.virtual_qubits
-
-    T_cols     = _column_transfer_matrices(op)
-    T_combined = prod(T_cols)
-    l_vec, r_vec, nf, _ = _fixed_points(T_combined)
-    T_tail = N > 2 ? prod(T_cols[3:end]) : Matrix{ComplexF64}(I, size(T_cols[1]))
-
-    for pos in 1:row
-        pos2 = pos % row + 1
-        T_Q_period = zeros(ComplexF64, size(T_cols[1]))
-
-        # Precompute single-op E_O for this position pair
-        E_O_local = Dict{Tuple{Int,Int,Int}, Matrix{ComplexF64}}()
-        for c in 1:min(N, 2), (si, σ) in enumerate(paulis), p in (pos, pos2)
-            E_O_local[(c, si, p)] = get_transfer_matrix_with_operator(
-                op.columns[c], row, vq, σ; position=p, optimizer=optimizer)
-        end
-
-        for (si, σ) in enumerate(paulis)
-            E_vert1 = get_transfer_matrix_with_operator(
-                op.columns[1], row, vq, Dict(pos => σ, pos2 => σ); optimizer=optimizer)
-            T_Q_period .+= E_vert1 * T_cols[2] * T_tail
-            T_Q_period .+= E_O_local[(1, si, pos2)] * E_O_local[(2, si, pos2)] * T_tail
-            E_vert2 = get_transfer_matrix_with_operator(
-                op.columns[2], row, vq, Dict(pos => σ, pos2 => σ); optimizer=optimizer)
-            T_Q_period .+= T_cols[1] * E_vert2 * T_tail
-            T_Q_period .+= E_O_local[(1, si, pos)] * E_O_local[(2, si, pos)] * T_tail
-        end
-        T_Q_period ./= 4.0
-
-        T_Q[pos] = T_Q_period
-        μ_Q[pos] = dot(l_vec, T_Q_period * r_vec) / nf
-    end
-
-    # Compute structure factor
-    SP = 0.0
-    for p1 in 1:row, p2 in 1:row
-        Δp = p2 - p1
-        l_TQ1 = T_Q[p1]' * l_vec
-
-        for Δc in 0:max_separation
-            current = T_Q[p2] * r_vec
-            for _ in 1:max(Δc - 1, 0)
-                current = T_combined * current
-            end
-            corr_conn = real(dot(l_TQ1, current) / nf - μ_Q[p1] * μ_Q[p2])
-            if Δc == 0
-                SP += cos(qy * Δp) * corr_conn
-            else
-                SP += 2.0 * cos(qx * Δc + qy * Δp) * corr_conn
-            end
-        end
-    end
-
-    N_p = row * (2 * max_separation + 1)
-    return SP / N_p
-end
-
 # =============================================================================
 # Section 6: Inter-column Correlation (unchanged)
 # =============================================================================

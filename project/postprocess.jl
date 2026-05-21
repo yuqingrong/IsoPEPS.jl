@@ -239,13 +239,6 @@ fig, data = plot_correlation_function(datafile;
                                    samples=4000000,
                                    save_path="project/results/figures/correlation_function_heisenberg_2x2_J1=$(J)_J2=0.5.pdf")
 
-datafile = joinpath(data_dir, "circuit_J=$(J)_g=1.0_row=3_p=3_nqubits=$(nqubits).json")
-fig = plot_observable_convergence(datafile; save_path="convergence.pdf")
-display(fig)
-
-fig = plot_energy_convergence_vs_g("project/results", [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0];                                                      
-      J=1.0, row=3, p=3, nqubits=3, conv_step=100, save_path="project/results/figures/energy_convergence_vs_g.pdf")          
-
 fig = plot_energy_dynamics_vs_g("project/results", [0.5, 1.0, 1.5, 2.0, 2.5, 3.0];
 J=1.0, row=3, p=3, nqubits=5,                                                                                                
 M=10000, shots=20, conv_step=0, save_path="project/results/figures/energy_dynamics_vs_g_D=4.pdf")

@@ -670,15 +670,6 @@ max_separation=10,  # use middle 50% of cylinder to avoid edges
 save_path="project/results/figures/spin_SF_heatmap.pdf"
 )
 
-
-# real space dimer-dimer bond pattern (vertical ref + horizontal ref side by side)
-fig, corr_data = plot_dmrg_dimer_bond_pattern(result;
-bulk_cols=20,
-ref_bond_idx=1,
-title="DMRG Dimer Correlation (J₂=0.5, D=2)",
-save_path="project/results/figures/dmrg_dimer_bond.pdf"
-)
-
 # Bond energy pattern: ⟨S_i · S_j⟩ on each bond (reveals VBS strong/weak bonds)
 
 fig, bond_data = plot_dmrg_bond_energy_pattern(result;

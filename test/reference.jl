@@ -4,6 +4,7 @@ using Yao, YaoBlocks
 using LinearAlgebra
 using MPSKit
 using MPSKitModels
+using TensorKit
 
 @testset "mpskit_ground_state" begin
     g = 4.0
