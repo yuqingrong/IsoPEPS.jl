@@ -2,6 +2,20 @@ using Test
 using IsoPEPS
 using CairoMakie: Figure, Legend, Theme, to_color, with_theme
 
+function write_test_tfim_circuit(path; g=2.0, row=3, p=3, nqubits=3, energy=0.0)
+    params = zeros(gate_parameter_count(p, nqubits))
+    result = CircuitOptimizationResult(
+        [energy], Matrix{ComplexF64}[], params, energy,
+        Float64[], Float64[], Float64[], true
+    )
+    input_args = Dict{Symbol,Any}(
+        :model => "tfim", :J => 1.0, :g => g, :row => row, :p => p,
+        :nqubits => nqubits, :share_params => true, :scan_param => "g"
+    )
+    save_result(path, result, input_args)
+    return path
+end
+
 @testset "save and load results" begin
     # Test CircuitOptimizationResult
     result_circuit = CircuitOptimizationResult(
@@ -114,11 +128,18 @@ end
 end
 
 @testset "plot_correlation_vs_g legend stays stacked top-left" begin
-    data_dir = joinpath(@__DIR__, "..", "project", "results")
+    data_dir = mktempdir()
+    write_test_tfim_circuit(
+        joinpath(data_dir, "circuit_tfim_J=1.0_g=2.0_row=3_p=3_nqubits=3_1x1_6w.json"))
+    dmrg_file = joinpath(data_dir, "dmrg_tfim_100x3.json")
+    pepskit_file = joinpath(data_dir, "pepskit_results_D=2.json")
+    save_results(dmrg_file; scan_values=[2.0], correlation_lengths=[1.5])
+    save_results(pepskit_file; g_values=[2.0], correlation_lengths=[1.4])
+
     fig, _ = plot_correlation_vs_g(data_dir, [2.0];
                                    max_separation=1,
-                                   dmrg_file=joinpath(data_dir, "dmrg_tfim_100x3.json"),
-                                   pepskit_file=joinpath(data_dir, "pepskit_results_D=2.json"),
+                                   dmrg_file=dmrg_file,
+                                   pepskit_file=pepskit_file,
                                    g_c=3.04)
     @test fig isa Figure
     legend = fig.content[2]
@@ -127,12 +148,9 @@ end
 end
 
 @testset "plot_correlation_vs_g loads 6w circuit results" begin
-    source_dir = joinpath(@__DIR__, "..", "project", "results")
     data_dir = mktempdir()
-    cp(
-        joinpath(source_dir, "circuit_tfim_J=1.0_g=2.0_row=3_p=3_nqubits=3_1x1_6w.json"),
-        joinpath(data_dir, "circuit_tfim_J=1.0_g=2.0_row=3_p=3_nqubits=3_1x1_6w.json"),
-    )
+    write_test_tfim_circuit(
+        joinpath(data_dir, "circuit_tfim_J=1.0_g=2.0_row=3_p=3_nqubits=3_1x1_6w.json"))
 
     fig, data = plot_correlation_vs_g(data_dir, [2.0]; max_separation=1)
 
@@ -142,11 +160,8 @@ end
 
 @testset "plot_correlation_vs_g uses transfer spectrum only" begin
     data_dir = mktempdir()
-    source_file = joinpath(@__DIR__, "..", "project", "results",
-        "circuit_tfim_J=1.0_g=2.0_row=3_p=3_nqubits=3_1x1_6w.json")
-    target_file = joinpath(data_dir,
-        "circuit_tfim_J=1.0_g=2.0_row=3_p=3_nqubits=3_1x1_6w.json")
-    cp(source_file, target_file)
+    write_test_tfim_circuit(
+        joinpath(data_dir, "circuit_tfim_J=1.0_g=2.0_row=3_p=3_nqubits=3_1x1_6w.json"))
 
     fig, data = plot_correlation_vs_g(data_dir, [2.0];
         spectrum_krylovdim=8,
@@ -261,9 +276,19 @@ end
 end
 
 @testset "plot_M2_comparison legend stays inside blank region" begin
-    repo = joinpath(@__DIR__, "..")
-    fig = plot_M2_comparison(exact_file=joinpath(repo, "project", "results", "M2_exact.json"),
-                             sampling_file=joinpath(repo, "project", "results", "M2_sampling.json"))
+    data_dir = mktempdir()
+    exact_file = joinpath(data_dir, "M2_exact.json")
+    sampling_file = joinpath(data_dir, "M2_sampling.json")
+    save_results(exact_file;
+        J2_values=[0.1, 0.5, 0.8],
+        M2_neel=[0.20, 0.10, 0.04],
+        M2_stripe_0pi=[0.03, 0.08, 0.18])
+    save_results(sampling_file;
+        J2_values=[0.1, 0.5, 0.8],
+        M2_neel=[0.19, 0.09, 0.03],
+        M2_stripe_0pi=[0.02, 0.07, 0.17])
+
+    fig = plot_M2_comparison(exact_file=exact_file, sampling_file=sampling_file)
     @test fig isa Figure
     legend = fig.content[2]
     @test legend isa Legend
@@ -282,7 +307,10 @@ end
     @test [a.label for a in annotations] == ["Neel order", "VBS", "Stripe order"]
     @test [(a.x, a.y) for a in annotations] == [(0.20, 0.05), (0.57, 0.05), (0.80, 0.05)]
     ax = fig.content[1]
-    texts = ax.scene.plots[5:7]
+    texts = filter(ax.scene.plots) do plot
+        hasproperty(plot, :text) && first(plot.text[]) in ["Neel order", "VBS", "Stripe order"]
+    end
+    @test length(texts) == 3
     @test all(text_plot.fontsize[] == IsoPEPS.PAPER_LEGEND_LABELSIZE for text_plot in texts)
     @test all(text_plot.color[] == to_color(:firebrick) for text_plot in texts)
     @test all(text_plot.strokecolor[] == to_color(:firebrick) for text_plot in texts)
