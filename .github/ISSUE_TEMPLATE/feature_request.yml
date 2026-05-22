@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest a model, observable, optimization workflow, or usability improvement.
+title: "Feature: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: What problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Approach
+      description: Describe the model, observable, API, workflow, or docs change.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Optional notes on other approaches.
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation Ideas
+      description: Tests, reference calculations, benchmarks, or examples that would show it works.

@@ -4,17 +4,21 @@
 /Manifest.toml
 /docs/Manifest.toml
 /docs/build/
+/coverage/
 
 Manifest.toml
 .vscode/
 .DS_Store
+.claude/settings.local.json
 
 # Data and image files
 /data/
 /data_exact/
 /image/
+/project/results/
+/simulations/results/
+/states/
 test/data
 *.json
 *.pdf
 *.jls
-/states/

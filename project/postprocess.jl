@@ -91,8 +91,8 @@ end
 # Uncomment the block below (remove #= and =#) to run analysis examples
 
 # Analyze a single result
-J=1.0;g = 2.0; row=3 ; nqubits=5; p=3; virtual_qubits=1;D=2
-data_dir = joinpath(@__DIR__, "results")
+J=1.0;g = 1.0; row=3 ; nqubits=3; p=3; virtual_qubits=1;D=2
+data_dir = joinpath(@__DIR__, "results/NM")
 datafile = joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile, dmrg_bulk_file="project/results/dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json")
@@ -223,7 +223,7 @@ fig, data = plot_magnetization_vs_g(
 display(fig)
                    
  
-plot_correlation_vs_g(data_dir, [2.0, 3.0];row=3, nqubits=5,p=2,dmrg_file=joinpath(data_dir,"dmrg_bulk_tfim_Ly3_D2_gscan.json"),pepskit_file=referfile, g_c=3.04,
+plot_correlation_vs_g(data_dir, [1.0, 2.0, 3.0, 4.0];row=3, nqubits=3,p=3,dmrg_file=joinpath(data_dir,"dmrg_bulk_tfim_Ly3_D2_gscan.json"),pepskit_file=referfile, g_c=3.04,
 spectrum_krylovdim=200,
 spectrum_tol=1e-7,
 spectrum_maxiter=2000,
