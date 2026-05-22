@@ -6,7 +6,7 @@ A Julia package for Isometric Projected Entangled Pair States (IsoPEPS) algorith
 # Features
 - Quantum channel simulation for PEPS
 - Transfer matrix calculations with exact contraction
-- Variational optimization (CMA-ES, manifold methods)
+- Variational optimization (Nelder-Mead, manifold methods)
 - Reference implementations using MPSKit and PEPSKit (via extensions)
 - Data visualization and analysis (via CairoMakie extension)
 
@@ -39,9 +39,6 @@ using KrylovKit
 using Yao, Yao.EasyBuild
 using OMEinsum
 using OMEinsumContractionOrders
-using Optimization
-using OptimizationCMAEvolutionStrategy
-using CMAEvolutionStrategy
 using Optim
 using JSON3
 using CairoMakie

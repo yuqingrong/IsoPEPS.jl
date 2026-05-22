@@ -149,7 +149,7 @@ end
 """
     optimize_circuit(params, p, row, nqubits; model="tfim", model_kwargs...)
 
-Optimize a quantum circuit using sampling-based CMA-ES.
+Optimize a quantum circuit using sampling-based Nelder-Mead.
 
 # Arguments
 - `params::Vector{Float64}`: Initial parameter vector
@@ -163,8 +163,8 @@ Optimize a quantum circuit using sampling-based CMA-ES.
 - `conv_step::Int=100`: Thermalization steps before sampling
 - `samples::Int=10000`: Samples per sampling run
 - `n_runs::Int=44`: Number of parallel sampling runs (threaded)
-- `maxiter::Int=5000`: Maximum CMA-ES generations
-- `abstol::Float64=0.01`: Function tolerance (ftol) for CMA-ES convergence
+- `maxiter::Int=5000`: Maximum Nelder-Mead iterations
+- `abstol::Float64=0.01`: Function tolerance for Nelder-Mead convergence
 - `unit_cell::Symbol=:single`: Unit cell type (`:single` or `:two_by_two`)
 - Model-specific parameters:
   - TFIM: `J` (coupling), `g` (transverse field)
@@ -197,18 +197,10 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
     X_samples_history = Vector{Float64}[]
     Y_samples_history = Vector{Float64}[]
 
-    # Track energies within each generation
-    generation_energies = Float64[]
-    generation_params = Vector{Float64}[]
-    generation_Z_samples = Vector{Float64}[]
-    generation_X_samples = Vector{Float64}[]
-    generation_Y_samples = Vector{Float64}[]
-    generation_count = Ref(0)
     logged_threads = Ref(false)
     eval_count = Ref(0)
 
-    # Objective function for Optimization.jl (takes x and optional params_opt)
-    function objective(x, params_opt=nothing)
+    function objective(x)
         eval_count[] += 1
 
         # Build gates based on unit cell type
@@ -269,67 +261,31 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         X_samples_combined = reduce(vcat, X_samples_all)
         Y_samples_combined = need_y ? reduce(vcat, Y_samples_all) : Float64[]
 
-        # Store in generation arrays
-        push!(generation_energies, real(energy))
-        push!(generation_params, copy(x))
-        push!(generation_Z_samples, Z_samples_combined)
-        push!(generation_X_samples, X_samples_combined)
-        push!(generation_Y_samples, Y_samples_combined)
+        push!(energy_history, real(energy))
+        push!(params_history, copy(x))
+        push!(Z_samples_history, Z_samples_combined)
+        push!(X_samples_history, X_samples_combined)
+        push!(Y_samples_history, Y_samples_combined)
+
+        if eval_count[] % 10 == 0
+            best_energy = minimum(energy_history)
+            @info "$mlabel $(row)×∞ PEPS | Nelder-Mead eval $(eval_count[]) | Best Energy: $(round(best_energy, digits=6))"
+        end
 
         return real(energy)
     end
 
-    # Callback for Optimization.jl CMA-ES
-    # Called after each function evaluation
-    function optimization_callback(state, loss_val)
-        # Check if we've completed a generation by tracking evaluation count
-        # CMA-ES evaluates popsize individuals per generation
-        actual_popsize = 4 + floor(Int, 3*log(length(params)))
-
-        if eval_count[] % actual_popsize == 0 && !isempty(generation_energies)
-            generation_count[] += 1
-
-            # Log every 10 generations
-            if generation_count[] % 10 == 0
-                min_energy = minimum(generation_energies)
-                @info "$mlabel $(row)×∞ PEPS | Generation $(generation_count[]) | Min Energy: $(round(min_energy, digits=6))"
-            end
-
-            _flush_generation!(generation_energies, generation_params,
-                               generation_Z_samples, generation_X_samples, generation_Y_samples,
-                               energy_history, params_history,
-                               Z_samples_history, X_samples_history, Y_samples_history)
-        end
-
-        return false  # Continue optimization
-    end
-
-    # Create Optimization.jl problem with CMA-ES
-    opt_func = OptimizationFunction(objective)
-    prob = OptimizationProblem(opt_func, params, nothing;
-        lb = zeros(length(params)),
-        ub = fill(2π, length(params))
+    @info "Optimizing $(length(params)) parameters with Nelder-Mead (sampling, model=$model_str)"
+    opt_result = Optim.optimize(
+        objective,
+        params,
+        Optim.NelderMead(),
+        Optim.Options(iterations=maxiter, f_abstol=abstol)
     )
 
-    # Solve using CMA-ES from OptimizationCMAEvolutionStrategy
-    opt_result = solve(
-        prob,
-        CMAEvolutionStrategyOpt(),
-        abstol = abstol,
-        maxiters = maxiter,
-        callback = optimization_callback
-    )
+    converged = Optim.converged(opt_result) || Optim.iterations(opt_result) >= maxiter
 
-    converged = (opt_result.retcode == :Success || opt_result.retcode == :MaxIters ||
-                 string(opt_result.retcode) == "Success" || string(opt_result.retcode) == "MaxIters")
-
-    # Process remaining generation if any
-    _flush_generation!(generation_energies, generation_params,
-                       generation_Z_samples, generation_X_samples, generation_Y_samples,
-                       energy_history, params_history,
-                       Z_samples_history, X_samples_history, Y_samples_history)
-
-    # Use best parameters found across all generations
+    # Use best parameters found across all objective evaluations.
     if !isempty(energy_history)
         min_idx = argmin(energy_history)
         final_params = params_history[min_idx]
@@ -337,10 +293,10 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         final_Z_samples = Z_samples_history[min_idx]
         final_X_samples = X_samples_history[min_idx]
         final_Y_samples = Y_samples_history[min_idx]
-        @info "Best energy at generation $min_idx: $final_cost"
+        @info "Best energy at evaluation $min_idx: $final_cost"
     else
-        final_params = opt_result.u
-        final_cost = opt_result.objective
+        final_params = Optim.minimizer(opt_result)
+        final_cost = Optim.minimum(opt_result)
         final_Z_samples = Float64[]
         final_X_samples = Float64[]
         final_Y_samples = Float64[]
@@ -376,7 +332,8 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         :samples => samples,
         :maxiter => maxiter,
         :abstol => abstol,
-        :total_generations => generation_count[],
+        :optimizer => "nelder_mead",
+        :total_evaluations => eval_count[],
         :active_nqubits => active_nqubits,
     )
     merge!(input_args, Dict{Symbol,Any}(model_kwargs))
@@ -397,7 +354,7 @@ Optimize circuit parameters using exact tensor contraction (no sampling noise).
 
 # Keyword Arguments
 - `model`: `"tfim"` or `"heisenberg_j1j2"`
-- `maxiter`: Maximum CMA-ES generations
+- `maxiter`: Maximum Nelder-Mead iterations
 - `abstol`: Convergence tolerance
 - Model-specific parameters:
   - TFIM: `J` (coupling), `g` (transverse field)
@@ -435,13 +392,8 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
     iter_count = Ref(0)
     converged = false
 
-    function objective(x, _)
+    function objective(x)
         iter_count[] += 1
-
-        if iter_count[] > maxiter
-            @warn "Reached maximum iterations ($maxiter). Stopping..."
-            error("Maximum iterations reached")
-        end
 
         current_params .= x
         push!(params_history, copy(x))
@@ -473,24 +425,15 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
         return real(energy)
     end
 
-    @info "Optimizing $(length(params)) parameters with CMA-ES (exact contraction, model=$model_str)"
+    @info "Optimizing $(length(params)) parameters with Nelder-Mead (exact contraction, model=$model_str)"
 
-    f = OptimizationFunction(objective)
-    prob = Optimization.OptimizationProblem(f, params,
-                                             lb=zeros(length(params)),
-                                             ub=fill(2π, length(params)))
-
-    converged = false
-    try
-        sol = solve(prob, CMAEvolutionStrategyOpt(), maxiters=maxiter, abstol=abstol)
-        converged = true
-    catch e
-        if occursin("Maximum iterations reached", string(e))
-            @info "Optimization stopped at iteration $maxiter"
-        else
-            rethrow(e)
-        end
-    end
+    sol = Optim.optimize(
+        objective,
+        params,
+        Optim.NelderMead(),
+        Optim.Options(iterations=maxiter, f_abstol=abstol)
+    )
+    converged = Optim.converged(sol) || Optim.iterations(sol) >= maxiter
 
     # Find the best iteration (lowest energy) from history
     best_idx = argmin(energy_history)
@@ -531,6 +474,7 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
         :initial_params => initial_params,
         :maxiter => maxiter,
         :abstol => abstol,
+        :optimizer => "nelder_mead",
         :active_nqubits => active_nqubits,
         :best_iteration => best_idx,
         :total_iterations => length(energy_history)
