@@ -223,7 +223,7 @@ fig, data = plot_magnetization_vs_g(
 display(fig)
                    
  
-plot_correlation_vs_g(data_dir, [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0];row=3, nqubits=3,p=3,dmrg_file=joinpath(data_dir,"dmrg_bulk_tfim_Ly3_D2_gscan.json"),pepskit_file=referfile, g_c=3.04,
+plot_correlation_vs_g(data_dir, [2.0, 3.0];row=3, nqubits=5,p=2,dmrg_file=joinpath(data_dir,"dmrg_bulk_tfim_Ly3_D2_gscan.json"),pepskit_file=referfile, g_c=3.04,
 spectrum_krylovdim=200,
 spectrum_tol=1e-7,
 spectrum_maxiter=2000,
