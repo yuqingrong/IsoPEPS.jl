@@ -63,6 +63,78 @@ function apply_transfer(op::TransferOperator, v)
     return v
 end
 
+function _operator_inserted_tensors(A_tensors, row, operators::Dict{Int,<:AbstractMatrix})
+    for pos in keys(operators)
+        1 <= pos <= row || error("position must be between 1 and row=$row, got $pos")
+    end
+
+    return map(1:row) do i
+        if haskey(operators, i)
+            O = Matrix{ComplexF64}(operators[i])
+            ein"iabcd,ji -> jabcd"(A_tensors[i], O)
+        else
+            A_tensors[i]
+        end
+    end
+end
+
+function _column_matvec_data(gates, row, virtual_qubits,
+                             operators::Dict{Int,<:AbstractMatrix};
+                             optimizer=GreedyMethod())
+    A_tensors = gates_to_tensors(gates, row, virtual_qubits)
+    tensor_ket = isempty(operators) ?
+        [A_tensors[i] for i in 1:row] :
+        _operator_inserted_tensors(A_tensors, row, operators)
+    tensor_bra = [conj(A_tensors[i]) for i in 1:row]
+    code, total_legs = build_transfer_code(tensor_ket, tensor_bra, row;
+                                           for_matvec=true,
+                                           optimizer=optimizer)
+    bond_dim = 2^virtual_qubits
+    return (code=code, total_legs=total_legs, tensor_ket=tensor_ket,
+            tensor_bra=tensor_bra, bond_dim=bond_dim)
+end
+
+function _apply_column_matvec_data(cd, v)
+    v_tensor = reshape(v, ntuple(_ -> cd.bond_dim, 2 * cd.total_legs)...)
+    return vec(apply_transfer_matvec(cd.code, cd.tensor_ket, cd.tensor_bra,
+                                     v_tensor, cd.total_legs))
+end
+
+function _operator_matvec_data(op::TransferOperator,
+                               operators::Dict{Tuple{Int,Int},<:AbstractMatrix};
+                               optimizer=GreedyMethod())
+    N = length(op.columns)
+    for (col, pos) in keys(operators)
+        1 <= col <= N || error("column must be between 1 and $N, got $col")
+        1 <= pos <= op.row || error("position must be between 1 and row=$(op.row), got $pos")
+    end
+
+    return map(enumerate(op.columns)) do (c, gates)
+        col_ops = Dict(pos => O for ((col, pos), O) in operators if col == c)
+        _column_matvec_data(gates, op.row, op.virtual_qubits, col_ops;
+                            optimizer=optimizer)
+    end
+end
+
+"""
+    apply_transfer_with_operator(op, operators, v; optimizer=GreedyMethod())
+
+Apply one full period of `op` to `v`, with local physical operators inserted
+at `(column, row_position)` sites. This is the matrix-free counterpart of
+`get_transfer_matrix_with_operator(op, operators) * v` and never builds the
+dense transfer matrix.
+"""
+function apply_transfer_with_operator(op::TransferOperator,
+                                      operators::Dict{Tuple{Int,Int},<:AbstractMatrix},
+                                      v;
+                                      optimizer=GreedyMethod())
+    col_data = _operator_matvec_data(op, operators; optimizer=optimizer)
+    for cd in reverse(col_data)
+        v = _apply_column_matvec_data(cd, v)
+    end
+    return v
+end
+
 """
     Matrix(op::TransferOperator; max_size=4096)
 

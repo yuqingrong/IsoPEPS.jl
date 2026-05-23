@@ -6,7 +6,6 @@ const PARAMS_PER_QUBIT_PER_LAYER = 2
 
 # Cache for the parameter-independent CNOT entangling product.
 const _CNOT_PRODUCT_CACHE = Dict{Tuple{Int,Int,Int}, Matrix{ComplexF64}}()
-const _PRE_FOURTH_CNOT_RXRZ_LAYER = 4
 
 """
     LocalCircuitOp
@@ -50,19 +49,11 @@ function _cnot_pattern_layers(nqubits::Int; max_stride::Int=nqubits-1, active_nq
     return layers
 end
 
-function _has_pre_fourth_cnot_rxrz(nqubits::Int; max_stride::Int=nqubits-1,
-                                   active_nqubits::Int=nqubits)
+function _rotation_blocks_per_layer(nqubits::Int; max_stride::Int=nqubits-1,
+                                    active_nqubits::Int=nqubits)
     1 <= active_nqubits <= nqubits || throw(ArgumentError("active_nqubits must be between 1 and nqubits"))
-    active_nqubits == 1 && return false
-    clamped_stride = clamp(max_stride, 1, active_nqubits-1)
-    return nqubits == 5 && active_nqubits == 5 && clamped_stride == 4
+    return 1
 end
-
-_rotation_blocks_per_layer(nqubits::Int; max_stride::Int=nqubits-1,
-                           active_nqubits::Int=nqubits) =
-    1 + (_has_pre_fourth_cnot_rxrz(nqubits;
-                                   max_stride=max_stride,
-                                   active_nqubits=active_nqubits) ? 1 : 0)
 
 function _gate_param_count(p::Int, nqubits::Int; max_stride::Int=nqubits-1,
                            active_nqubits::Int=nqubits)
@@ -77,8 +68,6 @@ end
                          max_stride=nqubits-1, active_nqubits=nqubits)
 
 Return the number of variational parameters required by the gate builders.
-For the fully active 5-qubit ansatz, each layer includes an additional Rx-Rz
-rotation block before the fourth CNOT layer.
 """
 function gate_parameter_count(p::Int, nqubits::Int; unit_cell::Symbol=:single,
                               row::Int=1, share_params::Bool=true,
@@ -161,16 +150,10 @@ function local_circuit_ops(p::Int, nqubits::Int; max_stride::Int=nqubits-1,
     cnot_layers = _cnot_pattern_layers(nqubits;
                                        max_stride=max_stride,
                                        active_nqubits=active_nqubits)
-    add_pre_fourth_rxrz = _has_pre_fourth_cnot_rxrz(nqubits;
-                                                    max_stride=max_stride,
-                                                    active_nqubits=active_nqubits)
 
     for r in 1:p
         push_rxrz_block!(1, r)
-        for (layer_index, cnot_layer) in enumerate(cnot_layers)
-            if add_pre_fourth_rxrz && layer_index == _PRE_FOURTH_CNOT_RXRZ_LAYER
-                push_rxrz_block!(2, r)
-            end
+        for cnot_layer in cnot_layers
             for (control, target) in cnot_layer
                 push!(ops, LocalCircuitOp(:cnot, (control, target), r, nothing))
             end
@@ -392,23 +375,8 @@ function _rotation_block(params, p::Int, r::Int, nqubits::Int, block::Int;
     return gate
 end
 
-function _cnot_layers_product(nqubits::Int, cnot_layers)
-    dim = 1 << nqubits
-    result = Matrix{ComplexF64}(I, dim, dim)
-    for cnot_layer in cnot_layers
-        layer = Matrix{ComplexF64}(I, dim, dim)
-        for (control, target) in cnot_layer
-            layer *= Matrix(cnot(nqubits, control, target))
-        end
-        result *= layer
-    end
-    return result
-end
-
 """
 Build a single layer: raw Rx·Rz rotations ⊗ CNOT product.
-For the fully active 5-qubit ansatz, insert one extra Rx·Rz block before the
-fourth CNOT layer.
 """
 function _build_layer(params, r, nqubits; max_stride::Int=nqubits-1, active_nqubits::Int=nqubits)
     p = length(params) ÷ (PARAMS_PER_QUBIT_PER_LAYER * nqubits *
@@ -416,19 +384,6 @@ function _build_layer(params, r, nqubits; max_stride::Int=nqubits-1, active_nqub
                                                      max_stride=max_stride,
                                                      active_nqubits=active_nqubits))
     rotations = _rotation_block(params, p, r, nqubits, 1; active_nqubits=active_nqubits)
-
-    if _has_pre_fourth_cnot_rxrz(nqubits;
-                                 max_stride=max_stride,
-                                 active_nqubits=active_nqubits)
-        cnot_layers = _cnot_pattern_layers(nqubits;
-                                           max_stride=max_stride,
-                                           active_nqubits=active_nqubits)
-        before = _cnot_layers_product(nqubits, cnot_layers[1:_PRE_FOURTH_CNOT_RXRZ_LAYER-1])
-        after = _cnot_layers_product(nqubits, cnot_layers[_PRE_FOURTH_CNOT_RXRZ_LAYER:end])
-        extra_rotations = _rotation_block(params, p, r, nqubits, 2; active_nqubits=active_nqubits)
-        return rotations * before * extra_rotations * after
-    end
-
     return rotations * _get_cnot_product(nqubits;
                                          max_stride=max_stride,
                                          active_nqubits=active_nqubits)
@@ -440,8 +395,6 @@ end
 
 Embed parameters from a smaller nqubits into a larger nqubits parameter space.
 Copies existing qubit rotations and sets new qubits to identity (θ=0).
-When the target is the fully active 5-qubit ansatz, the extra Rx-Rz block is
-initialized to identity rotations.
 
 Works for both `:single` (shared params) and `:two_by_two` (4 gate chunks) unit cells.
 
@@ -491,7 +444,6 @@ function embed_params(params::Vector{Float64}, p::Int, nqubits_from::Int, nqubit
                 end
             end
             # Qubits nqubits_from+1 : nqubits_to stay at 0 (identity rotation)
-            # Extra target rotation blocks also stay at 0 unless copied above.
         end
     end
 

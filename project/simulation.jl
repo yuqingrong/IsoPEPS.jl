@@ -269,7 +269,7 @@ end
 simulation(;
     model="tfim",
     scan_param=:g,
-    scan_values=[3.0, 4.0, 5.0],
+    scan_values=[0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0],
     J=1.0,
     row=3,
     p=3,

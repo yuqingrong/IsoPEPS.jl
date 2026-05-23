@@ -141,7 +141,7 @@ export CircuitOptimizationResult, ExactOptimizationResult, ManifoldOptimizationR
 export optimize_circuit, optimize_exact, optimize_manifold, initialize_tfim_params
 
 # Exact Tensor Contraction - Transfer Matrix
-export TransferOperator, matrix_size, apply_transfer
+export TransferOperator, matrix_size, apply_transfer, apply_transfer_with_operator
 export compute_transfer_spectrum, compute_single_transfer
 export get_combined_transfer_matrix, compute_transfer_spectrum_2x2
 export contract_transfer_matrix, gates_to_tensors, get_transfer_matrix, get_physical_channel
@@ -152,8 +152,13 @@ export reshape_to_mps, spectrum_MPSKit, transfer_matrix_ITensor
 
 # Exact Observables (Transfer Matrix)
 export compute_X_expectation, compute_Z_expectation, compute_ZZ_expectation, compute_single_expectation
-export compute_exact_energy, compute_exact_heisenberg_energy, compute_exact_heisenberg_energy_2x2, intercolumn_correlation
-export correlation_function, expect, structure_factor, magnetic_order_squared
+export compute_X_expectation_matrix_free, compute_Z_expectation_matrix_free
+export compute_ZZ_expectation_matrix_free, compute_single_expectation_matrix_free
+export compute_exact_energy, compute_exact_energy_matrix_free
+export compute_exact_heisenberg_energy, compute_exact_heisenberg_energy_2x2, intercolumn_correlation
+export correlation_function, correlation_function_matrix_free
+export expect, expect_matrix_free, expect_sequence_matrix_free
+export structure_factor, magnetic_order_squared
 export spin_spin_correlation, dimer_dimer_correlation
 export spin_spin_structure_factor, dimer_structure_factor
 

@@ -94,6 +94,109 @@ function _expect_with_ops(op::TransferOperator,
     return dot(l_vec, T_op * r_vec) / nf
 end
 
+function _matrix_free_fixed_point_vector(op::TransferOperator; rho=nothing,
+                                         krylovdim=30, tol=1e-10,
+                                         maxiter=300, eager=true)
+    if rho !== nothing
+        r_vec = rho isa AbstractVector ? Vector{ComplexF64}(rho) : vec(Matrix{ComplexF64}(rho))
+        n = isqrt(length(r_vec))
+        n * n == length(r_vec) || error("rho vector length must be a perfect square")
+        id_vec = vec(Matrix{ComplexF64}(I, n, n))
+        return r_vec, id_vec
+    end
+
+    ρ, _, _, _ = compute_transfer_spectrum(op;
+                                           num_eigenvalues=1,
+                                           matrix_free=:always,
+                                           krylovdim=krylovdim,
+                                           tol=tol,
+                                           maxiter=maxiter,
+                                           eager=eager)
+    r_vec = vec(ρ)
+    id_vec = vec(Matrix{ComplexF64}(I, size(ρ, 1), size(ρ, 2)))
+    return r_vec, id_vec
+end
+
+_resolve_site_ops(sites::Dict{Tuple{Int,Int},<:Any}) =
+    Dict{Tuple{Int,Int}, Matrix{ComplexF64}}(k => _resolve_op(v) for (k, v) in sites)
+
+"""
+    expect_matrix_free(op::TransferOperator, obs; col=1, position=1, rho=nothing, ...)
+
+Matrix-free exact single-site expectation. This computes the same contraction as
+`expect(op, obs; col, position)` but avoids constructing dense transfer matrices.
+
+For the isometric transfer channels used by this package, the left fixed point is
+the identity, so only the right fixed point is found by Krylov.
+"""
+function expect_matrix_free(op::TransferOperator, obs;
+                            col::Int=1, position::Int=1,
+                            rho=nothing,
+                            optimizer=GreedyMethod(),
+                            krylovdim=30, tol=1e-10,
+                            maxiter=300, eager=true)
+    return expect_matrix_free(op, Dict((col, position) => obs);
+                              rho=rho, optimizer=optimizer,
+                              krylovdim=krylovdim, tol=tol,
+                              maxiter=maxiter, eager=eager)
+end
+
+"""
+    expect_matrix_free(op::TransferOperator, sites::Dict; rho=nothing, ...)
+
+Matrix-free exact multi-site expectation for operators inserted within one
+unit-cell period. `sites` maps `(column, row_position)` to `:X`, `:Y`, `:Z`, or
+a `2×2` matrix.
+"""
+function expect_matrix_free(op::TransferOperator,
+                            sites::Dict{Tuple{Int,Int},<:Any};
+                            rho=nothing,
+                            optimizer=GreedyMethod(),
+                            krylovdim=30, tol=1e-10,
+                            maxiter=300, eager=true)
+    ops = _resolve_site_ops(sites)
+    r_vec, id_vec = _matrix_free_fixed_point_vector(op; rho=rho,
+                                                    krylovdim=krylovdim,
+                                                    tol=tol,
+                                                    maxiter=maxiter,
+                                                    eager=eager)
+    y = apply_transfer_with_operator(op, ops, r_vec; optimizer=optimizer)
+    return dot(id_vec, y) / dot(id_vec, r_vec)
+end
+
+"""
+    expect_sequence_matrix_free(op, operator_sets; rho=nothing, ...)
+
+Matrix-free exact expectation for operators spread across consecutive periods.
+Each element of `operator_sets` is a site dictionary for one period, ordered from
+the period nearest the right fixed point outward. This is useful for nearest
+horizontal bonds in a one-column unit cell, where `E_Z * E_Z` is needed.
+"""
+function expect_sequence_matrix_free(op::TransferOperator, operator_sets;
+                                     rho=nothing,
+                                     optimizer=GreedyMethod(),
+                                     krylovdim=30, tol=1e-10,
+                                     maxiter=300, eager=true)
+    r_vec, id_vec = _matrix_free_fixed_point_vector(op; rho=rho,
+                                                    krylovdim=krylovdim,
+                                                    tol=tol,
+                                                    maxiter=maxiter,
+                                                    eager=eager)
+    y = r_vec
+    for sites in operator_sets
+        y = apply_transfer_with_operator(op, _resolve_site_ops(sites), y;
+                                         optimizer=optimizer)
+    end
+    return dot(id_vec, y) / dot(id_vec, r_vec)
+end
+
+function _apply_period_matvec_data(col_data, v)
+    for cd in reverse(col_data)
+        v = _apply_column_matvec_data(cd, v)
+    end
+    return v
+end
+
 """
     expect(op::TransferOperator, obs; col=1, position=1, optimizer=GreedyMethod())
 
@@ -133,6 +236,13 @@ function expect(gates, row, virtual_qubits, observable::Union{Symbol,AbstractMat
     return expect(op, observable; col=1, position=position, optimizer=optimizer)
 end
 
+function expect_matrix_free(gates, row, virtual_qubits,
+                            observable::Union{Symbol,AbstractMatrix};
+                            position::Int=1, kwargs...)
+    op = TransferOperator([gates], row, virtual_qubits)
+    return expect_matrix_free(op, observable; col=1, position=position, kwargs...)
+end
+
 """
     expect(gates, row, virtual_qubits, operators::Dict{Int}; optimizer=GreedyMethod())
 
@@ -144,6 +254,14 @@ function expect(gates, row, virtual_qubits,
     op = TransferOperator([gates], row, virtual_qubits)
     sites = Dict((1, pos) => obs for (pos, obs) in operators)
     return expect(op, sites; optimizer=optimizer)
+end
+
+function expect_matrix_free(gates, row, virtual_qubits,
+                            operators::Dict{Int,<:Union{Symbol,AbstractMatrix}};
+                            kwargs...)
+    op = TransferOperator([gates], row, virtual_qubits)
+    sites = Dict((1, pos) => obs for (pos, obs) in operators)
+    return expect_matrix_free(op, sites; kwargs...)
 end
 
 # =============================================================================
@@ -201,6 +319,62 @@ function correlation_function(op::TransferOperator,
 end
 
 """
+    correlation_function_matrix_free(op::TransferOperator, observable, separations;
+                                     col=1, position=1, connected=false, rho=nothing, ...)
+
+Matrix-free exact two-point correlation
+`⟨O(col,position,0) O(col,position,r)⟩` for separations measured in full
+unit-cell periods. This matches `correlation_function` but avoids dense transfer
+and operator-inserted transfer matrices.
+"""
+function correlation_function_matrix_free(op::TransferOperator,
+                                          observable::Union{Symbol,AbstractMatrix},
+                                          separations;
+                                          col::Int=1, position::Int=1,
+                                          connected::Bool=false,
+                                          rho=nothing,
+                                          optimizer=GreedyMethod(),
+                                          krylovdim=30, tol=1e-10,
+                                          maxiter=300, eager=true)
+    O = _resolve_op(observable)
+    seps = separations isa Integer ? [separations] : collect(separations)
+    isempty(seps) && return Dict{Int, ComplexF64}()
+    any(<(1), seps) && error("separations must be positive integers")
+
+    r_vec, id_vec = _matrix_free_fixed_point_vector(op; rho=rho,
+                                                    krylovdim=krylovdim,
+                                                    tol=tol,
+                                                    maxiter=maxiter,
+                                                    eager=eager)
+    nf = dot(id_vec, r_vec)
+    site_ops = Dict((col, position) => O)
+    E_data = _operator_matvec_data(op, site_ops; optimizer=optimizer)
+    T_data = _operator_matvec_data(op, Dict{Tuple{Int,Int},Matrix{ComplexF64}}();
+                                  optimizer=optimizer)
+
+    current = _apply_period_matvec_data(E_data, r_vec)
+    one_point = dot(id_vec, current) / nf
+
+    correlations = Dict{Int, ComplexF64}()
+    sorted_seps = sort(seps)
+    prev_sep = 1
+    for sep in sorted_seps
+        for _ in 1:(sep - prev_sep)
+            current = _apply_period_matvec_data(T_data, current)
+        end
+        prev_sep = sep
+        correlations[sep] = dot(id_vec, _apply_period_matvec_data(E_data, current)) / nf
+    end
+
+    if connected
+        for k in keys(correlations)
+            correlations[k] -= one_point^2
+        end
+    end
+    return correlations
+end
+
+"""
     correlation_function(gates, row, virtual_qubits, observable, separations;
                          position=1, connected=false, optimizer=GreedyMethod())
 
@@ -216,6 +390,17 @@ function correlation_function(gates, row, virtual_qubits,
     return correlation_function(op, observable, separations;
                                 col=1, position=position,
                                 connected=connected, optimizer=optimizer)
+end
+
+function correlation_function_matrix_free(gates, row, virtual_qubits,
+                                          observable::Union{Symbol,AbstractMatrix},
+                                          separations;
+                                          position::Int=1, connected::Bool=false,
+                                          kwargs...)
+    op = TransferOperator([gates], row, virtual_qubits)
+    return correlation_function_matrix_free(op, observable, separations;
+                                            col=1, position=position,
+                                            connected=connected, kwargs...)
 end
 
 # =============================================================================
@@ -408,6 +593,178 @@ function compute_ZZ_expectation(rho, gates, row, virtual_qubits;
         ZZ_horiz += real(corr[1])
     end
     return row > 1 ? ZZ_vert / row : 0.0, ZZ_horiz / row
+end
+
+function _compute_pauli_total_matrix_free(gates, row, virtual_qubits, obs::Symbol;
+                                          rho=nothing,
+                                          optimizer=GreedyMethod(),
+                                          krylovdim=30, tol=1e-10,
+                                          maxiter=300, eager=true)
+    op = TransferOperator([gates], row, virtual_qubits)
+    r_vec, _ = _matrix_free_fixed_point_vector(op; rho=rho,
+                                               krylovdim=krylovdim,
+                                               tol=tol,
+                                               maxiter=maxiter,
+                                               eager=eager)
+    total = 0.0
+    for pos in 1:row
+        total += real(expect_matrix_free(op, obs; col=1, position=pos,
+                                         rho=r_vec, optimizer=optimizer))
+    end
+    return total
+end
+
+"""
+    compute_X_expectation_matrix_free(rho, gates, row, virtual_qubits; ...)
+
+Mean exact ⟨X⟩ over row positions using matrix-free transfer contractions.
+`rho` may be `nothing`, a fixed-point matrix, or a vectorized fixed point.
+"""
+compute_X_expectation_matrix_free(rho, gates, row, virtual_qubits;
+                                  optimizer=GreedyMethod(),
+                                  krylovdim=30, tol=1e-10,
+                                  maxiter=300, eager=true) =
+    _compute_pauli_total_matrix_free(gates, row, virtual_qubits, :X;
+                                     rho=rho, optimizer=optimizer,
+                                     krylovdim=krylovdim, tol=tol,
+                                     maxiter=maxiter, eager=eager) / row
+
+"""
+    compute_Z_expectation_matrix_free(rho, gates, row, virtual_qubits; ...)
+
+Mean exact ⟨Z⟩ over row positions using matrix-free transfer contractions.
+`rho` may be `nothing`, a fixed-point matrix, or a vectorized fixed point.
+"""
+compute_Z_expectation_matrix_free(rho, gates, row, virtual_qubits;
+                                  optimizer=GreedyMethod(),
+                                  krylovdim=30, tol=1e-10,
+                                  maxiter=300, eager=true) =
+    _compute_pauli_total_matrix_free(gates, row, virtual_qubits, :Z;
+                                     rho=rho, optimizer=optimizer,
+                                     krylovdim=krylovdim, tol=tol,
+                                     maxiter=maxiter, eager=eager) / row
+
+"""
+    compute_single_expectation_matrix_free(rho, gates, row, virtual_qubits, observable; position=1, ...)
+
+Single-site exact expectation using matrix-free transfer contractions.
+"""
+function compute_single_expectation_matrix_free(rho, gates, row, virtual_qubits,
+                                                observable;
+                                                position::Int=1,
+                                                optimizer=GreedyMethod(),
+                                                krylovdim=30, tol=1e-10,
+                                                maxiter=300, eager=true)
+    return expect_matrix_free(gates, row, virtual_qubits, observable;
+                              position=position, rho=rho,
+                              optimizer=optimizer,
+                              krylovdim=krylovdim, tol=tol,
+                              maxiter=maxiter, eager=eager)
+end
+
+"""
+    compute_ZZ_expectation_matrix_free(rho, gates, row, virtual_qubits; ...)
+
+Exact vertical and horizontal nearest-neighbor ⟨ZZ⟩ using matrix-free transfer
+contractions. The horizontal value for a one-column unit cell is evaluated as
+two consecutive operator-inserted transfer steps, avoiding dense `E_Z` matrices.
+"""
+function compute_ZZ_expectation_matrix_free(rho, gates, row, virtual_qubits;
+                                            optimizer=GreedyMethod(),
+                                            krylovdim=30, tol=1e-10,
+                                            maxiter=300, eager=true)
+    op = TransferOperator([gates], row, virtual_qubits)
+    r_vec, _ = _matrix_free_fixed_point_vector(op; rho=rho,
+                                               krylovdim=krylovdim,
+                                               tol=tol,
+                                               maxiter=maxiter,
+                                               eager=eager)
+    ZZ_vert = 0.0
+    if row > 1
+        for i in 1:row
+            j = i % row + 1
+            ZZ_vert += real(expect_matrix_free(
+                op, Dict((1, i) => :Z, (1, j) => :Z);
+                rho=r_vec, optimizer=optimizer))
+        end
+    end
+
+    ZZ_horiz = 0.0
+    for pos in 1:row
+        sites = Dict((1, pos) => :Z)
+        ZZ_horiz += real(expect_sequence_matrix_free(
+            op, [sites, sites]; rho=r_vec, optimizer=optimizer))
+    end
+
+    return row > 1 ? ZZ_vert / row : 0.0, ZZ_horiz / row
+end
+
+"""
+    compute_exact_energy_matrix_free(m::TFIM, op::TransferOperator; ...)
+
+Exact TFIM energy per column using matrix-free transfer contractions.
+This avoids constructing dense transfer matrices and is intended for larger
+bond dimensions such as `D=4` (`nqubits=5`).
+"""
+function compute_exact_energy_matrix_free(m::TFIM, op::TransferOperator;
+                                          rho=nothing,
+                                          optimizer=GreedyMethod(),
+                                          krylovdim=30, tol=1e-10,
+                                          maxiter=300, eager=true)
+    N = length(op.columns)
+    row = op.row
+    r_vec, _ = _matrix_free_fixed_point_vector(op; rho=rho,
+                                               krylovdim=krylovdim,
+                                               tol=tol,
+                                               maxiter=maxiter,
+                                               eager=eager)
+
+    X_total = 0.0
+    ZZ_vert = 0.0
+    ZZ_horiz = 0.0
+
+    for c in 1:N, pos in 1:row
+        X_total += real(expect_matrix_free(op, :X; col=c, position=pos,
+                                           rho=r_vec, optimizer=optimizer))
+    end
+
+    if row > 1
+        for c in 1:N, i in 1:row
+            j = i % row + 1
+            ZZ_vert += real(expect_matrix_free(
+                op, Dict((c, i) => :Z, (c, j) => :Z);
+                rho=r_vec, optimizer=optimizer))
+        end
+    end
+
+    for c in 1:(N - 1), pos in 1:row
+        ZZ_horiz += real(expect_matrix_free(
+            op, Dict((c, pos) => :Z, (c + 1, pos) => :Z);
+            rho=r_vec, optimizer=optimizer))
+    end
+    for pos in 1:row
+        ZZ_horiz += real(expect_sequence_matrix_free(
+            op, [Dict((N, pos) => :Z), Dict((1, pos) => :Z)];
+            rho=r_vec, optimizer=optimizer))
+    end
+
+    X_total /= N
+    ZZ_vert /= N
+    ZZ_horiz /= N
+
+    energy = -m.g * X_total - m.J * (row == 1 ? ZZ_horiz : ZZ_vert + ZZ_horiz)
+    return energy, X_total, ZZ_vert, ZZ_horiz
+end
+
+function compute_exact_energy_matrix_free(gates, row, virtual_qubits, J, g;
+                                          rho=nothing,
+                                          kwargs...)
+    X_total = compute_X_expectation_matrix_free(rho, gates, row, virtual_qubits;
+                                                kwargs...)
+    ZZ_vert, ZZ_horiz = compute_ZZ_expectation_matrix_free(rho, gates, row,
+                                                           virtual_qubits;
+                                                           kwargs...)
+    return -g * X_total - J * (row == 1 ? ZZ_horiz : ZZ_vert + ZZ_horiz)
 end
 
 # =============================================================================

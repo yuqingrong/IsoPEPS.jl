@@ -807,6 +807,73 @@ end
     @test -1.0 - 1e-6 ≤ real(Y_exp) ≤ 1.0 + 1e-6
 end
 
+@testset "matrix_free_expectations_match_dense" begin
+    virtual_qubits = 1
+    nqubits = 1 + 2 * virtual_qubits
+
+    for row in [1, 2, 3]
+        Random.seed!(1800 + row)
+        gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
+        gates = [Matrix(gate) for _ in 1:row]
+        op = TransferOperator(gates, row, nqubits)
+        rho, _, _ = compute_transfer_spectrum(gates, row, nqubits)
+
+        for pos in 1:row
+            @test expect_matrix_free(op, :X; position=pos, rho=rho) ≈
+                  IsoPEPS.expect(op, :X; position=pos) atol=1e-9
+            @test expect_matrix_free(gates, row, virtual_qubits, :Z;
+                                     position=pos, rho=rho) ≈
+                  IsoPEPS.expect(gates, row, virtual_qubits, :Z; position=pos) atol=1e-9
+        end
+
+        X_dense = compute_X_expectation(rho, gates, row, virtual_qubits)
+        Z_dense = compute_Z_expectation(rho, gates, row, virtual_qubits)
+        ZZv_dense, ZZh_dense = compute_ZZ_expectation(rho, gates, row, virtual_qubits)
+
+        X_mf = compute_X_expectation_matrix_free(rho, gates, row, virtual_qubits)
+        Z_mf = compute_Z_expectation_matrix_free(rho, gates, row, virtual_qubits)
+        ZZv_mf, ZZh_mf = compute_ZZ_expectation_matrix_free(rho, gates, row, virtual_qubits)
+
+        @test X_mf ≈ X_dense atol=1e-9
+        @test Z_mf ≈ Z_dense atol=1e-9
+        @test ZZv_mf ≈ ZZv_dense atol=1e-9
+        @test ZZh_mf ≈ ZZh_dense atol=1e-9
+
+        model = TFIM(1.2, 0.7)
+        energy_dense = compute_exact_energy(gates, row, virtual_qubits, model.J, model.g)
+        energy_mf = compute_exact_energy_matrix_free(gates, row, virtual_qubits,
+                                                     model.J, model.g; rho=rho)
+        @test energy_mf ≈ energy_dense atol=1e-9
+    end
+end
+
+@testset "matrix_free_correlations_match_dense" begin
+    virtual_qubits = 1
+    nqubits = 1 + 2 * virtual_qubits
+    max_lag = 4
+
+    for row in [1, 2, 3]
+        Random.seed!(1900 + row)
+        gate = YaoBlocks.matblock(YaoBlocks.rand_unitary(ComplexF64, 2^nqubits))
+        gates = [Matrix(gate) for _ in 1:row]
+        op = TransferOperator(gates, row, nqubits)
+        rho, _, _ = compute_transfer_spectrum(gates, row, nqubits)
+
+        for pos in 1:row, connected in (false, true)
+            dense = correlation_function(op, :Z, 1:max_lag;
+                                         position=pos,
+                                         connected=connected)
+            mf = correlation_function_matrix_free(op, :Z, 1:max_lag;
+                                                  position=pos,
+                                                  connected=connected,
+                                                  rho=rho)
+            for r in 1:max_lag
+                @test mf[r] ≈ dense[r] atol=1e-9
+            end
+        end
+    end
+end
+
 @testset "correlation_function_vs_sampling" begin
     # Test that exact correlation_function matches sampling-based compute_acf
     # Use small system for reasonable sampling statistics

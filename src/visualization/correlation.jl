@@ -143,6 +143,12 @@ function plot_correlation_function(filename::String;
                                    max_separation::Int=20,
                                    conv_step::Int=1000,
                                    samples::Int=100000,
+                                   exact_method::Symbol=:auto,
+                                   include_sampling::Bool=true,
+                                   sampling_trajectories::Int=1,
+                                   spectrum_krylovdim::Int=60,
+                                   spectrum_tol::Real=1e-8,
+                                   spectrum_maxiter::Int=1000,
                                    figsize=nothing,
                                    save_path::Union{String,Nothing}=nothing)
 
@@ -176,7 +182,13 @@ function plot_correlation_function(filename::String;
     println("File: ", basename(filename))
     println("Configuration: g=$g, row=$row, nqubits=$nqubits, unit_cell=$(N_cols)x1")
 
-    println("\nComputing exact correlations (transfer matrix)...")
+    sz = matrix_size(op)
+    use_matrix_free = exact_method == :matrix_free ||
+        (exact_method == :auto && sz > 1024)
+    exact_method in (:auto, :dense, :matrix_free) ||
+        throw(ArgumentError("exact_method must be :auto, :dense, or :matrix_free"))
+
+    println("\nComputing exact correlations ($(use_matrix_free ? "matrix-free transfer contraction" : "dense transfer matrix"))...")
     println("Averaging over all positions 1 to $row...")
 
     # Compute correlations for each position and average
@@ -185,12 +197,34 @@ function plot_correlation_function(filename::String;
     separations = [r * N_cols for r in 1:max_sep_periods]
     exact_full_vals = zeros(Float64, max_sep_periods)
     exact_connected_vals = zeros(Float64, max_sep_periods)
+    rho = nothing
+    gap = nothing
+
+    if use_matrix_free
+        rho, gap, _, _ = compute_transfer_spectrum(op;
+                                                   matrix_free=:always,
+                                                   krylovdim=spectrum_krylovdim,
+                                                   tol=spectrum_tol,
+                                                   maxiter=spectrum_maxiter)
+    end
 
     for pos in 1:row
-        exact_full_pos = correlation_function(op, :Z, 1:max_sep_periods;
-                                              position=pos, connected=false)
-        exact_connected_pos = correlation_function(op, :Z, 1:max_sep_periods;
-                                                   position=pos, connected=true)
+        exact_full_pos = if use_matrix_free
+            correlation_function_matrix_free(op, :Z, 1:max_sep_periods;
+                                             position=pos, connected=false,
+                                             rho=rho)
+        else
+            correlation_function(op, :Z, 1:max_sep_periods;
+                                 position=pos, connected=false)
+        end
+        exact_connected_pos = if use_matrix_free
+            correlation_function_matrix_free(op, :Z, 1:max_sep_periods;
+                                             position=pos, connected=true,
+                                             rho=rho)
+        else
+            correlation_function(op, :Z, 1:max_sep_periods;
+                                 position=pos, connected=true)
+        end
 
         for (i, r) in enumerate(1:max_sep_periods)
             exact_full_vals[i] += real(exact_full_pos[r])
@@ -202,58 +236,110 @@ function plot_correlation_function(filename::String;
     exact_full_vals ./= row
     exact_connected_vals ./= row
 
-    _, gap, _, _ = compute_transfer_spectrum(op)
+    if isnothing(gap)
+        _, gap, _, _ = compute_transfer_spectrum(
+            op;
+            matrix_free=:auto,
+            krylovdim=spectrum_krylovdim,
+            tol=spectrum_tol,
+            maxiter=spectrum_maxiter,
+        )
+    end
     correlation_length = N_cols / gap
     println("Correlation length ξ = $(round(correlation_length, digits=2)) columns")
 
-    println("\nGenerating samples (conv_step=$conv_step, samples=$samples)...")
-    if is_2x2
-        rho, Z_samples, X_samples = sample_quantum_channel(gates_odd, gates_even, row, nqubits;
-                                                            conv_step=conv_step,
-                                                            samples=samples)
-    else
-        gates = op.columns[1]
-        rho, Z_samples, X_samples = sample_quantum_channel(gates, row, nqubits;
-                                                            conv_step=conv_step,
-                                                            samples=samples)
+    sample_seps = Int[]
+    sample_full_vals = Float64[]
+    sample_full_err_vals = Float64[]
+    sample_connected_vals = Float64[]
+    sample_connected_err_vals = Float64[]
+    error_full = Float64[]
+    error_connected = Float64[]
+    mean_error_full = NaN
+    mean_error_connected = NaN
+    sample_full_trajectories = Matrix{Float64}(undef, 0, 0)
+    sample_connected_trajectories = Matrix{Float64}(undef, 0, 0)
+
+    if include_sampling
+        sampling_trajectories >= 1 ||
+            throw(ArgumentError("sampling_trajectories must be at least 1"))
+
+        println("\nGenerating samples (conv_step=$conv_step, samples=$samples, trajectories=$sampling_trajectories)...")
+
+        z_trajectories = Vector{Vector{Float64}}(undef, sampling_trajectories)
+        for traj in 1:sampling_trajectories
+            if sampling_trajectories > 1
+                println("  Sampling trajectory $traj / $sampling_trajectories")
+            end
+
+            if is_2x2
+                _, Z_samples, _ = sample_quantum_channel(gates_odd, gates_even, row, nqubits;
+                                                          conv_step=conv_step,
+                                                          samples=samples)
+            else
+                gates = op.columns[1]
+                _, Z_samples, _ = sample_quantum_channel(gates, row, nqubits;
+                                                          conv_step=conv_step,
+                                                          samples=samples)
+            end
+            z_trajectories[traj] = Float64.(Z_samples[conv_step+1:end])
+        end
+
+        min_len = minimum(length.(z_trajectories))
+        if any(length(z) != min_len for z in z_trajectories)
+            @warn "Sampling trajectories have unequal lengths; truncating all to $min_len samples"
+        end
+        Z_mat = Matrix{Float64}(undef, sampling_trajectories, min_len)
+        for traj in 1:sampling_trajectories
+            Z_mat[traj, :] .= @view z_trajectories[traj][1:min_len]
+        end
+
+        # Use row*N_cols for subsampling so each subchain has same-column-type measurements
+        # (for 2x2 unit cells, row alone mixes odd/even column types)
+        acf_row = row * N_cols
+        lags, acf, acf_err, corr_full, corr_err, corr_connected, corr_connected_err = compute_acf(
+            Z_mat; max_lag=max_sep_periods+1, row=acf_row
+        )
+
+        # Keep per-trajectory curves for diagnostics in the returned data.
+        n_acf_lags = length(corr_full)
+        sample_full_trajectories = Matrix{Float64}(undef, sampling_trajectories, n_acf_lags)
+        sample_connected_trajectories = Matrix{Float64}(undef, sampling_trajectories, n_acf_lags)
+        for traj in 1:sampling_trajectories
+            _, _, _, corr_t, _, corr_connected_t, _ = compute_acf(
+                reshape(Z_mat[traj, :], 1, :); max_lag=n_acf_lags, row=acf_row
+            )
+            sample_full_trajectories[traj, :] .= corr_t
+            sample_connected_trajectories[traj, :] .= corr_connected_t
+        end
+
+        sample_full = corr_full
+        sample_full_err = corr_err
+        sample_connected = corr_connected
+        sample_connected_err = corr_connected_err
+
+        n_sample_lags = min(length(sample_full) - 1, max_sep_periods)
+        # Sample lags are in period units; convert to column separations
+        sample_seps = [k * N_cols for k in 1:n_sample_lags]
+        sample_full_vals = sample_full[2:n_sample_lags+1]
+        sample_full_err_vals = sample_full_err[2:n_sample_lags+1]
+        sample_connected_vals = sample_connected[2:n_sample_lags+1]
+        sample_connected_err_vals = sample_connected_err[2:n_sample_lags+1]
+        sample_full_trajectories = sample_full_trajectories[:, 2:n_sample_lags+1]
+        sample_connected_trajectories = sample_connected_trajectories[:, 2:n_sample_lags+1]
+
+        println("Sampling std errors range (full): $(round(minimum(sample_full_err_vals), sigdigits=2)) - $(round(maximum(sample_full_err_vals), sigdigits=2))")
+        println("Sampling std errors range (connected): $(round(minimum(sample_connected_err_vals), sigdigits=2)) - $(round(maximum(sample_connected_err_vals), sigdigits=2))")
+
+        # Both exact and sample are now at the same separations (N_cols, 2*N_cols, ...)
+        common_seps = min(length(exact_full_vals), length(sample_full_vals))
+        error_full = abs.(exact_full_vals[1:common_seps] .- sample_full_vals[1:common_seps])
+        error_connected = abs.(exact_connected_vals[1:common_seps] .- sample_connected_vals[1:common_seps])
+        mean_error_full = mean(error_full)
+        mean_error_connected = mean(error_connected)
+        println("Mean |exact - sample| error (full): $(round(mean_error_full, digits=6))")
+        println("Mean |exact - sample| error (connected): $(round(mean_error_connected, digits=6))")
     end
-
-    Z_vec = Z_samples[conv_step+1:end]
-
-    # Use row*N_cols for subsampling so each subchain has same-column-type measurements
-    # (for 2x2 unit cells, row alone mixes odd/even column types)
-    acf_row = row * N_cols
-    lags, acf, acf_err, corr_full, corr_err, corr_connected, corr_connected_err = compute_acf(
-        reshape(Float64.(Z_vec), 1, :); max_lag=max_sep_periods+1, row=acf_row
-    )
-
-    @show corr_err
-    @show corr_connected_err
-
-    sample_full = corr_full
-    sample_full_err = corr_err
-    sample_connected = corr_connected
-    sample_connected_err = corr_connected_err
-
-    n_sample_lags = min(length(sample_full) - 1, max_sep_periods)
-    # Sample lags are in period units; convert to column separations
-    sample_seps = [k * N_cols for k in 1:n_sample_lags]
-    sample_full_vals = sample_full[2:n_sample_lags+1]
-    sample_full_err_vals = sample_full_err[2:n_sample_lags+1]
-    sample_connected_vals = sample_connected[2:n_sample_lags+1]
-    sample_connected_err_vals = sample_connected_err[2:n_sample_lags+1]
-
-    println("Sampling std errors range (full): $(round(minimum(sample_full_err_vals), sigdigits=2)) - $(round(maximum(sample_full_err_vals), sigdigits=2))")
-    println("Sampling std errors range (connected): $(round(minimum(sample_connected_err_vals), sigdigits=2)) - $(round(maximum(sample_connected_err_vals), sigdigits=2))")
-
-    # Both exact and sample are now at the same separations (N_cols, 2*N_cols, ...)
-    common_seps = min(length(exact_full_vals), length(sample_full_vals))
-    error_full = abs.(exact_full_vals[1:common_seps] .- sample_full_vals[1:common_seps])
-    error_connected = abs.(exact_connected_vals[1:common_seps] .- sample_connected_vals[1:common_seps])
-    mean_error_full = mean(error_full)
-    mean_error_connected = mean(error_connected)
-    println("Mean |exact - sample| error (full): $(round(mean_error_full, digits=6))")
-    println("Mean |exact - sample| error (connected): $(round(mean_error_connected, digits=6))")
 
     min_val = 1e-15
 
@@ -290,12 +376,14 @@ function plot_correlation_function(filename::String;
         scatterlines!(ax1, separations, exact_full_abs;
                       color=:steelblue, marker=:circle, label="TN contraction")
 
-        err_low = min.(sample_full_err_vals, sample_full_abs .- min_val)
-        errorbars!(ax1, collect(sample_seps), sample_full_abs,
-                   err_low, sample_full_err_vals;
-                   color=:firebrick, whiskerwidth=4)
-        scatter!(ax1, collect(sample_seps), sample_full_abs;
-                 color=:firebrick, marker=:diamond, label="Sampling")
+        if include_sampling
+            err_low = min.(sample_full_err_vals, sample_full_abs .- min_val)
+            errorbars!(ax1, collect(sample_seps), sample_full_abs,
+                       err_low, sample_full_err_vals;
+                       color=:firebrick, whiskerwidth=4)
+            scatter!(ax1, collect(sample_seps), sample_full_abs;
+                     color=:firebrick, marker=:diamond, label="Sampling")
+        end
 
         text!(ax1, 0.03, 0.97; text="(a)", space=:relative,
               align=(:left, :top), fontsize=PAPER_TITLESIZE, font=:bold)
@@ -310,12 +398,14 @@ function plot_correlation_function(filename::String;
         scatterlines!(ax2, separations, exact_connected_abs;
                       color=:steelblue, marker=:circle, label="TN contraction")
 
-        err_low_c = min.(sample_connected_err_vals, sample_connected_abs .- min_val)
-        errorbars!(ax2, collect(sample_seps), sample_connected_abs,
-                   err_low_c, sample_connected_err_vals;
-                   color=:firebrick, whiskerwidth=4)
-        scatter!(ax2, collect(sample_seps), sample_connected_abs;
-                 color=:firebrick, marker=:diamond, label="Sampling")
+        if include_sampling
+            err_low_c = min.(sample_connected_err_vals, sample_connected_abs .- min_val)
+            errorbars!(ax2, collect(sample_seps), sample_connected_abs,
+                       err_low_c, sample_connected_err_vals;
+                       color=:firebrick, whiskerwidth=4)
+            scatter!(ax2, collect(sample_seps), sample_connected_abs;
+                     color=:firebrick, marker=:diamond, label="Sampling")
+        end
 
         if !isnothing(ξ_fitted) && !isnothing(A_fitted)
             r_fit = range(first(separations), last(separations); length=200)
@@ -349,6 +439,9 @@ function plot_correlation_function(filename::String;
         sample_full_err = sample_full_err_vals,
         sample_connected = sample_connected_vals,
         sample_connected_err = sample_connected_err_vals,
+        sample_full_trajectories = sample_full_trajectories,
+        sample_connected_trajectories = sample_connected_trajectories,
+        sampling_trajectories = sampling_trajectories,
         error_full = error_full,
         error_connected = error_connected,
         mean_error_full = mean_error_full,
