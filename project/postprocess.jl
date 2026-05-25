@@ -91,8 +91,8 @@ end
 # Uncomment the block below (remove #= and =#) to run analysis examples
 
 # Analyze a single result
-J=1.0;g = 1.0; row=3 ; nqubits=5; p=3; virtual_qubits=1;D=2
-data_dir = joinpath(@__DIR__, "results/NM")
+J=1.0;g = 2.0; row=3 ; nqubits=3; p=3; virtual_qubits=1;D=2
+data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile, dmrg_bulk_file="project/results/dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json")
@@ -223,7 +223,7 @@ fig, data = plot_magnetization_vs_g(
 display(fig)
                    
  
-plot_correlation_vs_g(data_dir, [1.0];row=3, nqubits=5,p=3,dmrg_file=joinpath(data_dir,"dmrg_bulk_tfim_Ly3_D2_gscan.json"),pepskit_file=referfile, g_c=3.04,
+plot_correlation_vs_g(data_dir, [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0];row=3, nqubits=3,p=3,dmrg_file=joinpath(data_dir,"dmrg_bulk_tfim_Ly3_D2_gscan.json"),pepskit_file=referfile, g_c=3.04,
 spectrum_krylovdim=200,
 spectrum_tol=1e-7,
 spectrum_maxiter=2000,
@@ -248,10 +248,12 @@ fig, data = plot_correlation_function(
                                     conv_step=102,
                                     samples=30000,
                                 )
+save("project/results/figures/correlation_function_g=1.0.pdf", fig)
+
 display(fig)                               
-fig = plot_energy_dynamics_vs_g("project/results", [0.5, 1.0, 1.5, 2.0, 2.5, 3.0];
-J=1.0, row=3, p=3, nqubits=5,                                                                                                
-M=10000, shots=20, conv_step=0, save_path="project/results/figures/energy_dynamics_vs_g_D=4.pdf")
+fig = plot_energy_dynamics_vs_g("project/results", [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5,4.0];
+J=1.0, row=3, p=3, nqubits=3,                                                                                                
+M=10000, shots=20, conv_step=0, ylims=(-4.5, -1.5), save_path="project/results/figures/energy_dynamics_vs_g.pdf")
 
 fig = plot_local_xz_dynamics_vs_g("project/results", [0.5];
     J=1.0, row=3, p=3, nqubits=5,

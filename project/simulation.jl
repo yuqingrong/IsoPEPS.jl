@@ -247,29 +247,32 @@ end
      abstol=1e-5,
      unit_cell=:two_by_two
  )
-
-# ── Example: Heisenberg J1-J2 ──
-# simulation(;
-#     model="heisenberg_j1j2",
-#     scan_param=:J2,
-#     scan_values=[0.0, 0.25, 0.5],
-#     J1=1.0,
-#     row=3, p=3, nqubits=3,
-#     maxiter=500,
-#     seed=123,
-#     verbose=true,
-#     output_dir=joinpath(@__DIR__, "results_heisenberg"),
-#     share_params=true,
-#     conv_step=1000,
-#     samples=40000,
-#     n_runs=1,
-#     abstol=1e-5
-# )
 =#
+# ── Example: Heisenberg J1-J2 ──
+simulation(;
+    model="heisenberg_j1j2",
+    scan_param=:J2,
+    scan_values=[0.5],
+    J1=1.0,
+    row=4,
+    p=3,
+    nqubits=3,
+    maxiter=3000,
+    seed=123,
+    verbose=true,
+    output_dir=joinpath(@__DIR__, "results_heisenberg"),
+    share_params=true,
+    conv_step=100,
+    samples=4000,
+    n_runs=10,
+    abstol=1e-3,
+    unit_cell=:two_by_two,
+)
+#=
 simulation(;
     model="tfim",
     scan_param=:g,
-    scan_values=[0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0],
+    scan_values=[0.75, 1.25, 1.75, 2.25, 2.75, 3.25, 3.75, 4.25, 4.75],
     J=1.0,
     row=3,
     p=3,
@@ -284,3 +287,4 @@ simulation(;
     n_runs=10,
     warm_start=true,
     abstol=1e-5)
+=#

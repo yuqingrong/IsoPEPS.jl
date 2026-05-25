@@ -247,6 +247,13 @@ function plot_correlation_function(filename::String;
     end
     correlation_length = N_cols / gap
     println("Correlation length ξ = $(round(correlation_length, digits=2)) columns")
+    burnin_columns = conv_step / row
+    burnin_over_xi = isfinite(correlation_length) && correlation_length > 0 ?
+        burnin_columns / correlation_length : Inf
+    println("Sampling burn-in = $(round(burnin_columns, digits=2)) columns ($(round(burnin_over_xi, sigdigits=3)) ξ)")
+    if include_sampling && burnin_over_xi < 5
+        @warn "Sampling burn-in is short compared with the transfer correlation length; sampling correlations may not match stationary exact contractions. Increase conv_step substantially or disable sampling for this figure." conv_step burnin_columns correlation_length burnin_over_xi
+    end
 
     sample_seps = Int[]
     sample_full_vals = Float64[]
@@ -339,6 +346,9 @@ function plot_correlation_function(filename::String;
         mean_error_connected = mean(error_connected)
         println("Mean |exact - sample| error (full): $(round(mean_error_full, digits=6))")
         println("Mean |exact - sample| error (connected): $(round(mean_error_connected, digits=6))")
+        if burnin_over_xi < 5
+            println("Large exact/sample deviations are expected here because the sampled chain has not equilibrated to the transfer fixed point.")
+        end
     end
 
     min_val = 1e-15
@@ -447,6 +457,8 @@ function plot_correlation_function(filename::String;
         mean_error_full = mean_error_full,
         mean_error_connected = mean_error_connected,
         correlation_length = correlation_length,
+        sampling_burnin_columns = burnin_columns,
+        sampling_burnin_over_xi = burnin_over_xi,
         correlation_length_fitted = ξ_fitted,
         fitted_amplitude = A_fitted,
         g = g, row = row, nqubits = nqubits
