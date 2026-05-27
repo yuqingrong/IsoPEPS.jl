@@ -171,6 +171,9 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
         # Build model kwargs: fixed params + scan param
         model_kw = merge(fixed_params, Dict{Symbol,Any}(scan_param => val))
 
+        # Checkpoint file for crash recovery
+        checkpoint_file = joinpath(output_dir, ".checkpoint_$(scan_param)=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
+
         result = optimize_circuit(params, p, row, nqubits;
                                   model=model,
                                   maxiter=maxiter,
@@ -181,6 +184,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
                                   abstol=abstol,
                                   active_nqubits=active_nqubits,
                                   unit_cell=unit_cell,
+                                  checkpoint_file=checkpoint_file,
                                   model_kw...)
 
         results[i] = result
@@ -224,25 +228,26 @@ end
      abstol=1e-5,
      unit_cell=:two_by_two
  )
-
-# ── Example: Heisenberg J1-J2 ──
-# simulation(;
-#     model="heisenberg_j1j2",
-#     scan_param=:J2,
-#     scan_values=[0.0, 0.25, 0.5],
-#     J1=1.0,
-#     row=3, p=3, nqubits=3,
-#     maxiter=500,
-#     seed=123,
-#     verbose=true,
-#     output_dir=joinpath(@__DIR__, "results_heisenberg"),
-#     share_params=true,
-#     conv_step=1000,
-#     samples=40000,
-#     n_runs=1,
-#     abstol=1e-5
-# )
 =#
+# ── Example: Heisenberg J1-J2 ──
+ simulation(;
+     model="heisenberg_j1j2",
+     scan_param=:J2,
+     scan_values=[0.5],
+     J1=1.0,
+     row=4, p=3, nqubits=5,
+     maxiter=500,
+     seed=123,
+     verbose=true,
+     output_dir=joinpath(@__DIR__, "results_heisenberg"),
+     share_params=true,
+     conv_step=1000,
+     samples=4000,
+     n_runs=10,
+     abstol=1e-5,
+     unit_cell=:two_by_two
+ )
+#=
 simulation(;
     model="tfim",
     scan_param=:g,
@@ -260,3 +265,4 @@ simulation(;
     samples=6000,
     n_runs=10,
     abstol=1e-5)
+=#

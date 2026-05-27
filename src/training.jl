@@ -179,6 +179,8 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
     samples=10000, maxiter=5000, abstol=0.01, n_runs=44,
     unit_cell::Symbol=:single,
     active_nqubits::Int=nqubits,
+    checkpoint_file::Union{String,Nothing}=nothing,
+    checkpoint_every::Int=10,
     model_kwargs...)
 
     kw = Dict{Symbol,Any}(model_kwargs)
@@ -188,8 +190,32 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
     mlabel = model_label(m)
     model_str = model_name(m)
 
+    # Resume from checkpoint if available
+    if checkpoint_file !== nothing && isfile(checkpoint_file)
+        try
+            ckpt = open(checkpoint_file, "r") do io
+                JSON3.read(io)
+            end
+            ckpt_params = Float64.(collect(ckpt[:params]))
+            if length(ckpt_params) == length(params)
+                params = ckpt_params
+                @info "Resumed from checkpoint: $(checkpoint_file) (energy=$(get(ckpt, :energy, "unknown")))"
+            else
+                @warn "Checkpoint parameter count mismatch ($(length(ckpt_params)) vs $(length(params))), ignoring"
+            end
+        catch e
+            @warn "Failed to load checkpoint: $e"
+        end
+    end
+
     # Store initial parameters
     initial_params = copy(params)
+    expected_params = gate_parameter_count(p, nqubits;
+                                           unit_cell=unit_cell,
+                                           row=row,
+                                           share_params=share_params,
+                                           active_nqubits=active_nqubits)
+    @info "Starting sampling optimization with $(length(params)) parameters (expected $expected_params; model=$model_str, unit_cell=$unit_cell)"
 
     energy_history = Float64[]
     params_history = Vector{Float64}[]
@@ -231,28 +257,30 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
 
         # Log threading info once
         if !logged_threads[]
-            @info "Using $(Threads.nthreads()) threads for parallel sampling"
+            @info "Using $(Threads.nthreads()) threads (Yao-internal parallelism per run)"
             logged_threads[] = true
         end
 
-        Threads.@threads for run_idx in 1:n_runs
-        if unit_cell == :two_by_two && model_str == "heisenberg_j1j2"
-            result_ch = sample_quantum_channel(gates_odd, gates_even, row, nqubits;
-                                              conv_step=conv_step,
-                                              samples=samples,
-                                              model=m)
-        else
-            result_ch = sample_quantum_channel(gates, row, nqubits;
-                                              conv_step=conv_step,
-                                              samples=samples,
-                                              model=m)
-        end
-        # Each phase now has conv_step + samples raw measurements; discard same thermalization
-        Z_samples_all[run_idx] = result_ch[2][conv_step+1:end]
-        X_samples_all[run_idx] = result_ch[3][conv_step+1:end]
-        if need_y
-            Y_samples_all[run_idx] = result_ch[4][conv_step+1:end]
-        end
+        # Run sampling sequentially — Yao already parallelizes each run
+        # internally via @threads on the state vector, so threads are utilized.
+        # Outer parallelism causes nested @threads segfaults in Julia 1.12.
+        for run_idx in 1:n_runs
+            if unit_cell == :two_by_two && model_str == "heisenberg_j1j2"
+                result_ch = sample_quantum_channel(gates_odd, gates_even, row, nqubits;
+                 conv_step=conv_step,
+                 samples=samples,
+                 model=m)
+            else
+                result_ch = sample_quantum_channel(gates, row, nqubits;
+                 conv_step=conv_step,
+                 samples=samples,
+                 model=m)
+            end
+            Z_samples_all[run_idx] = result_ch[2][conv_step+1:end]
+            X_samples_all[run_idx] = result_ch[3][conv_step+1:end]
+            if need_y
+                Y_samples_all[run_idx] = result_ch[4][conv_step+1:end]
+            end
         end
 
         # Compute energy per-run to avoid cross-chain boundary artifacts, then average
@@ -299,6 +327,18 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
                                generation_Z_samples, generation_X_samples, generation_Y_samples,
                                energy_history, params_history,
                                Z_samples_history, X_samples_history, Y_samples_history)
+
+            # Checkpoint best params periodically
+            if checkpoint_file !== nothing && generation_count[] % checkpoint_every == 0 && !isempty(energy_history)
+                best_idx = argmin(energy_history)
+                open(checkpoint_file, "w") do io
+                    JSON3.write(io, Dict(
+                        :params => params_history[best_idx],
+                        :energy => energy_history[best_idx],
+                        :generation => generation_count[]
+                    ))
+                end
+            end
         end
 
         return false  # Continue optimization
@@ -376,10 +416,17 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         :samples => samples,
         :maxiter => maxiter,
         :abstol => abstol,
+        :parameter_count => length(params),
+        :expected_parameter_count => expected_params,
         :total_generations => generation_count[],
         :active_nqubits => active_nqubits,
     )
     merge!(input_args, Dict{Symbol,Any}(model_kwargs))
+
+    # Remove checkpoint file on successful completion
+    if checkpoint_file !== nothing && isfile(checkpoint_file)
+        rm(checkpoint_file)
+    end
 
     return result
 end
@@ -420,6 +467,10 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
 
     # Store initial parameters
     initial_params = copy(params)
+    expected_params = gate_parameter_count(p, nqubits;
+                                           unit_cell=unit_cell,
+                                           active_nqubits=active_nqubits)
+    @info "Starting exact optimization with $(length(params)) parameters (expected $expected_params; model=$model_str, unit_cell=$unit_cell)"
 
     # Compute virtual_qubits for expectation value functions
     virtual_qubits = (nqubits - 1) ÷ 2
@@ -473,7 +524,7 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
         return real(energy)
     end
 
-    @info "Optimizing $(length(params)) parameters with CMA-ES (exact contraction, model=$model_str)"
+    @info "Optimizing with CMA-ES (exact contraction, model=$model_str)"
 
     f = OptimizationFunction(objective)
     prob = Optimization.OptimizationProblem(f, params,
@@ -531,6 +582,8 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
         :initial_params => initial_params,
         :maxiter => maxiter,
         :abstol => abstol,
+        :parameter_count => length(params),
+        :expected_parameter_count => expected_params,
         :active_nqubits => active_nqubits,
         :best_iteration => best_idx,
         :total_iterations => length(energy_history)

@@ -207,7 +207,7 @@ end
     save_results(dmrg_d2; scan_values=scan_values, e_bulk_values=[-2.1, -3.1])
     save_results(dmrg_d4; scan_values=scan_values, e_bulk_values=[-2.05, -3.05])
 
-    fig, data = plot_energy_error_vs_g(data_dir, scan_values;
+    fig_energy, fig_error, data = plot_energy_error_vs_g(data_dir, scan_values;
         energy_source=:saved,
         dmrg_file=[
             (file=dmrg_d2, label="DMRG D=2"),
@@ -217,13 +217,14 @@ end
             (label="IsoPEPS χ=5", nqubits=5, suffixes=["_1x1_6w"], energy_source=:saved),
         ])
 
-    @test fig isa Figure
+    @test fig_energy isa Figure
+    @test fig_error isa Figure
     @test haskey(data.series, "IsoPEPS")
     @test haskey(data.series, "IsoPEPS χ=5")
     @test haskey(data.series, "DMRG D=2")
     @test haskey(data.series, "DMRG D=4")
     @test data.series["IsoPEPS χ=5"].energies == [-1.9, -2.8]
-    @test data.errors_by_reference["IsoPEPS χ=5 − DMRG D=4"].errors ≈ [0.15, 0.25]
+    @test data.errors_by_reference["IsoPEPS χ=5 − DMRG D=4"].errors ≈ [0.15/2.05, 0.25/3.05]
     @test data.energies_dmrg == [-2.1, -3.1]
 end
 

@@ -8,6 +8,7 @@ function IsoPEPS.optimize_manifold(gate, row::Int, nqubits::Int, manifold,
                            J::Float64, g::Float64; maxiter=3000, swarm_size=20)
     initial_gate = copy(gate)
     virtual_qubits = (nqubits - 1) ÷ 2
+    @info "Starting manifold optimization with $(length(vec(gate))) gate entries (row=$row, nqubits=$nqubits)"
 
     energy_history = Float64[]
     gap_history = Float64[]
@@ -66,6 +67,7 @@ function IsoPEPS.optimize_manifold(gate, row::Int, nqubits::Int, manifold,
         :initial_gate => initial_gate,
         :maxiter => maxiter,
         :swarm_size => swarm_size,
+        :gate_entry_count => length(vec(gate)),
         :manifold_type => string(typeof(manifold))
     )
     IsoPEPS.save_result("data/manifold_g=$(g)_row=$(row).json", opt_result, input_args)

@@ -28,7 +28,7 @@ using Random
     # Wrong param count should throw
     @test_throws AssertionError build_unitary_gate([0.1], 2, 1, 3)
     @test_throws AssertionError build_unitary_gate([0.1], 2, 2, 3; share_params=false)
-    @test gate_parameter_count(2, 5) == 2 * ppq * 5 * 2
+    @test gate_parameter_count(2, 5) == ppq * 5 * 2
     @test gate_parameter_count(2, 5; active_nqubits=3) == ppq * 5 * 2
 
     # max_stride kwarg: stride=1 restricts entangling structure
@@ -50,25 +50,22 @@ using Random
     @test gates5[1] ≈ expected5 atol=1e-10
     @test all(isapprox(g * g', I, atol=1e-6) for g in gates5)
 
-    # Fully active 5-qubit gates insert an extra Rx-Rz block before CNOT layer 4.
+    # Fully active 5-qubit gates use one Rx-Rz block followed by all CNOT layers.
     params5_active = embed_params(params3, p, nfrom, nto)
     for r in 1:p
         for q in 1:nto
             idx = ppq * nto * (r-1) + ppq * (q-1) + 1
             params5_active[idx] = 0.37 + 0.11q + 0.03r
             params5_active[idx+1] = 0.23 + 0.07q + 0.05r
-            extra_idx = ppq * nto * p + ppq * nto * (r-1) + ppq * (q-1) + 1
-            params5_active[extra_idx] = 0.19 + 0.13q + 0.02r
-            params5_active[extra_idx+1] = 0.31 + 0.05q + 0.04r
         end
     end
     gates5_active = build_unitary_gate(params5_active, p, row, nto; active_nqubits=nto)
     expected_active = Matrix{ComplexF64}(I, 1 << nto, 1 << nto)
-    rotations_from = function(offset, layer)
+    rotations_from = function(layer)
         rotations = Matrix{ComplexF64}(undef, 1, 1)
         rotations[1, 1] = 1
         for q in 1:nto
-            idx = offset + ppq * nto * (layer-1) + ppq * (q-1) + 1
+            idx = ppq * nto * (layer-1) + ppq * (q-1) + 1
             θx = params5_active[idx]
             θz = params5_active[idx+1]
             Rx = ComplexF64[cos(θx/2) -im*sin(θx/2); -im*sin(θx/2) cos(θx/2)]
@@ -78,17 +75,11 @@ using Random
         return rotations
     end
     for r in 1:p
-        cnot_before_extra = Matrix{ComplexF64}(I, 1 << nto, 1 << nto)
-        for (control, target) in [(2, 1), (3, 2), (1, 3)]
-            cnot_before_extra *= Matrix(cnot(nto, control, target))
+        cnot_product = Matrix{ComplexF64}(I, 1 << nto, 1 << nto)
+        for (control, target) in [(2, 1), (3, 2), (1, 3), (4, 1), (4, 2), (5, 3), (5, 4)]
+            cnot_product *= Matrix(cnot(nto, control, target))
         end
-        cnot_after_extra = Matrix{ComplexF64}(I, 1 << nto, 1 << nto)
-        for (control, target) in [(4, 1), (4, 2), (5, 3), (5, 4)]
-            cnot_after_extra *= Matrix(cnot(nto, control, target))
-        end
-        rotations = rotations_from(0, r)
-        extra_rotations = rotations_from(ppq * nto * p, r)
-        expected_active *= rotations * cnot_before_extra * extra_rotations * cnot_after_extra
+        expected_active *= rotations_from(r) * cnot_product
     end
     @test gates5_active[1] ≈ expected_active atol=1e-10
 end
@@ -120,19 +111,12 @@ end
 
     ops5 = local_circuit_ops(1, 5)
     fourth_cnot = findall(op -> op.kind == :cnot, ops5)[4]
-    @test count(op -> op.kind == :rx, ops5) == 10
-    @test count(op -> op.kind == :rz, ops5) == 10
-    @test ops5[fourth_cnot-10:fourth_cnot-1] == [
-        LocalCircuitOp(:rx, (1,), 1, 11),
-        LocalCircuitOp(:rz, (1,), 1, 12),
-        LocalCircuitOp(:rx, (2,), 1, 13),
-        LocalCircuitOp(:rz, (2,), 1, 14),
-        LocalCircuitOp(:rx, (3,), 1, 15),
-        LocalCircuitOp(:rz, (3,), 1, 16),
-        LocalCircuitOp(:rx, (4,), 1, 17),
-        LocalCircuitOp(:rz, (4,), 1, 18),
-        LocalCircuitOp(:rx, (5,), 1, 19),
-        LocalCircuitOp(:rz, (5,), 1, 20),
+    @test count(op -> op.kind == :rx, ops5) == 5
+    @test count(op -> op.kind == :rz, ops5) == 5
+    @test ops5[fourth_cnot-3:fourth_cnot-1] == [
+        LocalCircuitOp(:cnot, (2, 1), 1, nothing),
+        LocalCircuitOp(:cnot, (3, 2), 1, nothing),
+        LocalCircuitOp(:cnot, (1, 3), 1, nothing),
     ]
     @test ops5[fourth_cnot] == LocalCircuitOp(:cnot, (4, 1), 1, nothing)
 
@@ -222,10 +206,6 @@ end
                 @test params_to[new_idx+k] == 0.0
             end
         end
-
-        # Fully active 5-qubit targets include an extra all-zero Rx-Rz block.
-        extra_offset = ppq * nto * p
-        @test all(params_to[extra_offset+1:end] .== 0.0)
 
         # 2×2 unit cell
         params_from4 = rand(4 * chunk_from)

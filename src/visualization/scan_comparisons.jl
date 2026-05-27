@@ -48,14 +48,10 @@ function _auto_reference_label(file::String, fallback::String)
     ly_match = match(r"Ly(\d+)", base)
 
     if occursin("dmrg", lower)
-        label = "DMRG"
         if !isnothing(ly_match)
-            label *= " Ly=$(ly_match.captures[1])"
+            return "DMRG(W=$(ly_match.captures[1]))"
         end
-        if !isnothing(d_match)
-            label *= " D=$(d_match.captures[1])"
-        end
-        return label
+        return "DMRG"
     elseif occursin("pepskit", lower) || occursin("ipeps", lower)
         label = "iPEPS"
         if !isnothing(d_match)
@@ -310,10 +306,10 @@ function _series_errors(circuit_series, reference_series)
     vals = Float64[]
     for (val, energy) in zip(circuit_series.scan_values, circuit_series.energies)
         ref_energy = _lookup_series_energy(reference_series, val)
-        if isnan(ref_energy)
+        if isnan(ref_energy) || ref_energy == 0.0
             push!(errors, NaN)
         else
-            push!(errors, abs(energy - ref_energy))
+            push!(errors, (energy - ref_energy) / abs(ref_energy))
         end
         push!(vals, val)
     end
@@ -381,7 +377,8 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
                                 energy_source::Symbol=:computed,
                                 error_reference=:all,
                                 figsize=nothing,
-                                save_path::Union{String,Nothing}=nothing)
+                                save_path::Union{String,Nothing}=nothing,
+                                save_path_error::Union{String,Nothing}=nothing)
 
     m = _construct_model(model, Dict{Symbol,Any}(:J => Float64(J), :g => 1.0, :J1 => J1, :J2 => 0.0))
     is_heisenberg = m isa HeisenbergJ1J2
@@ -485,7 +482,7 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
     energies_ref = isnothing(primary_ref) ? fill(NaN, length(g_vals_found)) :
                    [_lookup_series_energy(primary_ref, val) for val in g_vals_found]
     errors = isnothing(primary_ref) ? fill(NaN, length(g_vals_found)) :
-             [isnan(ref) ? NaN : abs(energy - ref) for (energy, ref) in zip(energies_exact, energies_ref)]
+             [(isnan(ref) || ref == 0.0) ? NaN : (energy - ref) / abs(ref) for (energy, ref) in zip(energies_exact, energies_ref)]
     energies_dmrg = isnothing(primary_dmrg_series) ? fill(NaN, length(g_vals_found)) :
                     [_lookup_series_energy(primary_dmrg_series, val) for val in g_vals_found]
 
@@ -510,19 +507,17 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
 
     xlabel_str = is_heisenberg ? "J₂ / J₁" : "g"
 
-    _w, _h = PAPER_FIGSIZE                       # 246 × 170 pt
-    _figsize = isnothing(figsize) ? (_w, 2_h - 20) : figsize   # ~(246, 320) for 2 panels
+    _figsize = isnothing(figsize) ? PAPER_FIGSIZE : figsize
 
     colors = [:steelblue, :darkorange, :purple, :teal, :brown, :gray40, :dodgerblue4, :tomato3]
     markers = [:circle, :rect, :diamond, :utriangle, :dtriangle, :cross, :xcross, :star5]
 
-    fig = with_theme(paper_theme()) do
+    fig_energy = with_theme(paper_theme()) do
         fig = Figure(size=_figsize)
 
-        # ── Panel (a): energy per site ──────────────────────────────────────
         ax1 = Axis(fig[1, 1];
+                   xlabel      = xlabel_str,
                    ylabel      = "E / site",
-                   xticklabelsvisible = false,
                    xgridvisible = true,
                    ygridvisible = true)
 
@@ -544,15 +539,32 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
                           linestyle=ref_style)
         end
 
-        text!(ax1, 0.03, 0.97; text="(a)", space=:relative,
-              align=(:left, :top), fontsize=PAPER_TITLESIZE, font=:bold)
         add_paper_legend!(ax1; position=:lb)
 
-        # ── Panel (b): energy error (log scale) ─────────────────────────────
-        ax2 = Axis(fig[2, 1];
+        if !isnothing(save_path)
+            mkpath(dirname(save_path))
+            save(save_path, fig)
+            println("\nEnergy figure saved to: $save_path")
+        end
+
+        fig
+    end
+
+    _error_path = if !isnothing(save_path_error)
+        save_path_error
+    elseif !isnothing(save_path)
+        base, ext = splitext(save_path)
+        "$(base)_error$(ext)"
+    else
+        nothing
+    end
+
+    fig_error = with_theme(paper_theme()) do
+        fig = Figure(size=_figsize)
+
+        ax2 = Axis(fig[1, 1];
                    xlabel      = xlabel_str,
-                   ylabel      = "|ΔE / site|",
-                   yscale      = log10,
+                   ylabel      = "(E_IsoPEPS − E_DMRG) / |E_DMRG|",
                    xgridvisible = true,
                    ygridvisible = true)
 
@@ -569,6 +581,7 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
         end
 
         if has_error
+            hlines!(ax2, [0.0]; color=:gray, linestyle=:dash, linewidth=0.5)
             add_paper_legend!(ax2; position=:rb)
         else
             text!(ax2, 0.5, 0.5; text="No reference data",
@@ -576,15 +589,10 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
                   fontsize=PAPER_AXIS_LABELSIZE, color=:gray)
         end
 
-        text!(ax2, 0.03, 0.97; text="(b)", space=:relative,
-              align=(:left, :top), fontsize=PAPER_TITLESIZE, font=:bold)
-
-        rowgap!(fig.layout, 4)
-
-        if !isnothing(save_path)
-            mkpath(dirname(save_path))
-            save(save_path, fig)
-            println("\nFigure saved to: $save_path")
+        if !isnothing(_error_path)
+            mkpath(dirname(_error_path))
+            save(_error_path, fig)
+            println("\nError figure saved to: $_error_path")
         end
 
         fig
@@ -605,7 +613,7 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
         errors_by_reference = errors_by_reference,
     )
 
-    return fig, data
+    return fig_energy, fig_error, data
 end
 
 """

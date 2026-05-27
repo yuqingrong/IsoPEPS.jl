@@ -91,7 +91,7 @@ end
 # Uncomment the block below (remove #= and =#) to run analysis examples
 
 # Analyze a single result
-J=1.0;g = 2.0; row=3 ; nqubits=5; p=3; virtual_qubits=1;D=2
+J=1.0;g = 2.0; row=3 ; nqubits=3; p=3; virtual_qubits=1;D=2
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
@@ -160,12 +160,12 @@ fig, _, _ = plot_combined_structure_factors(
 plot_energy_error_vs_g("project/results", [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0];                            
       model="tfim",                                              
       J1=1.0, row=3, p=3, nqubits=3,                        
-      energy_source=:resampled,
+      energy_source=:computed,
       conv_step=102,
-      samples=30000,
+      samples=3000000,
       dmrg_file="project/results/dmrg_bulk_tfim_Ly3_D2_gscan.json",save_path="project/results/figures/tfim_energy_vs_g.pdf")
     
-fig, data = plot_energy_error_vs_g("project/results", [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0];
+ fig, data = plot_energy_error_vs_g("project/results", [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0];
       model="tfim",
       J=1.0,
       row=3,
@@ -176,8 +176,8 @@ fig, data = plot_energy_error_vs_g("project/results", [0.5, 1.0, 1.5, 2.0, 2.5, 
       samples=30000,
       resample_repeats=30,
       dmrg_file=[
-          (file="project/results/dmrg_bulk_tfim_Ly3_D2_gscan.json", label="DMRG Ly=3 D=2"),
-          (file="project/results/dmrg_bulk_tfim_Ly3_D4_gscan.json", label="DMRG Ly=3 D=4"),
+          (file="project/results/dmrg_bulk_tfim_Ly3_D2_gscan.json", label="DMRG(W=3,D=2)"),
+          (file="project/results/dmrg_bulk_tfim_Ly3_D4_gscan.json", label="DMRG(W=3,D=4)"),
       ],
       circuit_series=[
           (
@@ -191,14 +191,14 @@ fig, data = plot_energy_error_vs_g("project/results", [0.5, 1.0, 1.5, 2.0, 2.5, 
   )
 
 ns, vars, errs = compute_variance_vs_samples(
-        "project/results/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json",
+        "project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json",
         [1000, 2000, 3000, 4000,5000,6000, 7000,8000,9000, 10000,20000,30000,40000,50000,60000,70000,80000,90000,100000];
         conv_step=100, n_bootstrap=200,
-        save_path="project/results/tfim_variance_vs_samples.json"   # optional
+        save_path="project/results/heisenberg_variance_vs_samples.json"   # optional
     )
 # Step 2 — plot
 fig = plot_variance_vs_samples(ns, vars; errors=errs,
-              save_path="project/results/figures/tfim_variance_vs_samples_g=3.0.pdf")
+              save_path="project/results/figures/heisenberg_variance_vs_samples_J2=0.5.pdf")
 
 fig, E_mat = plot_energy_vs_inv_samples(
                 "project/results/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json",
