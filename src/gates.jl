@@ -35,7 +35,7 @@ function _cnot_pattern_layers(nqubits::Int; max_stride::Int=nqubits-1, active_nq
         # Preserve the 3-qubit circuit on local qubits (1, 2, 4). The added
         # virtual-leg qubits (3, 5) are controls, so zero-angle warm starts
         # remain in their embedded 3-qubit subspace until optimization moves them.
-        return [[(2, 1)], [(4, 2)], [(1, 4)], [(3, 1)], [(3, 2)], [(5, 4)], [(5, 3)]]
+        return [[(2, 1)], [(4, 2)], [(1, 4)], [(3, 1)], [(5, 2)], [(3, 2)], [(5, 4)]]
     end
 
     layers = Vector{Vector{Tuple{Int,Int}}}()

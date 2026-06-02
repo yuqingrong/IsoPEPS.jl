@@ -296,10 +296,10 @@ fig = plot_local_xz_dynamics_vs_g("project/results", [4.0];
     random_seed=123,
     save_path="project/results/figures/local_xz_dynamics_vs_g_random.pdf")
 
-fig = plot_circuit_block(3, 3; save_path="project/results/figures/circuit_block_3x3.pdf")
+fig = plot_circuit_block(3, 5; save_path="project/results/figures/circuit_block_3x5.pdf")
 display(fig)
 
-plot_channel_circuit(3, 3, 3;
+plot_channel_circuit(3, 3, 5;
     cycles=2,
     expanded=false,
-    save_path="project/results/figures/circuit_full_3x3x3.pdf")
+    save_path="project/results/figures/circuit_full_3x3x5.pdf")

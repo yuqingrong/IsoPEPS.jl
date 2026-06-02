@@ -86,7 +86,7 @@ end
     end
     for r in 1:p
         cnot_product = Matrix{ComplexF64}(I, 1 << nto, 1 << nto)
-        for (control, target) in [(2, 1), (4, 2), (1, 4), (3, 1), (3, 2), (5, 4), (5, 3)]
+        for (control, target) in [(2, 1), (4, 2), (1, 4), (3, 1), (5, 2), (3, 2), (5, 4)]
             cnot_product *= Matrix(cnot(nto, control, target))
         end
         expected_active *= rotations_from(r) * cnot_product
@@ -98,7 +98,7 @@ end
     @test cnot_pattern(1) == Tuple{Int,Int}[]
     @test cnot_pattern(3) == [(2, 1), (3, 2), (1, 3)]
     @test cnot_pattern(4; max_stride=1) == [(2, 1), (3, 2), (4, 3)]
-    @test cnot_pattern(5) == [(2, 1), (4, 2), (1, 4), (3, 1), (3, 2), (5, 4), (5, 3)]
+    @test cnot_pattern(5) == [(2, 1), (4, 2), (1, 4), (3, 1), (5, 2), (3, 2), (5, 4)]
     @test cnot_pattern(5; active_nqubits=3) == [(2, 1), (3, 2), (1, 3)]
 
     ops = local_circuit_ops(2, 3)

@@ -46,6 +46,7 @@ function run_simulation(config_path::String)
     maxiter = opt_cfg["maxiter"]
     abstol = Float64(opt_cfg["abstol"])
     n_runs = get(opt_cfg, "n_runs", 44)
+    parallel_sampling = get(opt_cfg, "parallel_sampling", false)
     samples = get(opt_cfg, "samples", 10000)
     conv_step = get(opt_cfg, "conv_step", 100)
     seed = get(opt_cfg, "seed", 123)
@@ -91,6 +92,7 @@ function run_simulation(config_path::String)
                                   conv_step=conv_step,
                                   samples=samples,
                                   n_runs=n_runs,
+                                  parallel_sampling=parallel_sampling,
                                   abstol=abstol,
                                   unit_cell=unit_cell)
 
@@ -101,7 +103,8 @@ function run_simulation(config_path::String)
             :scan_param => scan_param,
             scan_param => val,
             :row => row, :p => p, :nqubits => nqubits,
-            :maxiter => maxiter, :seed => seed
+            :maxiter => maxiter, :seed => seed,
+            :parallel_sampling => parallel_sampling
         )
         save_result(filename, result, input_args)
 
