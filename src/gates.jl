@@ -31,7 +31,10 @@ function _cnot_pattern_layers(nqubits::Int; max_stride::Int=nqubits-1, active_nq
     max_stride = clamp(max_stride, 1, active_nqubits-1)
 
     if nqubits == 5 && active_nqubits == 5 && max_stride == 4
-        return [[(2, 1)], [(3, 2)], [(1, 3)], [(4, 1)], [(4, 2)], [(5, 3)], [(5, 4)]]
+        # Preserve the 3-qubit circuit on local qubits (1, 2, 4). The added
+        # virtual-leg qubits (3, 5) are controls, so zero-angle warm starts
+        # remain in their embedded 3-qubit subspace until optimization moves them.
+        return [[(2, 1)], [(4, 2)], [(1, 4)], [(3, 1)], [(3, 2)], [(5, 4)], [(5, 3)]]
     end
 
     layers = Vector{Vector{Tuple{Int,Int}}}()
@@ -243,7 +246,7 @@ with full SU(2) single-qubit rotations and brick-wall CNOT entangling layers.
 - `nqubits`: Number of qubits per gate
 - `share_params`: If true, all gates share parameters (A-A-A); if false, independent (A-B-C)
 - `active_nqubits`: Number of leading qubits that receive rotations and CNOTs.
-  Use `active_nqubits < nqubits` with `embed_params` to keep extra qubits idle.
+  Use `active_nqubits < nqubits` to restrict a circuit to a leading-qubit subspace.
 
 # Returns
 - Vector of unitary gate matrices
@@ -308,7 +311,7 @@ The 4 gates tile the lattice as:
 - `row`: Number of rows
 - `nqubits`: Number of qubits per gate
 - `active_nqubits`: Number of leading qubits that receive rotations and CNOTs.
-  Use `active_nqubits < nqubits` with `embed_params` to keep extra qubits idle.
+  Use `active_nqubits < nqubits` to restrict a circuit to a leading-qubit subspace.
 
 # Returns
 - `(gates_odd, gates_even)`: Tuple of two `Vector{Matrix{ComplexF64}}`, each of length `row`
@@ -394,7 +397,9 @@ end
                  active_nqubits_from=nqubits_from, active_nqubits_to=nqubits_to)
 
 Embed parameters from a smaller nqubits into a larger nqubits parameter space.
-Copies existing qubit rotations and sets new qubits to identity (θ=0).
+Copies existing qubit rotations and sets new qubits to identity (θ=0). The
+mapping preserves the PEPS local-leg layout: physical, one virtual leg, then
+the other virtual leg.
 
 Works for both `:single` (shared params) and `:two_by_two` (4 gate chunks) unit cells.
 
@@ -412,7 +417,14 @@ function embed_params(params::Vector{Float64}, p::Int, nqubits_from::Int, nqubit
                       active_nqubits_from::Int=nqubits_from,
                       active_nqubits_to::Int=nqubits_to)
     nqubits_to > nqubits_from || error("nqubits_to ($nqubits_to) must be > nqubits_from ($nqubits_from)")
+    isodd(nqubits_from) && isodd(nqubits_to) ||
+        throw(ArgumentError("PEPS gate sizes must be odd (1 physical + 2 * virtual qubits)"))
     ppq = PARAMS_PER_QUBIT_PER_LAYER
+    virtual_from = (nqubits_from - 1) ÷ 2
+    virtual_to = (nqubits_to - 1) ÷ 2
+
+    embedded_qubit_index(i) =
+        i <= virtual_from + 1 ? i : i + (virtual_to - virtual_from)
 
     chunk_from = _gate_param_count(p, nqubits_from;
                                    max_stride=max_stride_from,
@@ -437,13 +449,14 @@ function embed_params(params::Vector{Float64}, p::Int, nqubits_from::Int, nqubit
             for block in 1:min(blocks_from, blocks_to)
                 for i in 1:nqubits_from
                     old_idx = c * chunk_from + _rotation_param_index(p, nqubits_from, r, i, block)
-                    new_idx = c * chunk_to + _rotation_param_index(p, nqubits_to, r, i, block)
+                    target_i = embedded_qubit_index(i)
+                    new_idx = c * chunk_to + _rotation_param_index(p, nqubits_to, r, target_i, block)
                     for k in 0:ppq-1
                         new_params[new_idx+k] = params[old_idx+k]
                     end
                 end
             end
-            # Qubits nqubits_from+1 : nqubits_to stay at 0 (identity rotation)
+            # Newly added virtual-leg qubits stay at 0 (identity rotation).
         end
     end
 

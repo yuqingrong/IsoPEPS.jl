@@ -223,28 +223,30 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
 
         # Log threading info once
         if !logged_threads[]
-            @info "Using $(Threads.nthreads()) threads for parallel sampling"
+            @info "Using $(Threads.nthreads()) threads (Yao-internal parallelism per run)"
             logged_threads[] = true
         end
 
-        Threads.@threads for run_idx in 1:n_runs
-        if unit_cell == :two_by_two && model_str == "heisenberg_j1j2"
-            result_ch = sample_quantum_channel(gates_odd, gates_even, row, nqubits;
-                                              conv_step=conv_step,
-                                              samples=samples,
-                                              model=m)
-        else
-            result_ch = sample_quantum_channel(gates, row, nqubits;
-                                              conv_step=conv_step,
-                                              samples=samples,
-                                              model=m)
-        end
-        # Each phase now has conv_step + samples raw measurements; discard same thermalization
-        Z_samples_all[run_idx] = result_ch[2][conv_step+1:end]
-        X_samples_all[run_idx] = result_ch[3][conv_step+1:end]
-        if need_y
-            Y_samples_all[run_idx] = result_ch[4][conv_step+1:end]
-        end
+        # Run sampling sequentially. Yao already parallelizes each run
+        # internally, and nested @threads can segfault under Julia 1.12.
+        for run_idx in 1:n_runs
+            if unit_cell == :two_by_two && model_str == "heisenberg_j1j2"
+                result_ch = sample_quantum_channel(gates_odd, gates_even, row, nqubits;
+                                                  conv_step=conv_step,
+                                                  samples=samples,
+                                                  model=m)
+            else
+                result_ch = sample_quantum_channel(gates, row, nqubits;
+                                                  conv_step=conv_step,
+                                                  samples=samples,
+                                                  model=m)
+            end
+            # Each phase has conv_step + samples raw measurements.
+            Z_samples_all[run_idx] = result_ch[2][conv_step+1:end]
+            X_samples_all[run_idx] = result_ch[3][conv_step+1:end]
+            if need_y
+                Y_samples_all[run_idx] = result_ch[4][conv_step+1:end]
+            end
         end
 
         # Compute energy per-run to avoid cross-chain boundary artifacts, then average

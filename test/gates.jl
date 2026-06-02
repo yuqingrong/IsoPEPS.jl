@@ -5,6 +5,15 @@ using Statistics
 using Yao, YaoBlocks
 using Random
 
+function _lift_3_to_5_state(state)
+    lifted = zeros(eltype(state), 1 << 5)
+    for source_index in 0:((1 << 3) - 1)
+        target_index = (source_index & 0b011) | ((source_index & 0b100) << 1)
+        lifted[target_index + 1] = state[source_index + 1]
+    end
+    return lifted
+end
+
 @testset "build_unitary_gate" begin
     Random.seed!(1234)
     ppq = IsoPEPS.PARAMS_PER_QUBIT_PER_LAYER
@@ -40,14 +49,15 @@ using Random
     @test gates_full[1] != gates_short[1]
     @test all(isapprox(g * g', I, atol=1e-6) for g in vcat(gates_full, gates_short))
 
-    # active_nqubits keeps a smaller embedded circuit's CNOT pattern intact.
+    # The fully active 5-qubit gate preserves a tensor-aware 3-qubit warm start.
     p = 3; row = 2; nfrom = 3; nto = 5
     params3 = rand(ppq * nfrom * p) .* 2π
-    params5 = embed_params(params3, p, nfrom, nto; active_nqubits_to=nfrom)
+    params5 = embed_params(params3, p, nfrom, nto)
     gates3 = build_unitary_gate(params3, p, row, nfrom)
-    gates5 = build_unitary_gate(params5, p, row, nto; active_nqubits=nfrom)
-    expected5 = kron(Matrix{ComplexF64}(I, 1 << (nto - nfrom), 1 << (nto - nfrom)), gates3[1])
-    @test gates5[1] ≈ expected5 atol=1e-10
+    gates5 = build_unitary_gate(params5, p, row, nto)
+    state3 = normalize!(randn(ComplexF64, 1 << nfrom))
+    state5 = _lift_3_to_5_state(state3)
+    @test gates5[1] * state5 ≈ _lift_3_to_5_state(gates3[1] * state3) atol=1e-10
     @test all(isapprox(g * g', I, atol=1e-6) for g in gates5)
 
     # Fully active 5-qubit gates do not insert an extra Rx-Rz block before CNOT layer 4.
@@ -89,7 +99,7 @@ end
     @test cnot_pattern(1) == Tuple{Int,Int}[]
     @test cnot_pattern(3) == [(2, 1), (3, 2), (1, 3)]
     @test cnot_pattern(4; max_stride=1) == [(2, 1), (3, 2), (4, 3)]
-    @test cnot_pattern(5) == [(2, 1), (3, 2), (1, 3), (4, 1), (4, 2), (5, 3), (5, 4)]
+    @test cnot_pattern(5) == [(2, 1), (4, 2), (1, 4), (3, 1), (3, 2), (5, 4), (5, 3)]
     @test cnot_pattern(5; active_nqubits=3) == [(2, 1), (3, 2), (1, 3)]
 
     ops = local_circuit_ops(2, 3)
@@ -116,10 +126,10 @@ end
     @test count(op -> op.kind == :rz, ops5) == 5
     @test ops5[fourth_cnot-3:fourth_cnot-1] == [
         LocalCircuitOp(:cnot, (2, 1), 1, nothing),
-        LocalCircuitOp(:cnot, (3, 2), 1, nothing),
-        LocalCircuitOp(:cnot, (1, 3), 1, nothing),
+        LocalCircuitOp(:cnot, (4, 2), 1, nothing),
+        LocalCircuitOp(:cnot, (1, 4), 1, nothing),
     ]
-    @test ops5[fourth_cnot] == LocalCircuitOp(:cnot, (4, 1), 1, nothing)
+    @test ops5[fourth_cnot] == LocalCircuitOp(:cnot, (3, 1), 1, nothing)
 
     one_qubit_ops = local_circuit_ops(1, 1)
     @test one_qubit_ops == [
@@ -163,19 +173,19 @@ end
     # Wrong param count should throw
     @test_throws AssertionError build_unitary_gate_2x2([0.1], 2, 1, 3)
 
-    # active_nqubits also applies to every gate in a 2×2 unit cell.
+    # Tensor-aware embedding also applies to every gate in a 2×2 unit cell.
     p = 2; row = 3; nfrom = 3; nto = 5
     chunk3 = ppq * nfrom * p
     params3 = rand(4 * chunk3) .* 2π
-    params5 = embed_params(params3, p, nfrom, nto; unit_cell=:two_by_two,
-                           active_nqubits_to=nfrom)
+    params5 = embed_params(params3, p, nfrom, nto; unit_cell=:two_by_two)
     odd3, even3 = build_unitary_gate_2x2(params3, p, row, nfrom)
-    odd5, even5 = build_unitary_gate_2x2(params5, p, row, nto; active_nqubits=nfrom)
-    idle = Matrix{ComplexF64}(I, 1 << (nto - nfrom), 1 << (nto - nfrom))
-    @test odd5[1] ≈ kron(idle, odd3[1]) atol=1e-10
-    @test odd5[2] ≈ kron(idle, odd3[2]) atol=1e-10
-    @test even5[1] ≈ kron(idle, even3[1]) atol=1e-10
-    @test even5[2] ≈ kron(idle, even3[2]) atol=1e-10
+    odd5, even5 = build_unitary_gate_2x2(params5, p, row, nto)
+    state3 = normalize!(randn(ComplexF64, 1 << nfrom))
+    state5 = _lift_3_to_5_state(state3)
+    @test odd5[1] * state5 ≈ _lift_3_to_5_state(odd3[1] * state3) atol=1e-10
+    @test odd5[2] * state5 ≈ _lift_3_to_5_state(odd3[2] * state3) atol=1e-10
+    @test even5[1] * state5 ≈ _lift_3_to_5_state(even3[1] * state3) atol=1e-10
+    @test even5[2] * state5 ≈ _lift_3_to_5_state(even3[2] * state3) atol=1e-10
 end
 
 @testset "embed_params" begin
@@ -192,16 +202,17 @@ end
         @test length(params_to) == gate_parameter_count(p, nto)
 
         # Original qubit rotations preserved layer-by-layer
-        for r in 1:p, i in 1:nfrom
+        mapped_qubits = [1, 2, 4]
+        for r in 1:p, (i, target_i) in enumerate(mapped_qubits)
             old_idx = ppq * nfrom * (r-1) + ppq*(i-1) + 1
-            new_idx = ppq * nto   * (r-1) + ppq*(i-1) + 1
+            new_idx = ppq * nto   * (r-1) + ppq*(target_i-1) + 1
             for k in 0:ppq-1
                 @test params_from[old_idx+k] == params_to[new_idx+k]
             end
         end
 
-        # Extra qubits (nfrom+1 : nto) default to 0 in every layer
-        for r in 1:p, i in nfrom+1:nto
+        # Newly added virtual-leg qubits default to 0 in every layer.
+        for r in 1:p, i in [3, 5]
             new_idx = ppq * nto * (r-1) + ppq*(i-1) + 1
             for k in 0:ppq-1
                 @test params_to[new_idx+k] == 0.0
