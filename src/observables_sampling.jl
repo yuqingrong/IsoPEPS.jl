@@ -109,32 +109,67 @@ N = row × (2·max_separation + 1) is the effective number of sites summed over.
 # Returns
 - Real-valued M²(q) (the 1/N² normalised structure factor)
 """
-function structure_factor(samples::Vector{Float64}, row::Int, q::Tuple{Real,Real};
-                          max_separation::Int=20)
+function _add_rescaled_pair_contributions!(contributions::Vector{Float64},
+                                           samples::AbstractVector{<:Real},
+                                           row::Int, pos1::Int, pos2::Int,
+                                           sep::Int, weight::Float64)
+    ncols = _n_cols(samples, row)
+    pair_count = ncols - sep
+    for col in 1:pair_count
+        i = row * (col - 1) + pos1
+        j = row * (col - 1 + sep) + pos2
+        pair_value = weight * samples[i] * samples[j]
+
+        # Redistribute each real pair locally across an equal-width interval.
+        # This preserves the estimator mean without introducing synthetic edge values.
+        first_dest = fld((col - 1) * ncols, pair_count) + 1
+        last_dest = cld(col * ncols, pair_count)
+        for dest in first_dest:last_dest
+            overlap = min(col * ncols, dest * pair_count) -
+                      max((col - 1) * ncols, (dest - 1) * pair_count)
+            contributions[dest] += pair_value * overlap / pair_count
+        end
+    end
+    return contributions
+end
+
+function _structure_factor_column_contributions(samples::AbstractVector{<:Real},
+                                                row::Int, q::Tuple{Real,Real};
+                                                max_separation::Int=20)
+    row > 0 || throw(ArgumentError("row must be positive"))
+    max_separation >= 0 || throw(ArgumentError("max_separation must be nonnegative"))
+
     qx, qy = Float64(q[1]), Float64(q[2])
     ncols = _n_cols(samples, row)
+    ncols > 0 || throw(ArgumentError("samples must contain at least one complete column"))
     max_sep = min(max_separation, ncols - 1)
-
-    S = 0.0
+    contributions = zeros(ncols)
 
     # Δc = 0 terms
     for pos1 in 1:row, pos2 in 1:row
-        Δpos = pos2 - pos1
-        corr = expect(samples, row, pos1, pos2; col_separation=0)
-        S += cos(qy * Δpos) * corr
+        weight = cos(qy * (pos2 - pos1))
+        _add_rescaled_pair_contributions!(contributions, samples, row,
+                                          pos1, pos2, 0, weight)
     end
 
     # Δc > 0 terms (both +Δc and -Δc combined via cosine)
-    for Δc in 1:max_sep
+    for sep in 1:max_sep
         for pos1 in 1:row, pos2 in 1:row
-            Δpos = pos2 - pos1
-            corr = expect(samples, row, pos1, pos2; col_separation=Δc)
-            S += 2.0 * cos(qx * Δc + qy * Δpos) * corr
+            weight = 2.0 * cos(qx * sep + qy * (pos2 - pos1))
+            _add_rescaled_pair_contributions!(contributions, samples, row,
+                                              pos1, pos2, sep, weight)
         end
     end
 
     # Standard convention: S(q) = (1/N_uc) Σ_{i∈uc} Σ_j ⟨Si Sj⟩ e^{iq·(ri-rj)}
-    return S / row
+    contributions ./= row
+    return contributions
+end
+
+function structure_factor(samples::AbstractVector{<:Real}, row::Int, q::Tuple{Real,Real};
+                          max_separation::Int=20)
+    return mean(_structure_factor_column_contributions(samples, row, q;
+                                                       max_separation=max_separation))
 end
 
 """
@@ -149,9 +184,9 @@ Common choices:
 - q = (π, π): Néel antiferromagnetic order
 - q = (π, 0): Stripe antiferromagnetic order
 """
-function magnetic_order_squared(X_samples::Vector{Float64},
-                                Z_samples::Vector{Float64},
-                                Y_samples::Vector{Float64},
+function magnetic_order_squared(X_samples::AbstractVector{<:Real},
+                                Z_samples::AbstractVector{<:Real},
+                                Y_samples::AbstractVector{<:Real},
                                 row::Int, q::Tuple{Real,Real};
                                 max_separation::Int=20)
     ncols = _n_cols(X_samples, row)
@@ -492,9 +527,9 @@ Common choices:
 - q = (π, π): Néel order parameter
 - q = (π, 0) or (0, π): Stripe order parameter
 """
-function spin_spin_structure_factor(X_samples::Vector{Float64},
-                                    Z_samples::Vector{Float64},
-                                    Y_samples::Vector{Float64},
+function spin_spin_structure_factor(X_samples::AbstractVector{<:Real},
+                                    Z_samples::AbstractVector{<:Real},
+                                    Y_samples::AbstractVector{<:Real},
                                     row::Int, q::Tuple{Real,Real};
                                     max_separation::Int=20)
     return (structure_factor(X_samples, row, q; max_separation=max_separation) +

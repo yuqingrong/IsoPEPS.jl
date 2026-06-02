@@ -91,7 +91,7 @@ end
 # Uncomment the block below (remove #= and =#) to run analysis examples
 
 # Analyze a single result
-J=1.0;g = 2.0; row=3 ; nqubits=3; p=3; virtual_qubits=1;D=2
+J=1.0;g = 2.0; row=4 ; nqubits=3; p=3; virtual_qubits=1;D=2
 data_dir = joinpath(@__DIR__, "results")
 datafile = joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
@@ -111,15 +111,49 @@ save_M2_vs_J2("project/results", [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.51, 0.52, 0.53
                 method=:exact, output_file="project/results/M2_exact.json",                                                                     
                 row=4, nqubits=3, p=3, max_separation=20) 
 
-save_M2_vs_J2("project/results", [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57,0.58,0.59,0.6,0.7,0.8,0.9,1.0];                                                                              
-                method=:sampling, output_file="project/results/M2_sampling.json",
-                row=4, nqubits=3, p=3, max_separation=20) 
+J2_values = Float64[
+                    0.0, 0.1, 0.2, 0.3, 0.4, 0.5,
+                    0.51, 0.52, 0.53, 0.54, 0.55, 0.56,
+                    0.57, 0.58, 0.59, 0.6, 0.7, 0.8, 0.9, 1.0
+                ]
+                
+save_M2_vs_J2(
+                    "project/results",
+                    J2_values;
+                    method=:sampling,
+                    output_file="project/results/M2_sampling.json",
+                    row=4,
+                    nqubits=3,
+                    p=3,
+                    max_separation=20,
+                    conv_step=100,
+                    samples=1000000,
+                    n_bootstrap=200,
+                ) 
 
 plot_M2_comparison(exact_file="project/results/M2_exact.json",
                 sampling_file="project/results/M2_sampling.json",
                 dmrg_file="dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json",
                 save_path="project/results/figures/M2_comparison.pdf")   
- 
+                J2_values = Float64[
+                    0.0, 0.1, 0.2, 0.3, 0.4, 0.5,
+                    0.51, 0.52, 0.53, 0.54, 0.55, 0.56,
+                    0.57, 0.58, 0.59, 0.6, 0.7, 0.8, 0.9, 1.0
+                ]
+                
+                save_M2_vs_J2(
+                    "project/results",
+                    J2_values;
+                    method=:sampling,
+                    output_file="project/results/M2_sampling.json",
+                    row=4,
+                    nqubits=3,
+                    p=3,
+                    max_separation=20,
+                    conv_step=100,
+                    samples=1_000_000,
+                    n_bootstrap=200,
+                )
 # Combined spin + dimer structure factor panel (J2 = 0.0, 0.5, 1.0)
 fig, spin_mats, dimer_mats = plot_combined_structure_factors(
     "project/results", [0.0, 0.5, 1.0];
@@ -198,7 +232,7 @@ ns, vars, errs = compute_variance_vs_samples(
     )
 # Step 2 — plot
 fig = plot_variance_vs_samples(ns, vars; errors=errs,
-              save_path="project/results/figures/heisenberg_variance_vs_samples_J2=0.5.pdf")
+              save_path="project/results/figures/heisenberg_variance_vs_samples_J2=.pdf")
 
 fig, E_mat = plot_energy_vs_inv_samples(
                 "project/results/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json",

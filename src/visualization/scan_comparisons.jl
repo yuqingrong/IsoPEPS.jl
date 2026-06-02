@@ -1430,6 +1430,110 @@ function plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
 end
 
 # ============================================================================
+# M² sampling error helpers
+# ============================================================================
+
+"""
+    _m2_basis_column_contributions(samples, row, q; max_separation=20)
+
+Return per-column contributions for one Pauli basis. The mean of the returned
+vector is that basis's contribution to `magnetic_order_squared`, including the
+`1/4` spin normalization.
+"""
+function _m2_basis_column_contributions(samples::AbstractVector{<:Real},
+                                        row::Int, q::Tuple{Real,Real};
+                                        max_separation::Int=20)
+    contributions = _structure_factor_column_contributions(samples, row, q;
+                                                            max_separation=max_separation)
+    ncols = length(contributions)
+    max_sep = min(max_separation, ncols - 1)
+    N_eff = row * (2 * max_sep + 1)
+    return contributions ./ (4 * N_eff)
+end
+
+function _resolve_m2_bootstrap_block_cols(ncols::Int, max_separation::Int,
+                                          requested::Union{Nothing,Int})
+    ncols >= 2 || throw(ArgumentError("M² bootstrap requires at least two sampled columns"))
+    max_separation >= 0 || throw(ArgumentError("max_separation must be nonnegative"))
+
+    block_cols = isnothing(requested) ?
+        min(ncols ÷ 2, max(2 * max_separation + 1, round(Int, sqrt(ncols)))) :
+        requested
+    1 <= block_cols <= ncols ||
+        throw(ArgumentError("bootstrap_block_cols must be between 1 and $ncols"))
+    return block_cols
+end
+
+function _m2_block_bootstrap_mean(prefix_sums::Vector{Float64}, block_cols::Int, rng)
+    ncols = length(prefix_sums) - 1
+    total = 0.0
+    remaining = ncols
+    while remaining > 0
+        take = min(block_cols, remaining)
+        max_start = ncols - take + 1
+        start = rand(rng, 1:max_start)
+        total += prefix_sums[start + take] - prefix_sums[start]
+        remaining -= take
+    end
+    return total / ncols
+end
+
+function _m2_prefix_sums(values::Vector{Float64})
+    prefix_sums = zeros(length(values) + 1)
+    cumsum!(@view(prefix_sums[2:end]), values)
+    return prefix_sums
+end
+
+function _m2_stderr_from_contributions(X_contributions::Vector{Float64},
+                                       Z_contributions::Vector{Float64},
+                                       Y_contributions::Vector{Float64};
+                                       n_bootstrap::Int=200,
+                                       block_cols::Int,
+                                       rng=Random.default_rng())
+    n_bootstrap >= 2 || throw(ArgumentError("n_bootstrap must be at least 2"))
+    ncols = length(X_contributions)
+    length(Z_contributions) == ncols && length(Y_contributions) == ncols ||
+        throw(ArgumentError("X, Z, and Y contributions must have the same length"))
+    1 <= block_cols <= ncols ||
+        throw(ArgumentError("block_cols must be between 1 and $ncols"))
+
+    X_prefix_sums = _m2_prefix_sums(X_contributions)
+    Z_prefix_sums = _m2_prefix_sums(Z_contributions)
+    Y_prefix_sums = _m2_prefix_sums(Y_contributions)
+
+    bootstrap_values = Vector{Float64}(undef, n_bootstrap)
+    for idx in eachindex(bootstrap_values)
+        bootstrap_values[idx] =
+            _m2_block_bootstrap_mean(X_prefix_sums, block_cols, rng) +
+            _m2_block_bootstrap_mean(Z_prefix_sums, block_cols, rng) +
+            _m2_block_bootstrap_mean(Y_prefix_sums, block_cols, rng)
+    end
+    return std(bootstrap_values)
+end
+
+function _sampling_m2_stats(X_samples::AbstractVector{<:Real},
+                            Z_samples::AbstractVector{<:Real},
+                            Y_samples::AbstractVector{<:Real},
+                            row::Int, q::Tuple{Real,Real};
+                            max_separation::Int=20,
+                            n_bootstrap::Int=200,
+                            block_cols::Int,
+                            rng=Random.default_rng())
+    X_contributions = _m2_basis_column_contributions(X_samples, row, q;
+                                                      max_separation=max_separation)
+    Z_contributions = _m2_basis_column_contributions(Z_samples, row, q;
+                                                      max_separation=max_separation)
+    Y_contributions = _m2_basis_column_contributions(Y_samples, row, q;
+                                                      max_separation=max_separation)
+    m2 = mean(X_contributions) + mean(Z_contributions) + mean(Y_contributions)
+    stderr = _m2_stderr_from_contributions(X_contributions, Z_contributions, Y_contributions;
+                                           n_bootstrap=n_bootstrap,
+                                           block_cols=block_cols,
+                                           rng=rng)
+    return m2, stderr
+end
+
+# ============================================================================
 # save_M2_vs_J2 — compute and save M² data to JSON
 # ============================================================================
 
@@ -1446,14 +1550,22 @@ Compute M²(q) for each J2 value and save results to a JSON file.
 - `J1, row, nqubits, p`: Circuit/model parameters
 - `max_separation`: Max column separation for structure factor (default: 20)
 - `conv_step, samples`: Sampling parameters (only for `method=:sampling`)
+- `n_bootstrap`: Number of block-bootstrap draws for sampling errors (default: 200)
+- `bootstrap_block_cols`: Optional bootstrap block length in columns. If omitted,
+  choose a length from the sample count and correlation range. Sampled JSON saves
+  the resolved length for each `J2` value.
 """
 function save_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
                        method::Symbol=:exact,
                        output_file::String,
                        J1=1.0, row=3, nqubits=3, p=3,
                        max_separation::Int=20,
-                       conv_step=100, samples=1000000)
+                       conv_step=100, samples=1000000,
+                       n_bootstrap::Int=200,
+                       bootstrap_block_cols::Union{Nothing,Int}=nothing)
     method in (:exact, :sampling) || error("method must be :exact or :sampling")
+    method == :sampling && n_bootstrap < 2 &&
+        throw(ArgumentError("n_bootstrap must be at least 2"))
 
     q0 = (Float64(π), Float64(π))
     q1 = (Float64(π), 0.0)
@@ -1463,6 +1575,10 @@ function save_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
     M2_neel = Float64[]
     M2_stripe = Float64[]
     M2_stripe_0pi = Float64[]
+    M2_neel_stderr = Float64[]
+    M2_stripe_stderr = Float64[]
+    M2_stripe_0pi_stderr = Float64[]
+    resolved_bootstrap_block_cols = Int[]
 
     println("=== Computing M²(q) vs J2 [$(method)] ===")
 
@@ -1513,16 +1629,29 @@ function save_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
                 continue
             end
             _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
-            Z_vec = Z_samples[conv_step+1:end]
-            X_vec = X_samples[conv_step+1:end]
-            Y_vec = Y_samples[conv_step+1:end]
+            Z_vec = @view Z_samples[conv_step+1:end]
+            X_vec = @view X_samples[conv_step+1:end]
+            Y_vec = @view Y_samples[conv_step+1:end]
 
-            m2_neel       = magnetic_order_squared(X_vec, Z_vec, Y_vec, row, q0;
-                                                   max_separation=max_separation)
-            m2_stripe     = magnetic_order_squared(X_vec, Z_vec, Y_vec, row, q1;
-                                                   max_separation=max_separation)
-            m2_stripe_0pi = magnetic_order_squared(X_vec, Z_vec, Y_vec, row, q2;
-                                                   max_separation=max_separation)
+            ncols = _n_cols(X_vec, row)
+            _n_cols(Z_vec, row) == ncols && _n_cols(Y_vec, row) == ncols ||
+                error("X, Z, and Y sample streams must contain the same number of columns")
+            block_cols = _resolve_m2_bootstrap_block_cols(ncols, max_separation,
+                                                          bootstrap_block_cols)
+            push!(resolved_bootstrap_block_cols, block_cols)
+
+            m2_neel, m2_neel_stderr = _sampling_m2_stats(X_vec, Z_vec, Y_vec, row, q0;
+                                                          max_separation=max_separation,
+                                                          n_bootstrap=n_bootstrap,
+                                                          block_cols=block_cols)
+            m2_stripe, m2_stripe_stderr = _sampling_m2_stats(X_vec, Z_vec, Y_vec, row, q1;
+                                                              max_separation=max_separation,
+                                                              n_bootstrap=n_bootstrap,
+                                                              block_cols=block_cols)
+            m2_stripe_0pi, m2_stripe_0pi_stderr = _sampling_m2_stats(X_vec, Z_vec, Y_vec, row, q2;
+                                                                      max_separation=max_separation,
+                                                                      n_bootstrap=n_bootstrap,
+                                                                      block_cols=block_cols)
         end
 
         push!(J2_found, val)
@@ -1530,32 +1659,71 @@ function save_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
         push!(M2_stripe, m2_stripe)
         push!(M2_stripe_0pi, m2_stripe_0pi)
 
-        println("  M²(π,π) = $(round(m2_neel, digits=6)),  M²(π,0) = $(round(m2_stripe, digits=6)),  M²(0,π) = $(round(m2_stripe_0pi, digits=6))")
+        if method == :sampling
+            push!(M2_neel_stderr, m2_neel_stderr)
+            push!(M2_stripe_stderr, m2_stripe_stderr)
+            push!(M2_stripe_0pi_stderr, m2_stripe_0pi_stderr)
+            println("  M²(π,π) = $(round(m2_neel, digits=6)) ± $(round(m2_neel_stderr, digits=6)),  M²(π,0) = $(round(m2_stripe, digits=6)) ± $(round(m2_stripe_stderr, digits=6)),  M²(0,π) = $(round(m2_stripe_0pi, digits=6)) ± $(round(m2_stripe_0pi_stderr, digits=6))")
+        else
+            println("  M²(π,π) = $(round(m2_neel, digits=6)),  M²(π,0) = $(round(m2_stripe, digits=6)),  M²(0,π) = $(round(m2_stripe_0pi, digits=6))")
+        end
     end
 
     if isempty(J2_found)
         error("No data found for any J2 value")
     end
 
-    save_results(output_file;
-                 method=String(method),
-                 J2_values=J2_found,
-                 M2_neel=M2_neel,
-                 M2_stripe=M2_stripe,
-                 M2_stripe_0pi=M2_stripe_0pi,
-                 row=row, nqubits=nqubits, p=p,
-                 max_separation=max_separation)
+    result_data = (J2_values=J2_found,
+                   M2_neel=M2_neel,
+                   M2_stripe=M2_stripe,
+                   M2_stripe_0pi=M2_stripe_0pi)
+    save_data = merge(result_data,
+                      (method=String(method), row=row, nqubits=nqubits, p=p,
+                       max_separation=max_separation))
+    if method == :sampling
+        stderr_data = (M2_neel_stderr=M2_neel_stderr,
+                       M2_stripe_stderr=M2_stripe_stderr,
+                       M2_stripe_0pi_stderr=M2_stripe_0pi_stderr)
+        result_data = merge(result_data, stderr_data)
+        save_data = merge(save_data, stderr_data,
+                          (samples=samples, conv_step=conv_step,
+                           n_bootstrap=n_bootstrap,
+                           bootstrap_block_cols=resolved_bootstrap_block_cols))
+    end
+    save_results(output_file; save_data...)
     println("\nSaved to: $output_file")
-    return (J2_values=J2_found, M2_neel=M2_neel, M2_stripe=M2_stripe, M2_stripe_0pi=M2_stripe_0pi)
+    return result_data
 end
 
 # ============================================================================
 # plot_M2_comparison — overlay exact, sampling, DMRG on one figure
 # ============================================================================
 
+function _load_m2_stderr(data, key::String, expected_length::Int)
+    haskey(data, key) || return nothing
+
+    values = try
+        Float64.(data[key])
+    catch err
+        @warn "Skipping malformed M² standard errors" key exception=(err, catch_backtrace())
+        return nothing
+    end
+
+    if length(values) != expected_length
+        @warn "Skipping malformed M² standard errors" key expected_length actual_length=length(values)
+        return nothing
+    end
+    if any(value -> !isfinite(value) || value < 0, values)
+        @warn "Skipping malformed M² standard errors" key reason="values must be finite and nonnegative"
+        return nothing
+    end
+    return values
+end
+
 """
     plot_M2_comparison(; exact_file="", sampling_file="", dmrg_file="",
-                        save_path=nothing, dmrg_Lx_key="Lx2")
+                        save_path=nothing, dmrg_Lx_key="Lx2",
+                        show_sampling_stderr_panel=true)
 
 Plot M²(π,π) (Néel) and M²(0,π) together vs J₂/J₁, comparing exact, sampling,
 and DMRG methods on a single axis.
@@ -1568,24 +1736,26 @@ Each file is a JSON produced by `save_M2_vs_J2` (for exact/sampling) or
 - `sampling_file`: JSON from `save_M2_vs_J2(...; method=:sampling)`
 - `dmrg_file`: JSON from DMRG J2 scan (keys: `J2_values`, `M2_neel_Lx2`, etc.)
 - `dmrg_Lx_key`: suffix for DMRG keys — `"Lx1"` or `"Lx2"` (default: `"Lx2"`)
+- `show_sampling_stderr_panel`: Show sampling errors in a lower log-scale panel when
+  standard-error arrays are available (default: `true`)
 - `save_path`: Optional path to save the figure
 """
 function plot_M2_comparison(; exact_file::String="",
                               sampling_file::String="",
                               dmrg_file::String="",
                               dmrg_Lx_key::String="Lx2",
+                              show_sampling_stderr_panel::Bool=true,
                               save_path=nothing)
     # M²(π,π) = Néel, M²(0,π) uses key M2_0pi / M2_stripe_0pi
     q_info = [
-        (label="M²(π,π)", std_key="M2_neel",       dmrg_key="M2_neel_$dmrg_Lx_key"),
-        (label="M²(0,π)", std_key="M2_stripe_0pi",  dmrg_key="M2_0pi_$dmrg_Lx_key"),
+        (label="M²(π,π)", std_key="M2_neel",      stderr_key="M2_neel_stderr",
+         dmrg_key="M2_neel_$dmrg_Lx_key"),
+        (label="M²(0,π)", std_key="M2_stripe_0pi", stderr_key="M2_stripe_0pi_stderr",
+         dmrg_key="M2_0pi_$dmrg_Lx_key"),
     ]
 
     # Colors: blue/orange for (π,π)/(0,π); solid/dash/dot for exact/sampling/DMRG
     q_colors = [:blue, :orange]
-
-    fig = Figure(size=PAPER_FIGSIZE)
-    ax = Axis(fig[1, 1], xlabel="J₂ / J₁", ylabel="M²(q)")
 
     function _load(file)
         isempty(file) && return nothing
@@ -1596,7 +1766,30 @@ function plot_M2_comparison(; exact_file::String="",
     exact_data    = _load(exact_file)
     sampling_data = _load(sampling_file)
     dmrg_data     = _load(dmrg_file)
-    all_M2_values = Float64[]
+    sampling_stderr = Dict{String,Vector{Float64}}()
+    if sampling_data !== nothing
+        for qi in q_info
+            haskey(sampling_data, qi.std_key) || continue
+            stderr = _load_m2_stderr(sampling_data, qi.stderr_key,
+                                     length(sampling_data[qi.std_key]))
+            isnothing(stderr) || (sampling_stderr[qi.stderr_key] = stderr)
+        end
+    end
+
+    has_stderr_panel = show_sampling_stderr_panel && !isempty(sampling_stderr)
+    fig_height = has_stderr_panel ? round(Int, 1.35 * PAPER_FIGSIZE[2]) : PAPER_FIGSIZE[2]
+    fig = Figure(size=(PAPER_FIGSIZE[1], fig_height))
+    ax = Axis(fig[1, 1], xlabel=has_stderr_panel ? "" : "J₂ / J₁", ylabel="M²(q)")
+    stderr_ax = has_stderr_panel ?
+        Axis(fig[2, 1], xlabel="J₂ / J₁", ylabel="Sampling SE", yscale=log10) :
+        nothing
+    if has_stderr_panel
+        rowsize!(fig.layout, 2, Relative(0.28))
+        rowgap!(fig.layout, 4)
+        linkxaxes!(ax, stderr_ax)
+    end
+
+    max_M2_value = 0.0
 
     # Track which method styles have been labelled so each appears once
     method_labelled = Dict{String,Bool}()
@@ -1607,7 +1800,7 @@ function plot_M2_comparison(; exact_file::String="",
         if exact_data !== nothing && haskey(exact_data, qi.std_key)
             J2 = Float64.(exact_data["J2_values"])
             M2 = Float64.(exact_data[qi.std_key])
-            append!(all_M2_values, M2)
+            max_M2_value = max(max_M2_value, maximum(M2))
             lbl = get(method_labelled, "exact", false) ? nothing : "TN contraction"
             scatterlines!(ax, J2, M2, label=lbl, color=color, marker=:circle)
             method_labelled["exact"] = true
@@ -1616,7 +1809,16 @@ function plot_M2_comparison(; exact_file::String="",
         if sampling_data !== nothing && haskey(sampling_data, qi.std_key)
             J2 = Float64.(sampling_data["J2_values"])
             M2 = Float64.(sampling_data[qi.std_key])
-            append!(all_M2_values, M2)
+            max_M2_value = max(max_M2_value, maximum(M2))
+            stderr = get(sampling_stderr, qi.stderr_key, nothing)
+            if !isnothing(stderr)
+                max_M2_value = max(max_M2_value, maximum(m + e for (m, e) in zip(M2, stderr)))
+                errorbars!(ax, J2, M2, stderr; color=color, whiskerwidth=5)
+                if has_stderr_panel
+                    scatterlines!(stderr_ax, J2, stderr; color=color, marker=:rect,
+                                  linestyle=:dash, markersize=4, linewidth=0.8)
+                end
+            end
             lbl = get(method_labelled, "sampling", false) ? nothing : "Sampling"
             scatterlines!(ax, J2, M2, label=lbl, color=color,
                           marker=:rect, linestyle=:dash)
@@ -1629,7 +1831,7 @@ function plot_M2_comparison(; exact_file::String="",
             if dmrg_key !== nothing && haskey(dmrg_data, "J2_values")
                 J2 = Float64.(dmrg_data["J2_values"])
                 M2 = Float64.(dmrg_data[dmrg_key])
-                append!(all_M2_values, M2)
+                max_M2_value = max(max_M2_value, maximum(M2))
                 lbl = get(method_labelled, "dmrg", false) ? nothing : "DMRG"
                 scatterlines!(ax, J2, M2, label=lbl, color=color,
                               marker=:utriangle, linestyle=:dot)
@@ -1638,7 +1840,7 @@ function plot_M2_comparison(; exact_file::String="",
         end
     end
 
-    ymax = isempty(all_M2_values) ? 0.25 : max(0.25, 1.12 * maximum(all_M2_values))
+    ymax = max(0.25, 1.12 * max_M2_value)
     ylims!(ax, 0, ymax)
 
     # Combined legend: one entry per (q-point, method) pair so color + style are visible together

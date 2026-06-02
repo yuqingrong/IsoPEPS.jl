@@ -1,6 +1,8 @@
 using Test
 using IsoPEPS
-using CairoMakie: Figure, Legend, Theme, to_color, with_theme
+using Random
+using Statistics
+using CairoMakie: Axis, Errorbars, Figure, Legend, Theme, to_color, with_theme
 
 function write_test_tfim_circuit(path; g=2.0, row=3, p=3, nqubits=3, energy=0.0)
     params = zeros(gate_parameter_count(p, nqubits))
@@ -276,6 +278,102 @@ end
     @test fig_xz isa Figure
 end
 
+@testset "M2 sampling bootstrap helpers" begin
+    row = 2
+    q = (Float64(π), Float64(π))
+    X_samples = Float64[1, -1, 1, 1, -1, -1, 1, -1]
+    Z_samples = Float64[1, 1, -1, 1, 1, -1, -1, -1]
+    Y_samples = Float64[-1, 1, 1, -1, 1, 1, -1, 1]
+
+    function direct_structure_factor(samples)
+        qx, qy = q
+        ncols = length(samples) ÷ row
+        max_sep = min(2, ncols - 1)
+        S = 0.0
+        for pos1 in 1:row, pos2 in 1:row
+            S += cos(qy * (pos2 - pos1)) *
+                 IsoPEPS.expect(samples, row, pos1, pos2; col_separation=0)
+        end
+        for sep in 1:max_sep, pos1 in 1:row, pos2 in 1:row
+            S += 2.0 * cos(qx * sep + qy * (pos2 - pos1)) *
+                 IsoPEPS.expect(samples, row, pos1, pos2; col_separation=sep)
+        end
+        return S / row
+    end
+
+    @test mean(IsoPEPS._structure_factor_column_contributions(
+        X_samples, row, q; max_separation=2)) ≈ direct_structure_factor(X_samples)
+
+    X_contributions = IsoPEPS._m2_basis_column_contributions(X_samples, row, q;
+                                                              max_separation=2)
+    Z_contributions = IsoPEPS._m2_basis_column_contributions(Z_samples, row, q;
+                                                              max_separation=2)
+    Y_contributions = IsoPEPS._m2_basis_column_contributions(Y_samples, row, q;
+                                                              max_separation=2)
+    contribution_mean = (sum(X_contributions) + sum(Z_contributions) +
+                         sum(Y_contributions)) / length(X_contributions)
+    @test contribution_mean ≈ magnetic_order_squared(X_samples, Z_samples, Y_samples,
+                                                      row, q; max_separation=2)
+
+    constant_samples = ones(32)
+    constant_contributions = IsoPEPS._m2_basis_column_contributions(
+        constant_samples, 1, (0.0, 0.0); max_separation=3)
+    @test all(value -> value ≈ first(constant_contributions), constant_contributions)
+    stderr = IsoPEPS._m2_stderr_from_contributions(
+        constant_contributions, constant_contributions, constant_contributions;
+        n_bootstrap=10, block_cols=4, rng=MersenneTwister(1))
+    @test stderr ≈ 0.0 atol=1e-14
+
+    values = collect(1.0:5.0)
+    prefix_sums = IsoPEPS._m2_prefix_sums(values)
+    rng = MersenneTwister(2)
+    expected_rng = MersenneTwister(2)
+    full_start = rand(expected_rng, 1:2)
+    partial_start = rand(expected_rng, 1:5)
+    expected_mean = (sum(@view values[full_start:full_start+3]) + values[partial_start]) / 5
+    @test IsoPEPS._m2_block_bootstrap_mean(prefix_sums, 4, rng) == expected_mean
+end
+
+@testset "save_M2_vs_J2 stores sampling standard errors" begin
+    data_dir = mktempdir()
+    J2 = 0.0
+    row = 1
+    p = 1
+    nqubits = 1
+    params = zeros(gate_parameter_count(p, nqubits))
+    result = CircuitOptimizationResult(
+        [0.0], Matrix{ComplexF64}[], params, 0.0,
+        Float64[], Float64[], Float64[], true
+    )
+    input_args = Dict{Symbol,Any}(
+        :model => "heisenberg_j1j2", :J1 => 1.0, :J2 => J2,
+        :row => row, :p => p, :nqubits => nqubits, :share_params => true,
+    )
+    circuit_file = joinpath(data_dir,
+        "circuit_heisenberg_j1j2_J1=1.0_J2=$(J2)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
+    output_file = joinpath(data_dir, "M2_sampling.json")
+    save_result(circuit_file, result, input_args)
+
+    data = save_M2_vs_J2(data_dir, [J2];
+        method=:sampling, output_file=output_file,
+        row=row, p=p, nqubits=nqubits,
+        max_separation=2, conv_step=0, samples=12,
+        n_bootstrap=8, bootstrap_block_cols=2)
+
+    @test length(data.M2_neel_stderr) == 1
+    @test length(data.M2_stripe_stderr) == 1
+    @test length(data.M2_stripe_0pi_stderr) == 1
+    @test all(>=(0), data.M2_neel_stderr)
+    @test all(>=(0), data.M2_stripe_stderr)
+    @test all(>=(0), data.M2_stripe_0pi_stderr)
+
+    saved = load_results(output_file)
+    @test saved["samples"] == 12
+    @test saved["conv_step"] == 0
+    @test saved["n_bootstrap"] == 8
+    @test saved["bootstrap_block_cols"] == [2]
+end
+
 @testset "plot_M2_comparison legend stays inside blank region" begin
     data_dir = mktempdir()
     exact_file = joinpath(data_dir, "M2_exact.json")
@@ -287,11 +385,15 @@ end
     save_results(sampling_file;
         J2_values=[0.1, 0.5, 0.8],
         M2_neel=[0.19, 0.09, 0.03],
-        M2_stripe_0pi=[0.02, 0.07, 0.17])
+        M2_neel_stderr=[0.01, 0.01, 0.005],
+        M2_stripe_0pi=[0.02, 0.07, 0.17],
+        M2_stripe_0pi_stderr=[0.005, 0.01, 0.015])
 
     fig = plot_M2_comparison(exact_file=exact_file, sampling_file=sampling_file)
     @test fig isa Figure
-    legend = fig.content[2]
+    axes = filter(content -> content isa Axis, fig.content)
+    @test length(axes) == 2
+    legend = only(filter(content -> content isa Legend, fig.content))
     @test legend isa Legend
     gc = legend.layoutobservables.gridcontent[]
     @test gc.span.rows == 1:1
@@ -304,10 +406,12 @@ end
     @test legend.margin[] == (1, 1, 1, 1)
     g = legend.entrygroups[][1]
     @test [e.label[] for e in g[2]] == ["M²(π,π) TN", "M²(π,π) Samp.", "M²(0,π) TN", "M²(0,π) Samp."]
+    ax = axes[1]
+    @test count(plot -> plot isa Errorbars, ax.scene.plots) == 2
+    @test axes[2].ylabel[] == "Sampling SE"
     annotations = IsoPEPS.m2_phase_annotations(0.24)
     @test [a.label for a in annotations] == ["Neel order", "VBS", "Stripe order"]
     @test [(a.x, a.y) for a in annotations] == [(0.20, 0.05), (0.57, 0.05), (0.80, 0.05)]
-    ax = fig.content[1]
     texts = filter(ax.scene.plots) do plot
         hasproperty(plot, :text) && first(plot.text[]) in ["Neel order", "VBS", "Stripe order"]
     end
@@ -316,6 +420,25 @@ end
     @test all(text_plot.color[] == to_color(:firebrick) for text_plot in texts)
     @test all(text_plot.strokecolor[] == to_color(:firebrick) for text_plot in texts)
     @test all(text_plot.strokewidth[] == 0 for text_plot in texts)
+
+    legacy_sampling_file = joinpath(data_dir, "M2_sampling_legacy.json")
+    save_results(legacy_sampling_file;
+        J2_values=[0.1, 0.5, 0.8],
+        M2_neel=[0.19, 0.09, 0.03],
+        M2_stripe_0pi=[0.02, 0.07, 0.17])
+    legacy_fig = plot_M2_comparison(sampling_file=legacy_sampling_file)
+    @test legacy_fig isa Figure
+    legacy_axes = filter(content -> content isa Axis, legacy_fig.content)
+    @test length(legacy_axes) == 1
+    legacy_ax = only(legacy_axes)
+    @test count(plot -> plot isa Errorbars, legacy_ax.scene.plots) == 0
+
+    @test isnothing(IsoPEPS._load_m2_stderr(
+        Dict("bad_stderr" => [0.1, 0.2]), "bad_stderr", 3))
+    @test isnothing(IsoPEPS._load_m2_stderr(
+        Dict("bad_stderr" => [0.1, -0.2, 0.3]), "bad_stderr", 3))
+    @test isnothing(IsoPEPS._load_m2_stderr(
+        Dict("bad_stderr" => [0.1, NaN, 0.3]), "bad_stderr", 3))
 end
 
 @testset "plot_variance_vs_samples" begin

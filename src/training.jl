@@ -77,6 +77,27 @@ struct ManifoldOptimizationResult
     converged::Bool
 end
 
+const _SAMPLING_CHECKPOINT_VERSION = 2
+
+_checkpoint_model_signature(m::TFIM) = "J=$(repr(m.J)),g=$(repr(m.g))"
+_checkpoint_model_signature(m::HeisenbergJ1J2) = "J1=$(repr(m.J1)),J2=$(repr(m.J2))"
+_checkpoint_model_signature(m::AbstractModel) = repr(m)
+
+function _sampling_checkpoint_signature(model, row, p, nqubits, unit_cell,
+                                        active_nqubits, share_params)
+    return join((
+        "v=$(_SAMPLING_CHECKPOINT_VERSION)",
+        "model=$(model_name(model))",
+        "model_params=$(_checkpoint_model_signature(model))",
+        "row=$(row)",
+        "p=$(p)",
+        "nqubits=$(nqubits)",
+        "unit_cell=$(unit_cell)",
+        "active_nqubits=$(active_nqubits)",
+        "share_params=$(share_params)",
+    ), "|")
+end
+
 """
     _construct_model(model_str, kwargs) → AbstractModel
 
@@ -166,6 +187,9 @@ Optimize a quantum circuit using sampling-based CMA-ES.
 - `maxiter::Int=5000`: Maximum CMA-ES generations
 - `abstol::Float64=0.01`: Function tolerance (ftol) for CMA-ES convergence
 - `unit_cell::Symbol=:single`: Unit cell type (`:single` or `:two_by_two`)
+- `checkpoint_file::Union{String,Nothing}=nothing`: Optional crash-recovery checkpoint path
+- `checkpoint_every::Int=10`: Generations between checkpoint writes
+- `resume_checkpoint::Bool=true`: Restart from compatible checkpoint parameters if present
 - Model-specific parameters:
   - TFIM: `J` (coupling), `g` (transverse field)
   - Heisenberg J1-J2: `J1` (NN coupling), `J2` (NNN coupling)
@@ -181,6 +205,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
     active_nqubits::Int=nqubits,
     checkpoint_file::Union{String,Nothing}=nothing,
     checkpoint_every::Int=10,
+    resume_checkpoint::Bool=true,
     model_kwargs...)
 
     kw = Dict{Symbol,Any}(model_kwargs)
@@ -189,32 +214,41 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
     m = model isa AbstractModel ? model : _construct_model(model, kw)
     mlabel = model_label(m)
     model_str = model_name(m)
-
-    # Resume from checkpoint if available
-    if checkpoint_file !== nothing && isfile(checkpoint_file)
-        try
-            ckpt = open(checkpoint_file, "r") do io
-                JSON3.read(io)
-            end
-            ckpt_params = Float64.(collect(ckpt[:params]))
-            if length(ckpt_params) == length(params)
-                params = ckpt_params
-                @info "Resumed from checkpoint: $(checkpoint_file) (energy=$(get(ckpt, :energy, "unknown")))"
-            else
-                @warn "Checkpoint parameter count mismatch ($(length(ckpt_params)) vs $(length(params))), ignoring"
-            end
-        catch e
-            @warn "Failed to load checkpoint: $e"
-        end
-    end
-
-    # Store initial parameters
-    initial_params = copy(params)
     expected_params = gate_parameter_count(p, nqubits;
                                            unit_cell=unit_cell,
                                            row=row,
                                            share_params=share_params,
                                            active_nqubits=active_nqubits)
+    checkpoint_signature = _sampling_checkpoint_signature(
+        m, row, p, nqubits, unit_cell, active_nqubits, share_params)
+
+    # Resume from checkpoint if available
+    if checkpoint_file !== nothing && isfile(checkpoint_file)
+        if resume_checkpoint
+            try
+                ckpt = open(checkpoint_file, "r") do io
+                    JSON3.read(io)
+                end
+                ckpt_signature = get(ckpt, :checkpoint_signature, nothing)
+                ckpt_params = Float64.(collect(ckpt[:params]))
+                if ckpt_signature != checkpoint_signature
+                    @warn "Ignoring incompatible checkpoint (configuration or ansatz version changed): $(checkpoint_file)"
+                elseif length(ckpt_params) == length(params)
+                    params = ckpt_params
+                    @info "Restarting from compatible checkpoint parameters: $(checkpoint_file) (energy=$(get(ckpt, :energy, "unknown")))"
+                else
+                    @warn "Checkpoint parameter count mismatch ($(length(ckpt_params)) vs $(length(params))), ignoring"
+                end
+            catch e
+                @warn "Failed to load checkpoint: $e"
+            end
+        else
+            @info "Ignoring checkpoint because resume_checkpoint=false: $(checkpoint_file)"
+        end
+    end
+
+    # Store initial parameters
+    initial_params = copy(params)
     @info "Starting sampling optimization with $(length(params)) parameters (expected $expected_params; model=$model_str, unit_cell=$unit_cell)"
 
     energy_history = Float64[]
@@ -307,6 +341,16 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         return real(energy)
     end
 
+    # Retain the selected warm start itself. CMA-ES evaluates perturbed
+    # candidates, so without this baseline a good initialization can be lost.
+    initial_cost = objective(params)
+    _flush_generation!(generation_energies, generation_params,
+                       generation_Z_samples, generation_X_samples, generation_Y_samples,
+                       energy_history, params_history,
+                       Z_samples_history, X_samples_history, Y_samples_history)
+    eval_count[] = 0
+    @info "Initial sampled energy retained: $(round(initial_cost, digits=6))"
+
     # Callback for Optimization.jl CMA-ES
     # Called after each function evaluation
     function optimization_callback(state, loss_val)
@@ -319,8 +363,9 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
 
             # Log every 10 generations
             if generation_count[] % 10 == 0
-                min_energy = minimum(generation_energies)
-                @info "$mlabel $(row)×∞ PEPS | Generation $(generation_count[]) | Min Energy: $(round(min_energy, digits=6))"
+                generation_min = minimum(generation_energies)
+                best_so_far = min(minimum(energy_history), generation_min)
+                @info "$mlabel $(row)×∞ PEPS | Generation $(generation_count[]) | Generation Min: $(round(generation_min, digits=6)) | Best So Far: $(round(best_so_far, digits=6))"
             end
 
             _flush_generation!(generation_energies, generation_params,
@@ -335,7 +380,8 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
                     JSON3.write(io, Dict(
                         :params => params_history[best_idx],
                         :energy => energy_history[best_idx],
-                        :generation => generation_count[]
+                        :generation => generation_count[],
+                        :checkpoint_signature => checkpoint_signature,
                     ))
                 end
             end
@@ -377,7 +423,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         final_Z_samples = Z_samples_history[min_idx]
         final_X_samples = X_samples_history[min_idx]
         final_Y_samples = Y_samples_history[min_idx]
-        @info "Best energy at generation $min_idx: $final_cost"
+        @info "Best sampled energy retained: $final_cost"
     else
         final_params = opt_result.u
         final_cost = opt_result.objective
@@ -420,6 +466,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         :expected_parameter_count => expected_params,
         :total_generations => generation_count[],
         :active_nqubits => active_nqubits,
+        :resume_checkpoint => resume_checkpoint,
     )
     merge!(input_args, Dict{Symbol,Any}(model_kwargs))
 

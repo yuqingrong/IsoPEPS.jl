@@ -10,8 +10,15 @@ using JSON3
 
 const PARAMS_PER_QUBIT_PER_LAYER = IsoPEPS.PARAMS_PER_QUBIT_PER_LAYER
 
+function _unit_cell_suffix(unit_cell::Symbol)
+    unit_cell === :single && return "_1x1.json"
+    unit_cell === :two_by_two && return "_2x2.json"
+    throw(ArgumentError("unit_cell must be :single or :two_by_two"))
+end
+
 """
-    _find_warm_start_params(output_dir, model, scan_param, scan_value, row, p, nqubits; fixed_params...)
+    _find_warm_start_params(output_dir, model, scan_param, scan_value, row, p, nqubits;
+                            unit_cell=:single, fixed_params...)
 
 Scan `output_dir` for existing result files matching the model/fixed params pattern,
 find the one whose scan parameter value is closest to (but not equal to) `scan_value`,
@@ -19,14 +26,15 @@ and load its parameters.
 
 Returns `(params, source_value)` or `(nothing, nothing)` if no file is found.
 """
-function _find_warm_start_params(output_dir, model, scan_param, scan_value, row, p, nqubits; fixed_params...)
+function _find_warm_start_params(output_dir, model, scan_param, scan_value, row, p, nqubits;
+                                 unit_cell::Symbol=:single, fixed_params...)
     !isdir(output_dir) && return nothing, nothing
 
     # Build prefix and suffix for filename matching
     # Filename format: circuit_{model}_{fixed_params}_{scan_param}={value}_row={row}_p={p}_nqubits={nqubits}.json
     fixed_str = join(["$(k)=$(v)" for (k, v) in sort(collect(fixed_params), by=first)], "_")
     prefix = isempty(fixed_str) ? "circuit_$(model)_$(scan_param)=" : "circuit_$(model)_$(fixed_str)_$(scan_param)="
-    suffix = "_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json" # TODO: not always true
+    suffix = "_row=$(row)_p=$(p)_nqubits=$(nqubits)$(_unit_cell_suffix(unit_cell))"
 
     best_params = nothing
     best_val = nothing
@@ -81,6 +89,7 @@ Run circuit optimization for multiple parameter values and save results to JSON 
 - `verbose`: Print progress information
 - `output_dir`: Directory to save results (default: "data")
 - `share_params`: Share parameters across circuit layers
+- `resume_checkpoint`: Restart from compatible checkpoint parameters when available
 - `model_params...`: Fixed model parameters (e.g., `J=1.0` for TFIM, `J1=1.0` for Heisenberg)
 
 # Example
@@ -101,6 +110,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
                     n_runs::Int=44, abstol::Float64=0.01,
                     active_nqubits::Int=nqubits,
                     unit_cell::Symbol=:single,
+                    resume_checkpoint::Bool=true,
                     model_params...)
 
     # Create output directory if it doesn't exist
@@ -121,7 +131,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
         # Try to warm-start from the closest existing result file in output_dir
         # 1. First try same nqubits
         warm_params, warm_val = _find_warm_start_params(output_dir, model, scan_param, val, row, p, nqubits;
-                                                         fixed_params...)
+                                                         unit_cell=unit_cell, fixed_params...)
         warm_from_nqubits = nothing
         if nqubits > 3
             # For enlarged-D scans, start from an embedded lower-D state rather
@@ -129,7 +139,6 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
             warm_params = nothing
             warm_val = nothing
         end
-        warm_params = nothing
         # 2. If no same-nqubits result, try smaller nqubits and embed
         if warm_params === nothing
             for nq in (nqubits-2):-2:3
@@ -137,7 +146,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
                 found = false
                 for try_row in (row, row+2)
                     warm_params, warm_val = _find_warm_start_params(output_dir, model, scan_param, val, try_row, p, nq;
-                                                                     fixed_params...)
+                                                                     unit_cell=unit_cell, fixed_params...)
                     if warm_params !== nothing
                         warm_params = embed_params(warm_params, p, nq, nqubits; unit_cell=unit_cell)
                         warm_from_nqubits = nq
@@ -149,7 +158,6 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
             end
         end
 
-        @show warm_val
         if warm_params !== nothing
             params = warm_params
             if warm_from_nqubits !== nothing
@@ -163,7 +171,8 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
             n_params = gate_parameter_count(p, nqubits;
                                             unit_cell=unit_cell,
                                             row=row,
-                                            share_params=share_params)
+                                            share_params=share_params,
+                                            active_nqubits=active_nqubits)
             params = rand(n_params)
             verbose && println("Starting $(scan_param) = $(val), random initialization (seed=$seed)")
         end
@@ -185,6 +194,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
                                   active_nqubits=active_nqubits,
                                   unit_cell=unit_cell,
                                   checkpoint_file=checkpoint_file,
+                                  resume_checkpoint=resume_checkpoint,
                                   model_kw...)
 
         results[i] = result
@@ -192,12 +202,13 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
         # Save result to JSON
         fixed_str = join(["$(k)=$(v)" for (k, v) in sort(collect(fixed_params), by=first)], "_")
         name_prefix = isempty(fixed_str) ? "circuit_$(model)" : "circuit_$(model)_$(fixed_str)"
-        filename = joinpath(output_dir, "$(name_prefix)_$(scan_param)=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json")
+        filename = joinpath(output_dir, "$(name_prefix)_$(scan_param)=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)$(_unit_cell_suffix(unit_cell))")
         input_args = Dict{Symbol,Any}(
             :model => model, :scan_param => scan_param, scan_param => val,
             :row => row, :p => p, :nqubits => nqubits,
             :maxiter => maxiter,
             :active_nqubits => active_nqubits,
+            :resume_checkpoint => resume_checkpoint,
             :share_params => share_params, :seed => seed,
             :warm_started_from => warm_val,
             :warm_started_from_nqubits => warm_from_nqubits
@@ -241,9 +252,9 @@ end
      verbose=true,
      output_dir=joinpath(@__DIR__, "results_heisenberg"),
      share_params=true,
-     conv_step=1000,
-     samples=4000,
-     n_runs=10,
+     conv_step=100,
+     samples=1000,
+     n_runs=4,
      abstol=1e-5,
      unit_cell=:two_by_two
  )
