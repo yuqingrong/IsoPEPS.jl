@@ -201,9 +201,9 @@ function plot_dimer_structure_factor(filename::String;
                                             samples=samples, measure_y=true)
         isnothing(resample_result) && error("Resampling failed for $filename")
         _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
-        Z_vec = Z_samples[conv_step+1:end]
-        X_vec = X_samples[conv_step+1:end]
-        Y_vec = Y_samples[conv_step+1:end]
+        Z_vec = _discard_burnin(Z_samples, _row, conv_step; requested_samples=samples)
+        X_vec = _discard_burnin(X_samples, _row, conv_step; requested_samples=samples)
+        Y_vec = _discard_burnin(Y_samples, _row, conv_step; requested_samples=samples)
 
         # Precompute dimer values matrix once
         println("Precomputing dimer values from samples...")
@@ -365,9 +365,9 @@ function plot_spin_structure_factor(filename::String;
                                             samples=samples, measure_y=true)
         isnothing(resample_result) && error("Resampling failed for $filename")
         _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
-        Z_vec = Z_samples[conv_step+1:end]
-        X_vec = X_samples[conv_step+1:end]
-        Y_vec = Y_samples[conv_step+1:end]
+        Z_vec = _discard_burnin(Z_samples, _row, conv_step; requested_samples=samples)
+        X_vec = _discard_burnin(X_samples, _row, conv_step; requested_samples=samples)
+        Y_vec = _discard_burnin(Y_samples, _row, conv_step; requested_samples=samples)
 
         for (i, qx) in enumerate(qvals)
             for (j, qy) in enumerate(qvals)
@@ -742,9 +742,11 @@ function plot_bond_energy_pattern(filename::String;
             _rho, Z_samples, X_samples, _params, _gates = resample_result
             Y_samples = zeros(length(X_samples))
         end
-        Z_vec = Z_samples[conv_step+1:end]
-        X_vec = X_samples[conv_step+1:end]
-        Y_vec = length(resample_result) == 6 ? Y_samples[conv_step+1:end] : zeros(length(Z_vec))
+        Z_vec = _discard_burnin(Z_samples, _row, conv_step; requested_samples=samples)
+        X_vec = _discard_burnin(X_samples, _row, conv_step; requested_samples=samples)
+        Y_vec = length(resample_result) == 6 ?
+            _discard_burnin(Y_samples, _row, conv_step; requested_samples=samples) :
+            zeros(length(Z_vec))
 
         dimer_vals_v, dimer_vals_h = _build_all_dimer_values(X_vec, Z_vec, Y_vec, _row)
 

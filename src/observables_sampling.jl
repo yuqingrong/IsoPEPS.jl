@@ -11,6 +11,29 @@
 """Number of columns in sample vector."""
 _n_cols(samples, row) = div(length(samples), row)
 
+"""
+    _discard_burnin(samples, row, conv_step; requested_samples=nothing)
+
+Drop thermalization samples without breaking the column-major row layout.
+The returned vector starts at the first complete column after `conv_step` and
+contains only complete columns.
+"""
+function _discard_burnin(samples::AbstractVector, row::Int, conv_step::Int;
+                         requested_samples::Union{Int,Nothing}=nothing)
+    row > 0 || throw(ArgumentError("row must be positive"))
+    conv_step >= 0 || throw(ArgumentError("conv_step must be non-negative"))
+
+    burnin = row * cld(conv_step, row)
+    burnin >= length(samples) && return eltype(samples)[]
+
+    available = length(samples) - burnin
+    wanted = isnothing(requested_samples) ? available : min(available, requested_samples)
+    usable = row * div(wanted, row)
+    usable <= 0 && return eltype(samples)[]
+
+    return collect(@view samples[burnin+1:burnin+usable])
+end
+
 # =============================================================================
 # Section 2: Core expect API for samples
 # =============================================================================

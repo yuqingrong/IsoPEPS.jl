@@ -63,13 +63,13 @@ function compute_variance_vs_samples(filename::String,
 
     if is_heisenberg
         _rho, Z_all, X_all, Y_all, _params, _gates = resample_result
-        Z_pool = Z_all[conv_step+1:end]
-        X_pool = X_all[conv_step+1:end]
-        Y_pool = Y_all[conv_step+1:end]
+        Z_pool = _discard_burnin(Z_all, row, conv_step; requested_samples=_pool_samples)
+        X_pool = _discard_burnin(X_all, row, conv_step; requested_samples=_pool_samples)
+        Y_pool = _discard_burnin(Y_all, row, conv_step; requested_samples=_pool_samples)
     else
         _rho, Z_all, X_all, _params, _gates = resample_result
-        Z_pool = Z_all[conv_step+1:end]
-        X_pool = X_all[conv_step+1:end]
+        Z_pool = _discard_burnin(Z_all, row, conv_step; requested_samples=_pool_samples)
+        X_pool = _discard_burnin(X_all, row, conv_step; requested_samples=_pool_samples)
     end
 
     # Each MCMC step emits `row` consecutive spin values (one per row position).
@@ -191,13 +191,13 @@ function plot_energy_vs_inv_samples(filename::String,
 
     if is_heisenberg
         _rho, Z_all, X_all, Y_all, _params, _gates = resample_result
-        Z_pool = Z_all[conv_step+1:end]
-        X_pool = X_all[conv_step+1:end]
-        Y_pool = Y_all[conv_step+1:end]
+        Z_pool = _discard_burnin(Z_all, row, conv_step; requested_samples=_pool_samples)
+        X_pool = _discard_burnin(X_all, row, conv_step; requested_samples=_pool_samples)
+        Y_pool = _discard_burnin(Y_all, row, conv_step; requested_samples=_pool_samples)
     else
         _rho, Z_all, X_all, _params, _gates = resample_result
-        Z_pool = Z_all[conv_step+1:end]
-        X_pool = X_all[conv_step+1:end]
+        Z_pool = _discard_burnin(Z_all, row, conv_step; requested_samples=_pool_samples)
+        X_pool = _discard_burnin(X_all, row, conv_step; requested_samples=_pool_samples)
     end
     pool_cols   = length(Z_pool) ÷ row
     pool_cols_X = length(X_pool) ÷ row
@@ -325,4 +325,3 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
 
     return fig
 end
-

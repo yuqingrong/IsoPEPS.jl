@@ -316,10 +316,13 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
                                                    samples=samples,
                                                    model=m)
             end
-            Z_samples_all[run_idx] = result_ch[2][conv_step+1:end]
-            X_samples_all[run_idx] = result_ch[3][conv_step+1:end]
+            Z_samples_all[run_idx] = _discard_burnin(result_ch[2], row, conv_step;
+                                                     requested_samples=samples)
+            X_samples_all[run_idx] = _discard_burnin(result_ch[3], row, conv_step;
+                                                     requested_samples=samples)
             if need_y
-                Y_samples_all[run_idx] = result_ch[4][conv_step+1:end]
+                Y_samples_all[run_idx] = _discard_burnin(result_ch[4], row, conv_step;
+                                                         requested_samples=samples)
             end
         end
 

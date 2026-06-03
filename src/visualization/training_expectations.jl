@@ -212,9 +212,15 @@ function plot_expectation_values(result::CircuitOptimizationResult;
                                   model::String="tfim",
                                   J1::Float64=1.0,
                                   J2::Float64=0.0,
+                                  share_params::Bool=true,
+                                  active_nqubits::Union{Int,Nothing}=nqubits,
+                                  unit_cell::Union{Symbol,String}=:single,
+                                  use_exact::Bool=true,
                                   title::String="Expectation Values",
                                   save_path::Union{String,Nothing}=nothing,
                                   datafile::Union{String,Nothing}=nothing,
+                                  resample_conv_step::Int=100,
+                                  resample_samples::Union{Int,Nothing}=nothing,
                                   kwargs...)
 
     Z_samples = result.final_Z_samples
@@ -225,7 +231,9 @@ function plot_expectation_values(result::CircuitOptimizationResult;
     if !isnothing(datafile)
         if isfile(datafile)
             # Adaptive sampling: reduce samples for large nqubits (expensive to simulate)
-            adaptive_samples = if !isnothing(nqubits)
+            adaptive_samples = if !isnothing(resample_samples)
+                resample_samples
+            elseif !isnothing(nqubits)
                 if nqubits <= 3
                     1000000
                 elseif nqubits == 5
@@ -237,17 +245,27 @@ function plot_expectation_values(result::CircuitOptimizationResult;
                 100000  # default
             end
 
-            resampled = resample_circuit(datafile; conv_step=100, samples=adaptive_samples)
+            resampled = resample_circuit(datafile; conv_step=resample_conv_step,
+                                         samples=adaptive_samples)
             if !isnothing(resampled)
                 if need_y
                     _, Z_samples, X_samples, Y_samples, _, _ = resampled
-                    Z_samples = Z_samples[101:end] 
-                    X_samples = X_samples[101:end]
-                    Y_samples = Y_samples[101:end]
+                    if !isnothing(row)
+                        Z_samples = _discard_burnin(Z_samples, row, resample_conv_step;
+                                                    requested_samples=adaptive_samples)
+                        X_samples = _discard_burnin(X_samples, row, resample_conv_step;
+                                                    requested_samples=adaptive_samples)
+                        Y_samples = _discard_burnin(Y_samples, row, resample_conv_step;
+                                                    requested_samples=adaptive_samples)
+                    end
                 else
                     _, Z_samples, X_samples, _, _ = resampled
-                    Z_samples = Z_samples[101:end]
-                    X_samples = X_samples[101:end]
+                    if !isnothing(row)
+                        Z_samples = _discard_burnin(Z_samples, row, resample_conv_step;
+                                                    requested_samples=adaptive_samples)
+                        X_samples = _discard_burnin(X_samples, row, resample_conv_step;
+                                                    requested_samples=adaptive_samples)
+                    end
                 end
             else
                 @warn "Resampling failed for $datafile; using samples in result"
@@ -258,18 +276,26 @@ function plot_expectation_values(result::CircuitOptimizationResult;
     end
 
     # --- Shared: reconstruct gates + TransferOperator for exact computation ---
-    can_compute_exact = !isnothing(row) && !isnothing(p) && !isnothing(nqubits) && !isempty(result.final_params)
+    can_compute_exact = use_exact && !isnothing(row) && !isnothing(p) &&
+        !isnothing(nqubits) && !isempty(result.final_params)
     skip_exact = can_compute_exact && nqubits >= 5
     op = nothing
 
     if can_compute_exact && !skip_exact
-        is_two_by_two = (m isa HeisenbergJ1J2) &&
-            (length(result.final_params) == gate_parameter_count(p, nqubits; unit_cell=:two_by_two))
+        unit_cell_sym = Symbol(unit_cell)
+        active = something(active_nqubits, nqubits)
+        is_two_by_two = unit_cell_sym === :two_by_two ||
+            ((m isa HeisenbergJ1J2) &&
+             (length(result.final_params) == gate_parameter_count(p, nqubits;
+                 unit_cell=:two_by_two, row=row, active_nqubits=active)))
         if is_two_by_two
-            gates_odd, gates_even = build_unitary_gate_2x2(result.final_params, p, row, nqubits)
+            gates_odd, gates_even = build_unitary_gate_2x2(result.final_params, p, row, nqubits;
+                                                           active_nqubits=active)
             op = TransferOperator(gates_odd, gates_even, row, nqubits)
         else
-            gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=true)
+            gates = build_unitary_gate(result.final_params, p, row, nqubits;
+                                       share_params=share_params,
+                                       active_nqubits=active)
             op = TransferOperator(gates, row, nqubits)
         end
     else
@@ -628,4 +654,3 @@ function plot_expectation_values(result::CircuitOptimizationResult;
 
     return fig
 end
-

@@ -218,7 +218,7 @@ function plot_correlation_function(filename::String;
                                                             samples=samples)
     end
 
-    Z_vec = Z_samples[conv_step+1:end]
+    Z_vec = _discard_burnin(Z_samples, row, conv_step; requested_samples=samples)
 
     # Use row*N_cols for subsampling so each subchain has same-column-type measurements
     # (for 2x2 unit cells, row alone mixes odd/even column types)

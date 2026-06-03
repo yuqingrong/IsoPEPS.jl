@@ -192,8 +192,8 @@ function _resampled_tfim_energy(filename::String, val, J, row::Int;
             continue
         end
         _rho, Z_samples, X_samples, _params, _gates = resample_result
-        Z_samples = Z_samples[conv_step+1:end]
-        X_samples = X_samples[conv_step+1:end]
+        Z_samples = _discard_burnin(Z_samples, row, conv_step; requested_samples=samples)
+        X_samples = _discard_burnin(X_samples, row, conv_step; requested_samples=samples)
         push!(energies, compute_tfim_energy(X_samples, Z_samples, Float64(val), Float64(J), row))
     end
 
@@ -224,9 +224,9 @@ function _compute_circuit_energy_from_result(filename::String, result, input_arg
             return nothing
         end
         _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
-        Z_samples = Z_samples[conv_step+1:end]
-        X_samples = X_samples[conv_step+1:end]
-        Y_samples = Y_samples[conv_step+1:end]
+        Z_samples = _discard_burnin(Z_samples, row, conv_step; requested_samples=samples)
+        X_samples = _discard_burnin(X_samples, row, conv_step; requested_samples=samples)
+        Y_samples = _discard_burnin(Y_samples, row, conv_step; requested_samples=samples)
         return compute_heisenberg_energy(X_samples, Z_samples, Y_samples, J1, Float64(val), row)
     elseif source == :sampled
         resample_repeats = Int(get(spec, :resample_repeats, 1))
@@ -677,8 +677,8 @@ function plot_magnetization_vs_g(data_dir::String, g_values::Vector{Float64};
             continue
         end
         _rho, Z_all, X_all, _params, _gates = resample_result
-        Z_pool = Z_all[conv_step+1:end]
-        X_pool = X_all[conv_step+1:end]
+        Z_pool = _discard_burnin(Z_all, row, conv_step; requested_samples=samples)
+        X_pool = _discard_burnin(X_all, row, conv_step; requested_samples=samples)
 
         mZ = abs(expect(Z_pool, row))   # |⟨Z⟩| averaged over all sites
         mX = abs(expect(X_pool, row))   # |⟨X⟩|
@@ -796,7 +796,7 @@ function plot_connected_corr_vs_g(data_dir::String, g_values::Vector{Float64};
                 continue
             end
             _rho, Z_all, _X_all, _params, _gates = resample_result
-            Z_pool = Z_all[conv_step+1:end]
+            Z_pool = _discard_burnin(Z_all, row, conv_step; requested_samples=samples)
 
             mean_C = r -> mean(abs(correlation_function(Z_pool, row, r;
                                                         position=pos, connected=true)[r])
@@ -1344,9 +1344,9 @@ function plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
                 continue
             end
             _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
-            Z_vec = Z_samples[conv_step+1:end]
-            X_vec = X_samples[conv_step+1:end]
-            Y_vec = Y_samples[conv_step+1:end]
+            Z_vec = _discard_burnin(Z_samples, row, conv_step; requested_samples=samples)
+            X_vec = _discard_burnin(X_samples, row, conv_step; requested_samples=samples)
+            Y_vec = _discard_burnin(Y_samples, row, conv_step; requested_samples=samples)
 
             m2_neel       = magnetic_order_squared(X_vec, Z_vec, Y_vec, row, q0;
                                                    max_separation=max_separation)
@@ -1629,9 +1629,9 @@ function save_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
                 continue
             end
             _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
-            Z_vec = @view Z_samples[conv_step+1:end]
-            X_vec = @view X_samples[conv_step+1:end]
-            Y_vec = @view Y_samples[conv_step+1:end]
+            Z_vec = _discard_burnin(Z_samples, row, conv_step; requested_samples=samples)
+            X_vec = _discard_burnin(X_samples, row, conv_step; requested_samples=samples)
+            Y_vec = _discard_burnin(Y_samples, row, conv_step; requested_samples=samples)
 
             ncols = _n_cols(X_vec, row)
             _n_cols(Z_vec, row) == ncols && _n_cols(Y_vec, row) == ncols ||
@@ -1723,7 +1723,7 @@ end
 """
     plot_M2_comparison(; exact_file="", sampling_file="", dmrg_file="",
                         save_path=nothing, dmrg_Lx_key="Lx2",
-                        show_sampling_stderr_panel=true)
+                        show_sampling_stderr_panel=false)
 
 Plot M²(π,π) (Néel) and M²(0,π) together vs J₂/J₁, comparing exact, sampling,
 and DMRG methods on a single axis.
@@ -1734,17 +1734,18 @@ Each file is a JSON produced by `save_M2_vs_J2` (for exact/sampling) or
 # Arguments
 - `exact_file`: JSON from `save_M2_vs_J2(...; method=:exact)`
 - `sampling_file`: JSON from `save_M2_vs_J2(...; method=:sampling)`
-- `dmrg_file`: JSON from DMRG J2 scan (keys: `J2_values`, `M2_neel_Lx2`, etc.)
+- `dmrg_file`: JSON from DMRG J2 scan (keys: `J2_values` or `scan_values`,
+  `M2_neel_Lx2`, etc.)
 - `dmrg_Lx_key`: suffix for DMRG keys — `"Lx1"` or `"Lx2"` (default: `"Lx2"`)
 - `show_sampling_stderr_panel`: Show sampling errors in a lower log-scale panel when
-  standard-error arrays are available (default: `true`)
+  standard-error arrays are available (default: `false`)
 - `save_path`: Optional path to save the figure
 """
 function plot_M2_comparison(; exact_file::String="",
                               sampling_file::String="",
                               dmrg_file::String="",
                               dmrg_Lx_key::String="Lx2",
-                              show_sampling_stderr_panel::Bool=true,
+                              show_sampling_stderr_panel::Bool=false,
                               save_path=nothing)
     # M²(π,π) = Néel, M²(0,π) uses key M2_0pi / M2_stripe_0pi
     q_info = [
@@ -1754,8 +1755,21 @@ function plot_M2_comparison(; exact_file::String="",
          dmrg_key="M2_0pi_$dmrg_Lx_key"),
     ]
 
-    # Colors: blue/orange for (π,π)/(0,π); solid/dash/dot for exact/sampling/DMRG
+    # Colors encode q-point; marker/line styles encode method. Hollow markers reduce
+    # overplotting where sampling and reference values coincide.
     q_colors = [:blue, :orange]
+    method_styles = [
+        (key="exact",    label="TN",    linestyle=:solid, marker=:circle,  markersize=4.2, strokewidth=1.0),
+        (key="sampling", label="Samp.", linestyle=:dash,  marker=:diamond, markersize=4.4, strokewidth=1.0),
+        (key="dmrg",     label="DMRG",  linestyle=:dot,   marker=:xcross,  markersize=5.8, strokewidth=1.2),
+    ]
+    method_style_by_key = Dict(style.key => style for style in method_styles)
+
+    marker_attrs(style, color) = (; marker=style.marker,
+                                  markersize=style.markersize,
+                                  markercolor=(:white, 0.0),
+                                  strokecolor=color,
+                                  strokewidth=style.strokewidth)
 
     function _load(file)
         isempty(file) && return nothing
@@ -1802,7 +1816,9 @@ function plot_M2_comparison(; exact_file::String="",
             M2 = Float64.(exact_data[qi.std_key])
             max_M2_value = max(max_M2_value, maximum(M2))
             lbl = get(method_labelled, "exact", false) ? nothing : "TN contraction"
-            scatterlines!(ax, J2, M2, label=lbl, color=color, marker=:circle)
+            style = method_style_by_key["exact"]
+            scatterlines!(ax, J2, M2; label=lbl, color=color,
+                          linestyle=style.linestyle, marker_attrs(style, color)...)
             method_labelled["exact"] = true
         end
 
@@ -1820,21 +1836,25 @@ function plot_M2_comparison(; exact_file::String="",
                 end
             end
             lbl = get(method_labelled, "sampling", false) ? nothing : "Sampling"
-            scatterlines!(ax, J2, M2, label=lbl, color=color,
-                          marker=:rect, linestyle=:dash)
+            style = method_style_by_key["sampling"]
+            scatterlines!(ax, J2, M2; label=lbl, color=color,
+                          linestyle=style.linestyle, marker_attrs(style, color)...)
             method_labelled["sampling"] = true
         end
 
         if dmrg_data !== nothing
             dmrg_key = haskey(dmrg_data, qi.dmrg_key) ? qi.dmrg_key :
                        haskey(dmrg_data, qi.std_key) ? qi.std_key : nothing
-            if dmrg_key !== nothing && haskey(dmrg_data, "J2_values")
-                J2 = Float64.(dmrg_data["J2_values"])
+            dmrg_j2_key = haskey(dmrg_data, "J2_values") ? "J2_values" :
+                          haskey(dmrg_data, "scan_values") ? "scan_values" : nothing
+            if dmrg_key !== nothing && dmrg_j2_key !== nothing
+                J2 = Float64.(dmrg_data[dmrg_j2_key])
                 M2 = Float64.(dmrg_data[dmrg_key])
                 max_M2_value = max(max_M2_value, maximum(M2))
                 lbl = get(method_labelled, "dmrg", false) ? nothing : "DMRG"
-                scatterlines!(ax, J2, M2, label=lbl, color=color,
-                              marker=:utriangle, linestyle=:dot)
+                style = method_style_by_key["dmrg"]
+                scatterlines!(ax, J2, M2; label=lbl, color=color,
+                              linestyle=style.linestyle, marker_attrs(style, color)...)
                 method_labelled["dmrg"] = true
             end
         end
@@ -1847,26 +1867,25 @@ function plot_M2_comparison(; exact_file::String="",
     all_elems  = []
     all_labels = String[]
 
-    method_style = [
-        ("exact",    "TN",      :solid, :circle),
-        ("sampling", "Samp.",   :dash,  :rect),
-        ("dmrg",     "DMRG",   :dot,   :utriangle),
-    ]
-
     for (iq, qi) in enumerate(q_info)
         color = q_colors[iq]
-        for (key, mname, ls, mk) in method_style
-            get(method_labelled, key, false) || continue
-            push!(all_elems, [LineElement(color=color, linestyle=ls),
-                              MarkerElement(color=color, marker=mk)])
-            push!(all_labels, "$(qi.label) $(mname)")
+        for style in method_styles
+            get(method_labelled, style.key, false) || continue
+            push!(all_elems, [
+                LineElement(color=color, linestyle=style.linestyle),
+                MarkerElement(color=(:white, 0.0), marker=style.marker,
+                              markersize=style.markersize,
+                              strokecolor=color, strokewidth=style.strokewidth),
+            ])
+            push!(all_labels, "$(qi.label) $(style.label)")
         end
     end
 
     Legend(fig[1, 1], all_elems, all_labels;
            tellwidth=false, tellheight=false,
-           halign=:left, valign=0.88,
-           nbanks=1,
+           halign=:left, valign=:top,
+           orientation=:horizontal,
+           nbanks=2,
            margin=(1, 1, 1, 1),
            framevisible=false,
            labelsize=PAPER_LEGEND_LABELSIZE,

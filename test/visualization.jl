@@ -374,10 +374,11 @@ end
     @test saved["bootstrap_block_cols"] == [2]
 end
 
-@testset "plot_M2_comparison legend stays inside blank region" begin
+@testset "plot_M2_comparison uses one-panel default with distinct markers" begin
     data_dir = mktempdir()
     exact_file = joinpath(data_dir, "M2_exact.json")
     sampling_file = joinpath(data_dir, "M2_sampling.json")
+    dmrg_file = joinpath(data_dir, "M2_dmrg.json")
     save_results(exact_file;
         J2_values=[0.1, 0.5, 0.8],
         M2_neel=[0.20, 0.10, 0.04],
@@ -388,11 +389,16 @@ end
         M2_neel_stderr=[0.01, 0.01, 0.005],
         M2_stripe_0pi=[0.02, 0.07, 0.17],
         M2_stripe_0pi_stderr=[0.005, 0.01, 0.015])
+    save_results(dmrg_file;
+        scan_values=[0.1, 0.5, 0.8],
+        M2_neel_Lx2=[0.21, 0.11, 0.05],
+        M2_0pi_Lx2=[0.025, 0.075, 0.18])
 
-    fig = plot_M2_comparison(exact_file=exact_file, sampling_file=sampling_file)
+    fig = plot_M2_comparison(exact_file=exact_file, sampling_file=sampling_file,
+                             dmrg_file=dmrg_file)
     @test fig isa Figure
     axes = filter(content -> content isa Axis, fig.content)
-    @test length(axes) == 2
+    @test length(axes) == 1
     legend = only(filter(content -> content isa Legend, fig.content))
     @test legend isa Legend
     gc = legend.layoutobservables.gridcontent[]
@@ -400,15 +406,30 @@ end
     @test gc.span.cols == 1:1
     @test legend.tellwidth[] == false
     @test legend.tellheight[] == false
-    @test legend.nbanks[] == 1
+    @test legend.nbanks[] == 2
     @test legend.halign[] == :left
-    @test legend.valign[] == 0.88
+    @test legend.valign[] == :top
     @test legend.margin[] == (1, 1, 1, 1)
     g = legend.entrygroups[][1]
-    @test [e.label[] for e in g[2]] == ["M²(π,π) TN", "M²(π,π) Samp.", "M²(0,π) TN", "M²(0,π) Samp."]
+    @test [e.label[] for e in g[2]] == [
+        "M²(π,π) TN", "M²(π,π) Samp.", "M²(π,π) DMRG",
+        "M²(0,π) TN", "M²(0,π) Samp.", "M²(0,π) DMRG",
+    ]
     ax = axes[1]
     @test count(plot -> plot isa Errorbars, ax.scene.plots) == 2
-    @test axes[2].ylabel[] == "Sampling SE"
+    styled_series = filter(ax.scene.plots) do plot
+        hasproperty(plot, :marker) && hasproperty(plot, :markersize)
+    end
+    @test any(plot -> plot.marker[] == :circle, styled_series)
+    @test any(plot -> plot.marker[] == :diamond, styled_series)
+    @test any(plot -> plot.marker[] == :xcross, styled_series)
+
+    se_fig = plot_M2_comparison(exact_file=exact_file, sampling_file=sampling_file,
+                                dmrg_file=dmrg_file;
+                                show_sampling_stderr_panel=true)
+    se_axes = filter(content -> content isa Axis, se_fig.content)
+    @test length(se_axes) == 2
+    @test se_axes[2].ylabel[] == "Sampling SE"
     annotations = IsoPEPS.m2_phase_annotations(0.24)
     @test [a.label for a in annotations] == ["Neel order", "VBS", "Stripe order"]
     @test [(a.x, a.y) for a in annotations] == [(0.20, 0.05), (0.57, 0.05), (0.80, 0.05)]

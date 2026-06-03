@@ -8,6 +8,16 @@ using Random
 # Basic Observable Tests (Random States)
 # =============================================================================
 
+@testset "thermalization discard preserves complete columns" begin
+    samples = collect(1.0:15.0)
+    trimmed = IsoPEPS._discard_burnin(samples, 3, 4; requested_samples=8)
+    @test trimmed == [7.0, 8.0, 9.0, 10.0, 11.0, 12.0]
+    @test length(trimmed) % 3 == 0
+
+    no_trim = IsoPEPS._discard_burnin(samples, 3, 0; requested_samples=9)
+    @test no_trim == collect(1.0:9.0)
+end
+
 @testset "compute_X_expectation_basic" begin
     virtual_qubits = 1
     nqubits = 1 + 2*virtual_qubits
@@ -832,7 +842,8 @@ end
     # Reshape samples for compute_acf (row samples per column → reshape to get horizontal correlations)
     # Z_samples is a flat vector, need to compute correlations properly
     # The sampling gives Z values site by site, so we compute correlation directly
-    Z_vec = Z_samples[conv_step+1:end]  # Discard thermalization
+    Z_vec = IsoPEPS._discard_burnin(Z_samples, row, conv_step;
+                                    requested_samples=samples)
     
     # Compute sample-based correlation using compute_acf
     # compute_acf expects samples in matrix form (chains × samples)
