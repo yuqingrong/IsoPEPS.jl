@@ -60,11 +60,18 @@ function compact_reference_label(kind::Symbol, value::Real)
     end
 end
 
-function m2_phase_annotations(ymax::Real)
+function m2_phase_annotations(ymax::Real;
+                              ranges=((0.0, 0.4), (0.4, 0.6), (0.6, 1.0)))
+    centers = ((ranges[1][1] + ranges[1][2]) / 2,
+               (ranges[2][1] + ranges[2][2]) / 2,
+               (ranges[3][1] + ranges[3][2]) / 2)
     [
-        (x=0.20, y=0.05, label="Neel order", align=(:center, :center)),
-        (x=0.57, y=0.05, label="VBS", align=(:center, :center)),
-        (x=0.80, y=0.05, label="Stripe order", align=(:center, :center)),
+        (x=centers[1], y=0.72, range=ranges[1], bar_y=0.28,
+         tick_low=0.12, tick_high=0.42, label="Neel order", align=(:center, :center)),
+        (x=centers[2], y=0.72, range=ranges[2], bar_y=0.28,
+         tick_low=0.12, tick_high=0.42, label="VBS", align=(:center, :center)),
+        (x=centers[3], y=0.72, range=ranges[3], bar_y=0.28,
+         tick_low=0.12, tick_high=0.42, label="Stripe order", align=(:center, :center)),
     ]
 end
 
@@ -77,4 +84,3 @@ function add_paper_legend!(ax::Axis; position=:rt, nbanks::Int=1)
                margin=(1, 1, 1, 1),
                framevisible=false)
 end
-

@@ -374,7 +374,7 @@ end
     @test saved["bootstrap_block_cols"] == [2]
 end
 
-@testset "plot_M2_comparison uses one-panel default with distinct markers" begin
+@testset "plot_M2_comparison sampling-only phase ranges and error bars" begin
     data_dir = mktempdir()
     exact_file = joinpath(data_dir, "M2_exact.json")
     sampling_file = joinpath(data_dir, "M2_sampling.json")
@@ -385,9 +385,9 @@ end
         M2_stripe_0pi=[0.03, 0.08, 0.18])
     save_results(sampling_file;
         J2_values=[0.1, 0.5, 0.8],
-        M2_neel=[0.19, 0.09, 0.03],
+        M2_neel=[0.19, 0.03, 0.02],
         M2_neel_stderr=[0.01, 0.01, 0.005],
-        M2_stripe_0pi=[0.02, 0.07, 0.17],
+        M2_stripe_0pi=[0.02, 0.03, 0.17],
         M2_stripe_0pi_stderr=[0.005, 0.01, 0.015])
     save_results(dmrg_file;
         scan_values=[0.1, 0.5, 0.8],
@@ -398,42 +398,53 @@ end
                              dmrg_file=dmrg_file)
     @test fig isa Figure
     axes = filter(content -> content isa Axis, fig.content)
-    @test length(axes) == 1
+    @test length(axes) == 2
+    phase_ax = axes[1]
+    ax = axes[2]
     legend = only(filter(content -> content isa Legend, fig.content))
     @test legend isa Legend
     gc = legend.layoutobservables.gridcontent[]
-    @test gc.span.rows == 1:1
+    @test gc.span.rows == 2:2
     @test gc.span.cols == 1:1
     @test legend.tellwidth[] == false
     @test legend.tellheight[] == false
-    @test legend.nbanks[] == 2
+    @test legend.nbanks[] == 1
     @test legend.halign[] == :left
-    @test legend.valign[] == :top
+    @test legend.valign[] == :bottom
     @test legend.margin[] == (1, 1, 1, 1)
     g = legend.entrygroups[][1]
     @test [e.label[] for e in g[2]] == [
-        "M²(π,π) TN", "M²(π,π) Samp.", "M²(π,π) DMRG",
-        "M²(0,π) TN", "M²(0,π) Samp.", "M²(0,π) DMRG",
+        "M²(π,π) Samp.", "M²(0,π) Samp.",
     ]
-    ax = axes[1]
     @test count(plot -> plot isa Errorbars, ax.scene.plots) == 2
     styled_series = filter(ax.scene.plots) do plot
         hasproperty(plot, :marker) && hasproperty(plot, :markersize)
     end
     @test any(plot -> plot.marker[] == :circle, styled_series)
     @test any(plot -> plot.marker[] == :diamond, styled_series)
-    @test any(plot -> plot.marker[] == :xcross, styled_series)
+    @test !any(plot -> plot.marker[] == :xcross, styled_series)
 
     se_fig = plot_M2_comparison(exact_file=exact_file, sampling_file=sampling_file,
                                 dmrg_file=dmrg_file;
                                 show_sampling_stderr_panel=true)
     se_axes = filter(content -> content isa Axis, se_fig.content)
-    @test length(se_axes) == 2
-    @test se_axes[2].ylabel[] == "Sampling SE"
+    @test length(se_axes) == 3
+    @test se_axes[3].ylabel[] == "Sampling SE"
     annotations = IsoPEPS.m2_phase_annotations(0.24)
     @test [a.label for a in annotations] == ["Neel order", "VBS", "Stripe order"]
-    @test [(a.x, a.y) for a in annotations] == [(0.20, 0.05), (0.57, 0.05), (0.80, 0.05)]
-    texts = filter(ax.scene.plots) do plot
+    @test [a.range for a in annotations] == [(0.0, 0.4), (0.4, 0.6), (0.6, 1.0)]
+    @test [(a.x, a.y) for a in annotations] == [(0.20, 0.72), (0.50, 0.72), (0.80, 0.72)]
+    data_ranges = IsoPEPS._m2_phase_ranges_from_values(
+        [0.0, 0.5, 0.6, 1.0],
+        [1.0, 0.2, 0.1, 0.1],
+        [0.1, 0.1, 0.2, 1.0])
+    @test data_ranges !== nothing
+    @test data_ranges[1][2] ≈ 0.46875
+    @test data_ranges[2][1] ≈ 0.46875
+    @test data_ranges[2][2] ≈ 0.625
+    @test data_ranges[3][1] ≈ 0.625
+    @test data_ranges[3][2] ≈ 1.0
+    texts = filter(phase_ax.scene.plots) do plot
         hasproperty(plot, :text) && first(plot.text[]) in ["Neel order", "VBS", "Stripe order"]
     end
     @test length(texts) == 3
@@ -450,8 +461,8 @@ end
     legacy_fig = plot_M2_comparison(sampling_file=legacy_sampling_file)
     @test legacy_fig isa Figure
     legacy_axes = filter(content -> content isa Axis, legacy_fig.content)
-    @test length(legacy_axes) == 1
-    legacy_ax = only(legacy_axes)
+    @test length(legacy_axes) == 2
+    legacy_ax = legacy_axes[2]
     @test count(plot -> plot isa Errorbars, legacy_ax.scene.plots) == 0
 
     @test isnothing(IsoPEPS._load_m2_stderr(

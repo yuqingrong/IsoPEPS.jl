@@ -1,5 +1,6 @@
 using IsoPEPS
 using PEPSKit
+using TensorKit, MPSKit, MPSKitModels
 using JSON3
 using CairoMakie
 set_theme!(IsoPEPS.paper_theme())
@@ -140,6 +141,90 @@ function run_pepskit_scan(; d::Int=2, D::Int=2, J::Float64=1.0,
     println("Scan complete! Results saved to $output_file")
     println("=" ^ 60)
     
+    return results
+end
+
+"""
+    run_mpskit_scan(; d=2, D=32, row=3, g_values=0.0:0.25:4.0,
+                     output_file=joinpath(@__DIR__, "results", "mpskit_results_Ly=\$(row)_D=\$(D).json"))
+
+Run `mpskit_ground_state` for a range of transverse-field values and save
+PEPSKit-compatible TFIM reference results to JSON.
+
+# Arguments
+- `d`: Physical dimension (default: 2)
+- `D`: MPS bond dimension (default: 32)
+- `row`: Cylinder circumference / MPS unit-cell length (default: 3)
+- `g_values`: Range of transverse field values (default: 0.0:0.25:4.0)
+- `output_file`: Path to save JSON results
+
+# Returns
+Dictionary with results for each g value.
+"""
+function run_mpskit_scan(; d::Int=2, D::Int=32, row::Int=3,
+                          g_values=0.0:0.25:4.0,
+                          output_file::String=joinpath(@__DIR__, "results", "mpskit_results_Ly=$(row)_D=$(D).json"))
+
+    results = Dict(
+        "parameters" => Dict(
+            "method" => "MPSKit_VUMPS",
+            "model" => "tfim",
+            "d" => d,
+            "D" => D,
+            "row" => row
+        ),
+        "g_values" => collect(g_values),
+        "energies" => Any[],
+        "correlation_lengths" => Any[],
+        "entropies" => Any[]
+    )
+
+    dir = dirname(output_file)
+    !isempty(dir) && !isdir(dir) && mkpath(dir)
+
+    println("=" ^ 60)
+    println("MPSKit Ground State Scan")
+    println("d=$d, D=$D, row=$row")
+    println("g values: ", collect(g_values))
+    println("=" ^ 60)
+
+    for (i, g) in enumerate(g_values)
+        println("\n[$i/$(length(g_values))] Running g = $g ...")
+
+        try
+            result = mpskit_ground_state(d, D, Float64(g), row)
+            energy = real(result.energy)
+            ξ = result.correlation_length
+            entropy = isempty(result.entropy) ? NaN : first(result.entropy)
+
+            push!(results["energies"], energy)
+            push!(results["correlation_lengths"], ξ)
+            push!(results["entropies"], entropy)
+
+            println("  Energy: $energy")
+            println("  Correlation length: $ξ")
+            println("  Entropy: $entropy")
+        catch e
+            @warn "MPSKit failed at g=$g" exception=(e, catch_backtrace())
+            push!(results["energies"], nothing)
+            push!(results["correlation_lengths"], nothing)
+            push!(results["entropies"], nothing)
+        end
+
+        open(output_file, "w") do io
+            JSON3.pretty(io, results)
+        end
+        println("  Results saved to $output_file")
+    end
+
+    open(output_file, "w") do io
+        JSON3.pretty(io, results)
+    end
+
+    println("\n" * "=" ^ 60)
+    println("Scan complete! Results saved to $output_file")
+    println("=" ^ 60)
+
     return results
 end
 
@@ -287,7 +372,7 @@ function run_pepskit_scan_bidirectional(; g_values, output_file::String, kwargs.
     println("Merged bidirectional scan written to $output_file")
     return merged
 end
-
+#=
 # Piecewise-refined g grid: coarse far from g_c ≈ 3.04, fine across the transition.
 _g_grid = vcat(collect(4.0:-0.25:3.75), collect(3.5:-0.05:2.6),collect(2.5:-0.25:0.5))
                             
@@ -316,3 +401,7 @@ plot_pepskit_energy(output_file; save_path=joinpath(@__DIR__, "results", "figure
 fig = plot_corr_PEPSKit(output_file;
                         save_path=joinpath(@__DIR__, "results", "figures", "pepskit_correlation_length_smooth.pdf"))
 display(fig)
+=#
+if abspath(PROGRAM_FILE) == abspath(@__FILE__)
+    run_mpskit_scan(; row=3, D=32, g_values=0.0:0.25:5.0)
+end

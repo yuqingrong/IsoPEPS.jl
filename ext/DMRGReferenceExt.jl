@@ -49,27 +49,27 @@ H = -J Σ_{⟨i,j⟩_2D} Z_i Z_j - g Σ_i X_i
 """
 function IsoPEPS.build_2d_tfim_hamiltonian(Lx::Int, Ly::Int, J::Float64, g::Float64)
     N = Lx * Ly
-    sites = siteinds("S=1", N)
+    sites = siteinds("Qubit", N)
 
     coord_to_site = IsoPEPS.column_major_2d_to_1d(Lx, Ly)
 
     os = OpSum()
 
-    # Transverse field term: -g Σ_i X_i (all sites)
+    # Transverse field term: -g Σ_i σx_i (all sites)
     for j in 1:Ly
         for i in 1:Lx
             site = coord_to_site[(i, j)]
-            os += -g, "Sx", site
+            os += -g, "X", site
         end
     end
 
-    # Ising coupling: -J Σ_{⟨i,j⟩} Z_i Z_j
+    # Ising coupling: -J Σ_{⟨i,j⟩} σz_i σz_j
     # Horizontal bonds (open in x)
     for j in 1:Ly
         for i in 1:(Lx-1)
             site1 = coord_to_site[(i, j)]
             site2 = coord_to_site[(i+1, j)]
-            os += -J, "Sz", site1, "Sz", site2
+            os += -J, "Z", site1, "Z", site2
         end
     end
 
@@ -79,7 +79,7 @@ function IsoPEPS.build_2d_tfim_hamiltonian(Lx::Int, Ly::Int, J::Float64, g::Floa
         for i in 1:Lx
             site1 = coord_to_site[(i, j)]
             site2 = coord_to_site[(i, j_next)]
-            os += -J, "Sz", site1, "Sz", site2
+            os += -J, "Z", site1, "Z", site2
         end
     end
 

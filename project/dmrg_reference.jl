@@ -615,7 +615,7 @@ function plot_M2_vs_J2(json_file::String; Lx1::Int=100, Lx2::Int=200,
     return fig
 end
 
-
+#=
 conv = check_bulk_convergence(
       Ly=3,
       Lx_values=[100, 150, 180, 200,250,300,350,400,450,500,550,600,650,700,750,800,850,900,950,1000,1500,2000,2500,3000,3500,4000],
@@ -635,15 +635,15 @@ scan_results = run_dmrg_bulk_scan(
     scan_param=:J2, scan_values=0.0:0.1:1.0,
     J1=1.0
 )
-
+=#
 # TFIM
 run_dmrg_bulk_scan(
     model="tfim",
-    Ly=3, Lx1=1000, Lx2=1500, D=2,
-    scan_param=:g, scan_values=0.0:0.5:4.0,
+    Ly=3, Lx1=1000, Lx2=1200, D=16,
+    scan_param=:g, scan_values=0.0:1.0:4.0,
     J=1.0
 )
-
+#=
 output_file = "dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json"
 plot_M2_vs_J2(output_file; Lx1=100, Lx2=200)
 
@@ -683,4 +683,4 @@ fig, SD = plot_dmrg_dimer_structure_factor(result;
 nq=50,              # resolution in BZ
 bulk_cols=20,       # use middle 20 columns to avoid edges
 save_path="project/results/figures/dimer_SF_heatmap.pdf"
-)
+)=#
