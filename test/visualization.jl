@@ -1,6 +1,6 @@
 using Test
 using IsoPEPS
-using CairoMakie: Figure, Legend, Theme, to_color, with_theme
+using CairoMakie: Axis, Figure, Legend, Theme, to_color, with_theme
 
 function write_test_tfim_circuit(path; g=2.0, row=3, p=3, nqubits=3, energy=0.0)
     params = zeros(gate_parameter_count(p, nqubits))
@@ -275,10 +275,11 @@ end
     @test fig_xz isa Figure
 end
 
-@testset "plot_M2_comparison legend stays inside blank region" begin
+@testset "plot_M2_comparison sampling-only phase ranges and q markers" begin
     data_dir = mktempdir()
     exact_file = joinpath(data_dir, "M2_exact.json")
     sampling_file = joinpath(data_dir, "M2_sampling.json")
+    dmrg_file = joinpath(data_dir, "M2_dmrg.json")
     save_results(exact_file;
         J2_values=[0.1, 0.5, 0.8],
         M2_neel=[0.20, 0.10, 0.04],
@@ -287,27 +288,48 @@ end
         J2_values=[0.1, 0.5, 0.8],
         M2_neel=[0.19, 0.09, 0.03],
         M2_stripe_0pi=[0.02, 0.07, 0.17])
+    save_results(dmrg_file;
+        scan_values=[0.1, 0.5, 0.8],
+        M2_neel_Lx2=[0.21, 0.11, 0.05],
+        M2_0pi_Lx2=[0.025, 0.075, 0.18])
 
-    fig = plot_M2_comparison(exact_file=exact_file, sampling_file=sampling_file)
+    fig = plot_M2_comparison(exact_file=exact_file, sampling_file=sampling_file,
+                             dmrg_file=dmrg_file)
     @test fig isa Figure
-    legend = fig.content[2]
+    axes = filter(content -> content isa Axis, fig.content)
+    @test length(axes) == 2
+    phase_ax = axes[1]
+    ax = axes[2]
+    legend = only(filter(content -> content isa Legend, fig.content))
     @test legend isa Legend
     gc = legend.layoutobservables.gridcontent[]
-    @test gc.span.rows == 1:1
+    @test gc.span.rows == 2:2
     @test gc.span.cols == 1:1
     @test legend.tellwidth[] == false
     @test legend.tellheight[] == false
-    @test legend.nbanks[] == 1
+    @test legend.nbanks[] == 2
     @test legend.halign[] == :left
-    @test legend.valign[] == 0.88
+    @test legend.valign[] == :bottom
     @test legend.margin[] == (1, 1, 1, 1)
     g = legend.entrygroups[][1]
-    @test [e.label[] for e in g[2]] == ["M²(π,π) TN", "M²(π,π) Samp.", "M²(0,π) TN", "M²(0,π) Samp."]
+    @test [e.label[] for e in g[2]] == [
+        "M²(π,π) Samp.", "M²(0,π) Samp.",
+    ]
     annotations = IsoPEPS.m2_phase_annotations(0.24)
     @test [a.label for a in annotations] == ["Neel order", "VBS", "Stripe order"]
-    @test [(a.x, a.y) for a in annotations] == [(0.20, 0.05), (0.57, 0.05), (0.80, 0.05)]
-    ax = fig.content[1]
-    texts = filter(ax.scene.plots) do plot
+    @test [a.range for a in annotations] == [(0.0, 0.4), (0.4, 0.6), (0.6, 1.0)]
+    @test [(a.x, a.y) for a in annotations] == [(0.20, 0.72), (0.50, 0.72), (0.80, 0.72)]
+    data_ranges = IsoPEPS._m2_phase_ranges_from_values(
+        [0.0, 0.5, 0.6, 1.0],
+        [1.0, 0.2, 0.1, 0.1],
+        [0.1, 0.1, 0.2, 1.0])
+    @test data_ranges !== nothing
+    @test data_ranges[1][2] ≈ 0.46875
+    @test data_ranges[2][1] ≈ 0.46875
+    @test data_ranges[2][2] ≈ 0.625
+    @test data_ranges[3][1] ≈ 0.625
+    @test data_ranges[3][2] ≈ 1.0
+    texts = filter(phase_ax.scene.plots) do plot
         hasproperty(plot, :text) && first(plot.text[]) in ["Neel order", "VBS", "Stripe order"]
     end
     @test length(texts) == 3
@@ -315,6 +337,12 @@ end
     @test all(text_plot.color[] == to_color(:firebrick) for text_plot in texts)
     @test all(text_plot.strokecolor[] == to_color(:firebrick) for text_plot in texts)
     @test all(text_plot.strokewidth[] == 0 for text_plot in texts)
+    styled_series = filter(ax.scene.plots) do plot
+        hasproperty(plot, :marker) && hasproperty(plot, :markersize)
+    end
+    @test length(styled_series) == 2
+    @test any(plot -> plot.marker[] == :circle, styled_series)
+    @test any(plot -> plot.marker[] == :diamond, styled_series)
 end
 
 @testset "plot_variance_vs_samples" begin
