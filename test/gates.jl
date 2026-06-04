@@ -40,6 +40,36 @@ end
     @test gate_parameter_count(2, 5) == ppq * 5 * 2
     @test gate_parameter_count(2, 5; active_nqubits=3) == ppq * 5 * 2
 
+    # Explicit single-column structures preserve the legacy share_params modes.
+    row = 5; p = 2; nqubits = 3
+    chunk = ppq * nqubits * p
+    @test gate_parameter_count(p, nqubits; row=row, structure=:aaa) == chunk
+    @test gate_parameter_count(p, nqubits; row=row, structure=:abb) == 2chunk
+    @test gate_parameter_count(p, nqubits; row=row, structure=:abc) == row * chunk
+    @test gate_parameter_count(p, nqubits; row=row, share_params=true) ==
+          gate_parameter_count(p, nqubits; row=row, structure=:aaa)
+    @test gate_parameter_count(p, nqubits; row=row, share_params=false) ==
+          gate_parameter_count(p, nqubits; row=row, structure=:abc)
+
+    params_aaa = rand(chunk) .* 2π
+    gates_aaa = build_unitary_gate(params_aaa, p, row, nqubits; structure=:aaa)
+    gates_aaa_legacy = build_unitary_gate(params_aaa, p, row, nqubits; share_params=true)
+    @test gates_aaa == gates_aaa_legacy
+    @test all(gates_aaa[i] == gates_aaa[1] for i in 2:row)
+
+    params_abc = rand(row * chunk) .* 2π
+    gates_abc = build_unitary_gate(params_abc, p, row, nqubits; structure=:abc)
+    gates_abc_legacy = build_unitary_gate(params_abc, p, row, nqubits; share_params=false)
+    @test gates_abc == gates_abc_legacy
+    @test all(gates_abc[i] != gates_abc[1] for i in 2:row)
+
+    params_abb = rand(2chunk) .* 2π
+    gates_abb = build_unitary_gate(params_abb, p, row, nqubits; structure=:abb)
+    @test gates_abb[1] != gates_abb[2]
+    @test all(gates_abb[i] == gates_abb[2] for i in 3:row)
+    @test gate_parameter_count(p, nqubits; row=1, structure=:abb) == chunk
+    @test_throws AssertionError build_unitary_gate(params_aaa, p, row, nqubits; structure=:abb)
+
     # max_stride kwarg: stride=1 restricts entangling structure
     Random.seed!(42)
     nqubits = 4; p = 2; row = 2
@@ -222,6 +252,20 @@ end
         params_from4 = rand(4 * chunk_from)
         params_to4   = embed_params(params_from4, p, nfrom, nto; unit_cell=:two_by_two)
         @test length(params_to4) == gate_parameter_count(p, nto; unit_cell=:two_by_two)
+
+        # A-B-B single-column structure preserves both A and B chunks.
+        params_from_abb = rand(2 * chunk_from)
+        params_to_abb = embed_params(params_from_abb, p, nfrom, nto;
+                                     unit_cell=:single, row=3, structure=:abb)
+        @test length(params_to_abb) == gate_parameter_count(p, nto; row=3, structure=:abb)
+        chunk_to = ppq * nto * p
+        for c in 0:1, r in 1:p, (i, target_i) in enumerate(mapped_qubits)
+            old_idx = c * chunk_from + ppq * nfrom * (r-1) + ppq*(i-1) + 1
+            new_idx = c * chunk_to + ppq * nto * (r-1) + ppq*(target_i-1) + 1
+            for k in 0:ppq-1
+                @test params_from_abb[old_idx+k] == params_to_abb[new_idx+k]
+            end
+        end
 
         # nqubits_to > nqubits_from required
         @test_throws ErrorException embed_params(params_from, p, nfrom, nfrom)

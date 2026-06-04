@@ -323,11 +323,13 @@ This keeps the historical parameter-vector test helper available.
 function compute_exact_energy(params::AbstractVector, g::Real, J::Real,
                               p::Int, row::Int, nqubits::Int;
                               share_params::Bool=true,
+                              structure::Union{Symbol,String,Nothing}=nothing,
                               max_stride::Int=nqubits-1,
                               active_nqubits::Int=nqubits,
                               optimizer=GreedyMethod())
     gates = build_unitary_gate(params, p, row, nqubits;
                                share_params=share_params,
+                               structure=structure,
                                max_stride=max_stride,
                                active_nqubits=active_nqubits)
     _, gap, _ = compute_transfer_spectrum(gates, row, nqubits)

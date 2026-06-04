@@ -116,9 +116,23 @@ function _embedded_circuit_columns(p::Int, nqubits::Int, total_qubits::Int,
     return columns
 end
 
-function _unit_cell_label_and_offset(unit_cell::Symbol, cycle::Int, row_index::Int, chunk::Int)
+function _row_gate_label(row_index::Int)
+    return row_index <= 26 ? string(Char(Int('A') + row_index - 1)) : "U$row_index"
+end
+
+function _unit_cell_label_and_offset(unit_cell::Symbol, cycle::Int, row_index::Int, chunk::Int;
+                                     share_params::Bool=true,
+                                     structure::Union{Symbol,String,Nothing}=nothing)
     if unit_cell === :single
-        return "U$row_index", 0
+        gate_structure = _normalize_gate_structure(structure, share_params)
+        if gate_structure === :aaa
+            return "A", 0
+        elseif gate_structure === :abb
+            row_index == 1 && return "A", 0
+            return "B", chunk
+        elseif gate_structure === :abc
+            return _row_gate_label(row_index), chunk * (row_index - 1)
+        end
     elseif unit_cell === :two_by_two
         if isodd(cycle)
             isodd(row_index) && return "A", 0
@@ -228,6 +242,8 @@ left side of the diagram.
 function plot_channel_circuit(row::Int, p::Int, nqubits::Int;
                               cycles::Int=1,
                               unit_cell::Symbol=:single,
+                              share_params::Bool=true,
+                              structure::Union{Symbol,String,Nothing}=nothing,
                               expanded::Bool=true,
                               max_stride::Int=nqubits-1,
                               active_nqubits::Int=nqubits,
@@ -251,7 +267,9 @@ function plot_channel_circuit(row::Int, p::Int, nqubits::Int;
     for cycle in 1:cycles
         push!(cycle_starts, length(columns) + 1)
         for j in 1:row
-            gate_label, param_offset = _unit_cell_label_and_offset(unit_cell, cycle, j, chunk)
+            gate_label, param_offset = _unit_cell_label_and_offset(unit_cell, cycle, j, chunk;
+                                                                   share_params=share_params,
+                                                                   structure=structure)
             if expanded
                 embedded = _embedded_circuit_columns(p, nqubits, total_qubits, qpositions[j];
                                                      max_stride=max_stride,
@@ -355,4 +373,3 @@ function plot_channel_circuit(row::Int, p::Int, nqubits::Int;
     end
     return fig
 end
-

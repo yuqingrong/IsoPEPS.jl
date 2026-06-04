@@ -412,17 +412,28 @@ end
     @test legend.halign[] == :left
     @test legend.valign[] == :bottom
     @test legend.margin[] == (1, 1, 1, 1)
+    phase_texts = [only(plot.text[]) for plot in phase_ax.scene.plots if hasproperty(plot, :text)]
+    @test "0.46" in phase_texts
+    @test "0.53" in phase_texts
     g = legend.entrygroups[][1]
     @test [e.label[] for e in g[2]] == [
-        "M²(π,π) Samp.", "M²(0,π) Samp.",
+        "M²(π,π)", "M²(0,π)",
     ]
     @test count(plot -> plot isa Errorbars, ax.scene.plots) == 2
+    line_series = filter(plot -> hasproperty(plot, :linestyle) && hasproperty(plot, :marker),
+                         ax.scene.plots)
+    @test all(plot -> plot.linestyle[] == :solid, line_series)
     styled_series = filter(ax.scene.plots) do plot
         hasproperty(plot, :marker) && hasproperty(plot, :markersize)
     end
     @test any(plot -> plot.marker[] == :circle, styled_series)
     @test any(plot -> plot.marker[] == :diamond, styled_series)
     @test !any(plot -> plot.marker[] == :xcross, styled_series)
+
+    no_errorbar_fig = plot_M2_comparison(sampling_file=sampling_file;
+                                         show_errorbars=false)
+    no_errorbar_axes = filter(content -> content isa Axis, no_errorbar_fig.content)
+    @test count(plot -> plot isa Errorbars, no_errorbar_axes[2].scene.plots) == 0
 
     se_fig = plot_M2_comparison(exact_file=exact_file, sampling_file=sampling_file,
                                 dmrg_file=dmrg_file;

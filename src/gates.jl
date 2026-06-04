@@ -69,23 +69,81 @@ end
 
 """
     gate_parameter_count(p, nqubits; unit_cell=:single, row=1, share_params=true,
-                         max_stride=nqubits-1, active_nqubits=nqubits)
+                         structure=nothing, max_stride=nqubits-1,
+                         active_nqubits=nqubits)
 
 Return the number of variational parameters required by the gate builders.
 """
 function gate_parameter_count(p::Int, nqubits::Int; unit_cell::Symbol=:single,
                               row::Int=1, share_params::Bool=true,
+                              structure::Union{Symbol,String,Nothing}=nothing,
                               max_stride::Int=nqubits-1,
                               active_nqubits::Int=nqubits)
     chunk = _gate_param_count(p, nqubits;
                               max_stride=max_stride,
                               active_nqubits=active_nqubits)
     if unit_cell === :single
-        return share_params ? chunk : row * chunk
+        gate_structure = _normalize_gate_structure(structure, share_params)
+        return _single_unit_cell_chunk_count(row, gate_structure) * chunk
     elseif unit_cell === :two_by_two
         return 4 * chunk
     else
         throw(ArgumentError("unit_cell must be :single or :two_by_two"))
+    end
+end
+
+function _normalize_gate_structure(structure::Union{Symbol,String,Nothing},
+                                   share_params::Bool=true)
+    if structure === nothing
+        return share_params ? :aaa : :abc
+    end
+
+    key = lowercase(String(structure))
+    key = replace(key, "-" => "", "_" => "")
+    if key == "aaa"
+        return :aaa
+    elseif key == "abb"
+        return :abb
+    elseif key == "abc"
+        return :abc
+    end
+    throw(ArgumentError("structure must be :aaa, :abb, or :abc"))
+end
+
+function _single_unit_cell_chunk_count(row::Int, structure::Symbol)
+    row >= 1 || throw(ArgumentError("row must be at least 1"))
+    if structure === :aaa
+        return 1
+    elseif structure === :abb
+        return row == 1 ? 1 : 2
+    elseif structure === :abc
+        return row
+    end
+    throw(ArgumentError("structure must be :aaa, :abb, or :abc"))
+end
+
+function _single_unit_cell_chunk_index(row_index::Int, structure::Symbol)
+    if structure === :aaa
+        return 1
+    elseif structure === :abb
+        return row_index == 1 ? 1 : 2
+    elseif structure === :abc
+        return row_index
+    end
+    throw(ArgumentError("structure must be :aaa, :abb, or :abc"))
+end
+
+function _single_unit_cell_chunks_from_params(params_len::Int, chunk::Int,
+                                              structure::Symbol,
+                                              row::Union{Int,Nothing})
+    if row !== nothing
+        return _single_unit_cell_chunk_count(row, structure)
+    elseif structure === :aaa
+        return 1
+    else
+        params_len % chunk == 0 ||
+            throw(ArgumentError("parameter length $params_len is not a multiple of gate chunk size $chunk"))
+        return params_len ÷ chunk
     end
 end
 
@@ -237,7 +295,8 @@ function circuit_quantikz(p::Int, nqubits::Int; max_stride::Int=nqubits-1,
 end
 
 """
-    build_unitary_gate(params, p, row, nqubits; share_params=true, active_nqubits=nqubits)
+    build_unitary_gate(params, p, row, nqubits; share_params=true,
+                       structure=nothing, active_nqubits=nqubits)
 
 Build parameterized unitary gates for the PEPS structure using an improved ansatz
 with full SU(2) single-qubit rotations and brick-wall CNOT entangling layers.
@@ -247,7 +306,9 @@ with full SU(2) single-qubit rotations and brick-wall CNOT entangling layers.
 - `p`: Number of layers per gate
 - `row`: Number of gates to generate
 - `nqubits`: Number of qubits per gate
-- `share_params`: If true, all gates share parameters (A-A-A); if false, independent (A-B-C)
+- `share_params`: Legacy input. If `structure` is omitted, `true` means A-A-A
+  and `false` means A-B-C.
+- `structure`: Single-column row structure: `:aaa`, `:abb`, or `:abc`.
 - `active_nqubits`: Number of leading qubits that receive rotations and CNOTs.
   Use `active_nqubits < nqubits` to restrict a circuit to a leading-qubit subspace.
 
@@ -255,10 +316,12 @@ with full SU(2) single-qubit rotations and brick-wall CNOT entangling layers.
 - Vector of unitary gate matrices
 
 # Notes
-- Use `gate_parameter_count(p, nqubits; share_params, row, max_stride, active_nqubits)`
+- Use `gate_parameter_count(p, nqubits; structure, share_params, row, max_stride, active_nqubits)`
   to compute the required number of parameters.
 """
-function build_unitary_gate(params, p, row, nqubits; share_params=true, max_stride::Int=nqubits-1,
+function build_unitary_gate(params, p, row, nqubits; share_params::Bool=true,
+                            structure::Union{Symbol,String,Nothing}=nothing,
+                            max_stride::Int=nqubits-1,
                             active_nqubits::Int=nqubits)
     1 <= active_nqubits <= nqubits || throw(ArgumentError("active_nqubits must be between 1 and nqubits"))
     A_matrix = Vector{Matrix{ComplexF64}}(undef, row)
@@ -271,23 +334,16 @@ function build_unitary_gate(params, p, row, nqubits; share_params=true, max_stri
     chunk = _gate_param_count(p, nqubits;
                               max_stride=max_stride,
                               active_nqubits=active_nqubits)
-    if share_params
-        @assert length(params) >= chunk "Need at least $chunk parameters for shared parameters mode"
-        shared_params = params[1:chunk]
-        for i in 1:row
-            for r in 1:p
-                A_matrix[i] *= _build_layer(shared_params, r, nqubits;
-                                            max_stride=max_stride, active_nqubits=active_nqubits)
-            end
-        end
-    else
-        @assert length(params) >= chunk*row "Need at least $(chunk*row) parameters for independent parameters mode"
-        for i in 1:row
-            params_i = params[chunk*(i-1)+1:chunk*i]
-            for r in 1:p
-                A_matrix[i] *= _build_layer(params_i, r, nqubits;
-                                            max_stride=max_stride, active_nqubits=active_nqubits)
-            end
+    gate_structure = _normalize_gate_structure(structure, share_params)
+    n_chunks = _single_unit_cell_chunk_count(row, gate_structure)
+    @assert length(params) >= chunk * n_chunks "Need at least $(chunk*n_chunks) parameters for $(uppercase(String(gate_structure))) structure"
+
+    for i in 1:row
+        chunk_index = _single_unit_cell_chunk_index(i, gate_structure)
+        params_i = params[chunk*(chunk_index-1)+1:chunk*chunk_index]
+        for r in 1:p
+            A_matrix[i] *= _build_layer(params_i, r, nqubits;
+                                        max_stride=max_stride, active_nqubits=active_nqubits)
         end
     end
     
@@ -398,6 +454,7 @@ end
 
 """
     embed_params(params, p, nqubits_from, nqubits_to; unit_cell=:single,
+                 row=nothing, structure=nothing,
                  active_nqubits_from=nqubits_from, active_nqubits_to=nqubits_to)
 
 Embed parameters from a smaller nqubits into a larger nqubits parameter space.
@@ -405,7 +462,7 @@ Copies existing qubit rotations and sets new qubits to identity (θ=0). The
 mapping preserves the PEPS local-leg layout: physical, one virtual leg, then
 the other virtual leg.
 
-Works for both `:single` (shared params) and `:two_by_two` (4 gate chunks) unit cells.
+Works for `:single` (`:aaa`, `:abb`, or `:abc`) and `:two_by_two` unit cells.
 
 # Example
 ```julia
@@ -416,6 +473,9 @@ params_5 = embed_params(params_3, p, 3, 5; unit_cell=:two_by_two)
 """
 function embed_params(params::Vector{Float64}, p::Int, nqubits_from::Int, nqubits_to::Int;
                       unit_cell::Symbol=:single,
+                      row::Union{Int,Nothing}=nothing,
+                      share_params::Bool=true,
+                      structure::Union{Symbol,String,Nothing}=nothing,
                       max_stride_from::Int=nqubits_from-1,
                       max_stride_to::Int=nqubits_to-1,
                       active_nqubits_from::Int=nqubits_from,
@@ -443,7 +503,15 @@ function embed_params(params::Vector{Float64}, p::Int, nqubits_from::Int, nqubit
                                            max_stride=max_stride_to,
                                            active_nqubits=active_nqubits_to)
 
-    n_chunks = unit_cell == :two_by_two ? 4 : 1
+    n_chunks = if unit_cell == :two_by_two
+        4
+    elseif unit_cell == :single
+        gate_structure = _normalize_gate_structure(structure, share_params)
+        _single_unit_cell_chunks_from_params(length(params), chunk_from,
+                                             gate_structure, row)
+    else
+        throw(ArgumentError("unit_cell must be :single or :two_by_two"))
+    end
     @assert length(params) >= n_chunks * chunk_from "Expected $(n_chunks * chunk_from) params, got $(length(params))"
 
     new_params = zeros(Float64, n_chunks * chunk_to)

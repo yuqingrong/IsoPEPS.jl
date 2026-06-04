@@ -154,6 +154,7 @@ function plot_correlation_function(filename::String;
     g = get(input_args, :g, NaN)
     virtual_qubits = (nqubits - 1) ÷ 2
     share_params = get(input_args, :share_params, true)
+    structure = get(input_args, :structure, nothing)
     model_str = get(input_args, :model, "tfim")
     is_heisenberg = model_str == "heisenberg_j1j2"
 
@@ -167,7 +168,9 @@ function plot_correlation_function(filename::String;
         gates_odd, gates_even = build_unitary_gate_2x2(params, p, row, nqubits)
         op = TransferOperator(gates_odd, gates_even, row, nqubits)
     else
-        gates = build_unitary_gate(params, p, row, nqubits; share_params=share_params)
+        gates = build_unitary_gate(params, p, row, nqubits;
+                                   share_params=share_params,
+                                   structure=structure)
         op = TransferOperator(gates, row, nqubits)
     end
     N_cols = length(op.columns)

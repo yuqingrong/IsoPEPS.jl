@@ -33,6 +33,7 @@ function plot_dimer_structure_factor(filename::String;
     _row = input_args[:row]
     _nqubits = input_args[:nqubits]
     share_params = get(input_args, :share_params, true)
+    structure = get(input_args, :structure, nothing)
     is_2x2 = endswith(filename, "_2x2.json")
 
     qvals = range(0.0, 2Float64(π), length=nq)
@@ -47,7 +48,9 @@ function plot_dimer_structure_factor(filename::String;
             gates_odd, gates_even = build_unitary_gate_2x2(params, _p, _row, _nqubits)
             op = TransferOperator(gates_odd, gates_even, _row, _nqubits)
         else
-            gates = build_unitary_gate(params, _p, _row, _nqubits; share_params=share_params)
+            gates = build_unitary_gate(params, _p, _row, _nqubits;
+                                       share_params=share_params,
+                                       structure=structure)
             op = TransferOperator(gates, _row, _nqubits)
         end
 
@@ -334,6 +337,7 @@ function plot_spin_structure_factor(filename::String;
     _row = input_args[:row]
     _nqubits = input_args[:nqubits]
     share_params = get(input_args, :share_params, true)
+    structure = get(input_args, :structure, nothing)
     is_2x2 = endswith(filename, "_2x2.json")
 
     qvals = range(0.0, 2Float64(π), length=nq)
@@ -348,7 +352,9 @@ function plot_spin_structure_factor(filename::String;
             gates_odd, gates_even = build_unitary_gate_2x2(params, _p, _row, _nqubits)
             op = TransferOperator(gates_odd, gates_even, _row, _nqubits)
         else
-            gates = build_unitary_gate(params, _p, _row, _nqubits; share_params=share_params)
+            gates = build_unitary_gate(params, _p, _row, _nqubits;
+                                       share_params=share_params,
+                                       structure=structure)
             op = TransferOperator(gates, _row, _nqubits)
         end
 
@@ -688,6 +694,7 @@ function plot_bond_energy_pattern(filename::String;
     _row = input_args[:row]
     _nqubits = input_args[:nqubits]
     share_params = get(input_args, :share_params, true)
+    structure = get(input_args, :structure, nothing)
     is_2x2 = endswith(filename, "_2x2.json")
 
     method_str = use_exact ? "exact" : "sampling"
@@ -700,7 +707,9 @@ function plot_bond_energy_pattern(filename::String;
             gates_odd, gates_even = build_unitary_gate_2x2(params, _p, _row, _nqubits)
             op = TransferOperator(gates_odd, gates_even, _row, _nqubits)
         else
-            gates = build_unitary_gate(params, _p, _row, _nqubits; share_params=share_params)
+            gates = build_unitary_gate(params, _p, _row, _nqubits;
+                                       share_params=share_params,
+                                       structure=structure)
             op = TransferOperator(gates, _row, _nqubits)
         end
         vert_uc, horiz_uc = all_bond_expectations(op)

@@ -13,6 +13,8 @@ using Random
         @test length(params) == gate_parameter_count(p, nqubits)
     end
     @test length(initialize_tfim_params(p, 5, g; mode=:meanfield)) == gate_parameter_count(p, 5)
+    @test length(initialize_tfim_params(p, nqubits, g; mode=:meanfield, row=3, structure=:abb)) ==
+          gate_parameter_count(p, nqubits; row=3, structure=:abb)
     
     # Test entangled mode creates GHZ/Bell state
     # Only layer 1, last qubit has Rx(π/2); all others are identity
@@ -47,17 +49,21 @@ end
 @testset "optimize_circuit" begin
     # Small test: 2 iterations only
     g, J = 2.0, 1.0
-    p, row, nqubits = 1, 2, 3
-    params = rand(gate_parameter_count(p, nqubits))
+    p, row, nqubits = 1, 3, 3
+    params = rand(gate_parameter_count(p, nqubits; row=row, structure=:abb))
     
     result = optimize_circuit(params, p, row, nqubits;
                               model=TFIM(J=J, g=g),
-                              maxiter=2, conv_step=10, samples=50)
+                              structure=:abb,
+                              maxiter=2, conv_step=10, samples=50,
+                              n_runs=1, parallel_sampling=false)
     
     @test result isa CircuitOptimizationResult
     @test result.final_cost isa Float64
     @test length(result.energy_history) > 0
     @test length(result.final_gates) == row
+    @test result.final_gates[2] == result.final_gates[3]
+    @test length(result.final_params) == gate_parameter_count(p, nqubits; row=row, structure=:abb)
     @test result.final_params isa Vector{Float64}
     @test result.final_Z_samples isa Vector{Float64}
     @test result.final_X_samples isa Vector{Float64}
@@ -67,15 +73,17 @@ end
 @testset "optimize_exact" begin
     # Small test: 2 iterations only
     g, J = 2.0, 1.0
-    p, row, nqubits = 1, 2, 3
-    params = rand(gate_parameter_count(p, nqubits))
+    p, row, nqubits = 1, 3, 3
+    params = rand(gate_parameter_count(p, nqubits; row=row, structure=:abb))
     
-    result = optimize_exact(params, J, g, p, row, nqubits; maxiter=2)
+    result = optimize_exact(params, J, g, p, row, nqubits; maxiter=2, structure=:abb)
     
     @test result isa ExactOptimizationResult
     @test result.energy isa Float64
     @test length(result.energy_history) > 0
     @test length(result.gates) == row
+    @test result.gates[2] == result.gates[3]
+    @test length(result.params) == gate_parameter_count(p, nqubits; row=row, structure=:abb)
     @test result.gap > 0
     @test result.eigenvalues isa Vector{Float64}
     @test result.X_expectation isa Float64
@@ -85,23 +93,27 @@ end
 end
 
 @testset "optimize_manifold" begin
-    using Manifolds
-    using Manopt
-    
-    g, J = 2.0, 1.0
-    row, nqubits = 1, 3
-    dim = 2^nqubits
-    
-    # Create unitary manifold
-    M = Stiefel(dim, dim, Manifolds.ℂ)
-    gate = rand(M)
-    
-    result = optimize_manifold(gate, row, nqubits, M, J, g; maxiter=1, swarm_size=2)
-    
-    @test result isa ManifoldOptimizationResult
-    @test result.energy isa Float64
-    @test length(result.energy_history) > 0
-    @test size(result.gate) == (dim, dim)
-    @test result.gap_history isa Vector{Float64}
-    @test result.converged isa Bool
+    if Base.find_package("Manifolds") === nothing || Base.find_package("Manopt") === nothing
+        @test_skip false
+    else
+        using Manifolds
+        using Manopt
+
+        g, J = 2.0, 1.0
+        row, nqubits = 1, 3
+        dim = 2^nqubits
+
+        # Create unitary manifold
+        M = Stiefel(dim, dim, Manifolds.ℂ)
+        gate = rand(M)
+
+        result = optimize_manifold(gate, row, nqubits, M, J, g; maxiter=1, swarm_size=2)
+
+        @test result isa ManifoldOptimizationResult
+        @test result.energy isa Float64
+        @test length(result.energy_history) > 0
+        @test size(result.gate) == (dim, dim)
+        @test result.gap_history isa Vector{Float64}
+        @test result.converged isa Bool
+    end
 end

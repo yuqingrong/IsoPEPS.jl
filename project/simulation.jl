@@ -10,8 +10,12 @@ using JSON3
 
 const PARAMS_PER_QUBIT_PER_LAYER = IsoPEPS.PARAMS_PER_QUBIT_PER_LAYER
 
-function _unit_cell_suffix(unit_cell::Symbol)
-    unit_cell === :single && return "_1x1.json"
+function _unit_cell_suffix(unit_cell::Symbol; share_params::Bool=true,
+                           structure::Union{Symbol,String,Nothing}=nothing)
+    if unit_cell === :single
+        gate_structure = IsoPEPS._normalize_gate_structure(structure, share_params)
+        return gate_structure === :aaa ? "_1x1.json" : "_1x1_$(gate_structure).json"
+    end
     unit_cell === :two_by_two && return "_2x2.json"
     throw(ArgumentError("unit_cell must be :single or :two_by_two"))
 end
@@ -27,14 +31,17 @@ and load its parameters.
 Returns `(params, source_value)` or `(nothing, nothing)` if no file is found.
 """
 function _find_warm_start_params(output_dir, model, scan_param, scan_value, row, p, nqubits;
-                                 unit_cell::Symbol=:single, fixed_params...)
+                                 unit_cell::Symbol=:single,
+                                 share_params::Bool=true,
+                                 structure::Union{Symbol,String,Nothing}=nothing,
+                                 fixed_params...)
     !isdir(output_dir) && return nothing, nothing
 
     # Build prefix and suffix for filename matching
     # Filename format: circuit_{model}_{fixed_params}_{scan_param}={value}_row={row}_p={p}_nqubits={nqubits}.json
     fixed_str = join(["$(k)=$(v)" for (k, v) in sort(collect(fixed_params), by=first)], "_")
     prefix = isempty(fixed_str) ? "circuit_$(model)_$(scan_param)=" : "circuit_$(model)_$(fixed_str)_$(scan_param)="
-    suffix = "_row=$(row)_p=$(p)_nqubits=$(nqubits)$(_unit_cell_suffix(unit_cell))"
+    suffix = "_row=$(row)_p=$(p)_nqubits=$(nqubits)$(_unit_cell_suffix(unit_cell; share_params=share_params, structure=structure))"
 
     best_params = nothing
     best_val = nothing
@@ -88,7 +95,9 @@ Run circuit optimization for multiple parameter values and save results to JSON 
 - `seed`: Random seed for reproducibility
 - `verbose`: Print progress information
 - `output_dir`: Directory to save results (default: "data")
-- `share_params`: Share parameters across circuit layers
+- `share_params`: Legacy selector for A-A-A (`true`) or A-B-C (`false`)
+- `structure`: Single-column structure (`:aaa`, `:abb`, or `:abc`). When set,
+  this overrides `share_params`.
 - `parallel_sampling`: Run independent sampling chains with `Threads.@threads`
 - `resume_checkpoint`: Restart from compatible checkpoint parameters when available
 - `model_params...`: Fixed model parameters (e.g., `J=1.0` for TFIM, `J1=1.0` for Heisenberg)
@@ -112,6 +121,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
                     parallel_sampling::Bool=false,
                     active_nqubits::Int=nqubits,
                     unit_cell::Symbol=:single,
+                    structure::Union{Symbol,String,Nothing}=nothing,
                     resume_checkpoint::Bool=true,
                     model_params...)
 
@@ -123,8 +133,10 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
 
     n = length(scan_values)
     results = Vector{CircuitOptimizationResult}(undef, n)
+    gate_structure = unit_cell === :single ? IsoPEPS._normalize_gate_structure(structure, share_params) : nothing
 
     verbose && println("Running $(n) simulations for model=$(model), scanning $(scan_param)...")
+    verbose && unit_cell === :single && println("Gate structure: $gate_structure")
     verbose && println("Results will be saved to: $output_dir/")
 
     for i in 1:n
@@ -133,7 +145,10 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
         # Try to warm-start from the closest existing result file in output_dir
         # 1. First try same nqubits
         warm_params, warm_val = _find_warm_start_params(output_dir, model, scan_param, val, row, p, nqubits;
-                                                         unit_cell=unit_cell, fixed_params...)
+                                                         unit_cell=unit_cell,
+                                                         share_params=share_params,
+                                                         structure=structure,
+                                                         fixed_params...)
         warm_from_nqubits = nothing
         if nqubits > 3
             # For enlarged-D scans, start from an embedded lower-D state rather
@@ -148,9 +163,16 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
                 found = false
                 for try_row in (row, row+2)
                     warm_params, warm_val = _find_warm_start_params(output_dir, model, scan_param, val, try_row, p, nq;
-                                                                     unit_cell=unit_cell, fixed_params...)
+                                                                     unit_cell=unit_cell,
+                                                                     share_params=share_params,
+                                                                     structure=structure,
+                                                                     fixed_params...)
                     if warm_params !== nothing
-                        warm_params = embed_params(warm_params, p, nq, nqubits; unit_cell=unit_cell)
+                        warm_params = embed_params(warm_params, p, nq, nqubits;
+                                                   unit_cell=unit_cell,
+                                                   row=try_row,
+                                                   share_params=share_params,
+                                                   structure=structure)
                         warm_from_nqubits = nq
                         found = true
                         break
@@ -174,6 +196,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
                                             unit_cell=unit_cell,
                                             row=row,
                                             share_params=share_params,
+                                            structure=structure,
                                             active_nqubits=active_nqubits)
             params = rand(n_params)
             verbose && println("Starting $(scan_param) = $(val), random initialization (seed=$seed)")
@@ -183,7 +206,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
         model_kw = merge(fixed_params, Dict{Symbol,Any}(scan_param => val))
 
         # Checkpoint file for crash recovery
-        checkpoint_file = joinpath(output_dir, ".checkpoint_$(scan_param)=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
+        checkpoint_file = joinpath(output_dir, ".checkpoint_$(scan_param)=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)$(_unit_cell_suffix(unit_cell; share_params=share_params, structure=structure))")
 
         result = optimize_circuit(params, p, row, nqubits;
                                   model=model,
@@ -196,6 +219,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
                                   abstol=abstol,
                                   active_nqubits=active_nqubits,
                                   unit_cell=unit_cell,
+                                  structure=structure,
                                   checkpoint_file=checkpoint_file,
                                   resume_checkpoint=resume_checkpoint,
                                   model_kw...)
@@ -205,7 +229,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
         # Save result to JSON
         fixed_str = join(["$(k)=$(v)" for (k, v) in sort(collect(fixed_params), by=first)], "_")
         name_prefix = isempty(fixed_str) ? "circuit_$(model)" : "circuit_$(model)_$(fixed_str)"
-        filename = joinpath(output_dir, "$(name_prefix)_$(scan_param)=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)$(_unit_cell_suffix(unit_cell))")
+        filename = joinpath(output_dir, "$(name_prefix)_$(scan_param)=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)$(_unit_cell_suffix(unit_cell; share_params=share_params, structure=structure))")
         input_args = Dict{Symbol,Any}(
             :model => model, :scan_param => scan_param, scan_param => val,
             :row => row, :p => p, :nqubits => nqubits,
@@ -216,6 +240,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
             :abstol => abstol,
             :active_nqubits => active_nqubits,
             :unit_cell => unit_cell,
+            :structure => gate_structure,
             :resume_checkpoint => resume_checkpoint,
             :parallel_sampling => parallel_sampling,
             :share_params => share_params, :seed => seed,
@@ -230,25 +255,6 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
 end
 
 #=
-# ── Example: TFIM ──
- simulation(;
-     model="heisenberg_j1j2",
-     scan_param=:J2,
-     scan_values=[0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0,2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0,4.25, 4.5, 4.75, 5.0],
-     J1=1.0,
-     row=3, p=3, nqubits=3,
-     maxiter=500,
-     seed=123,
-     verbose=true,
-     output_dir=joinpath(@__DIR__, "results"),
-     share_params=true,
-     conv_step=100,
-     samples=40000,
-     n_runs=1,
-     abstol=1e-5,
-     unit_cell=:two_by_two
- )
-=#
 # ── Example: Heisenberg J1-J2 ──
  simulation(;
      model="heisenberg_j1j2",
@@ -267,22 +273,25 @@ end
      abstol=1e-5,
      unit_cell=:two_by_two
  )
-#=
+=#
 simulation(;
     model="tfim",
     scan_param=:g,
     scan_values=[1.0],
     J=1.0,
     row=3,
-    p=5,
+    p=3,
     nqubits=3,
     maxiter=500,
     seed=123,
     verbose=true,
-    output_dir=joinpath(@__DIR__, "results"),
-    share_params=true,
-    conv_step=102,
-    samples=6000,
+    output_dir=joinpath(@__DIR__, "results_tfim"),
+    share_params=true,      # legacy fallback; kept for compatibility
+    structure=:abb,         # A-B-B
+    conv_step=300,
+    samples=3000,
     n_runs=10,
-    abstol=1e-5)
-=#
+    abstol=1e-5,
+    unit_cell=:single
+)
+

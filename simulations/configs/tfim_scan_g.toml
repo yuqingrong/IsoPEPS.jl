@@ -12,6 +12,7 @@ p = 3
 nqubits = 3
 unit_cell = "single"
 share_params = true
+structure = "aaa"  # set to "abb" for A-B-B or "abc" for A-B-C
 
 [optimization]
 maxiter = 500

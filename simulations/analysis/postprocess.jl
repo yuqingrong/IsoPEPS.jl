@@ -42,6 +42,8 @@ function postprocess(filename::String;
     J = Float64(get(input_args, :J, 1.0))
     J1 = Float64(get(input_args, :J1, 1.0))
     J2 = Float64(get(input_args, :J2, 0.0))
+    share_params = get(input_args, :share_params, true)
+    structure = get(input_args, :structure, nothing)
 
     # Determine figures directory
     if isnothing(figures_dir)
@@ -65,6 +67,8 @@ function postprocess(filename::String;
     skip_resample = (!isnothing(nqubits) && nqubits >= 5)
     fig_exp = plot_expectation_values(result;
         g=g, J=J, row=row, p=p, nqubits=nqubits,
+        share_params=share_params,
+        structure=structure,
         use_exact=use_exact, model=model_str, J1=J1, J2=J2,
         datafile=skip_resample ? nothing : filename)
     exp_path = joinpath(figures_dir, "$(base_name)_expectation_values.pdf")

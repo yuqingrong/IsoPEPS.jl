@@ -833,6 +833,9 @@ function resample_circuit(filename::String; conv_step=100, samples=1000000, meas
     row = input_args[:row]
     nqubits = input_args[:nqubits]
     share_params = get(input_args, :share_params, true)
+    structure = get(input_args, :structure, nothing)
+    unit_cell = Symbol(get(input_args, :unit_cell, :single))
+    gate_structure = unit_cell === :single ? _normalize_gate_structure(structure, share_params) : nothing
 
     # Use measure_first from result if not specified
     if isnothing(measure_first)
@@ -844,6 +847,7 @@ function resample_circuit(filename::String; conv_step=100, samples=1000000, meas
     println("Parameters: $(length(params)) params")
     println("Configuration: p=$p, row=$row, nqubits=$nqubits")
     println("Share params: $share_params")
+    gate_structure !== nothing && println("Structure: $gate_structure")
     println("Measure first: $measure_first")
     println("Conv steps: $conv_step, Samples: $samples")
 
@@ -858,7 +862,9 @@ function resample_circuit(filename::String; conv_step=100, samples=1000000, meas
         gates_odd, gates_even = build_unitary_gate_2x2(params, p, row, nqubits)
         println("Unit cell: 2x2 (gates_odd + gates_even)")
     else
-        gates = build_unitary_gate(params, p, row, nqubits; share_params=share_params)
+        gates = build_unitary_gate(params, p, row, nqubits;
+                                   share_params=share_params,
+                                   structure=structure)
     end
 
     # Run the quantum channel to generate new samples
@@ -888,13 +894,16 @@ function resample_circuit(filename::String; conv_step=100, samples=1000000, meas
 end
 
 """
-    reconstruct_gates(filename::String; share_params=true, plot=true, save_plot=false)
+    reconstruct_gates(filename::String; share_params=nothing, structure=nothing,
+                      plot=true, save_plot=false)
 
 Reconstruct gates from optimization result stored in JSON file and analyze transfer spectrum.
 
 # Arguments
 - `filename`: Path to JSON result file
-- `share_params`: Share parameters across circuit layers (default: true)
+- `share_params`: Optional override for legacy structure inference. By default,
+  the saved result metadata is used.
+- `structure`: Optional override for single-column structure (`:aaa`, `:abb`, or `:abc`).
 - `plot`: Display eigenvalue spectrum plot (default: true)
 - `save_plot`: Save plot to PDF file (default: false)
 
@@ -913,14 +922,21 @@ gates, rho, gap, eigenvalues = reconstruct_gates("result.json"; plot=false)
 gates, rho, gap, eigenvalues = reconstruct_gates("result.json"; save_plot=true)
 ```
 """
-function reconstruct_gates(filename::String; share_params=true, plot=true, save_plot=true, use_iterative=:auto, matrix_free=:auto)
+function reconstruct_gates(filename::String; share_params=nothing,
+                           structure::Union{Symbol,String,Nothing}=nothing,
+                           plot=true, save_plot=true, use_iterative=:auto, matrix_free=:auto)
     result, input_args = load_result(filename)
 
     p = input_args[:p]
     row = input_args[:row]
     nqubits = input_args[:nqubits]
+    saved_share_params = get(input_args, :share_params, true)
+    effective_share_params = share_params === nothing ? saved_share_params : Bool(share_params)
+    effective_structure = structure === nothing ? get(input_args, :structure, nothing) : structure
 
-    gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
+    gates = build_unitary_gate(result.final_params, p, row, nqubits;
+                               share_params=effective_share_params,
+                               structure=effective_structure)
 
     # Compute transfer spectrum
     rho, gap, eigenvalues, eigenvalues_raw = compute_transfer_spectrum(gates, row, nqubits; use_iterative=use_iterative, matrix_free=matrix_free)

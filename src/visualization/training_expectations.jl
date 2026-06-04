@@ -213,6 +213,7 @@ function plot_expectation_values(result::CircuitOptimizationResult;
                                   J1::Float64=1.0,
                                   J2::Float64=0.0,
                                   share_params::Bool=true,
+                                  structure::Union{Symbol,String,Nothing}=nothing,
                                   active_nqubits::Union{Int,Nothing}=nqubits,
                                   unit_cell::Union{Symbol,String}=:single,
                                   use_exact::Bool=true,
@@ -295,6 +296,7 @@ function plot_expectation_values(result::CircuitOptimizationResult;
         else
             gates = build_unitary_gate(result.final_params, p, row, nqubits;
                                        share_params=share_params,
+                                       structure=structure,
                                        active_nqubits=active)
             op = TransferOperator(gates, row, nqubits)
         end

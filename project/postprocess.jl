@@ -30,6 +30,7 @@ function analyze_result(filename::String; pepskit_results_file::Union{String,Not
     p = get(input_args, :p, nothing)
     nqubits = get(input_args, :nqubits, nothing)
     share_params = get(input_args, :share_params, true)
+    structure = get(input_args, :structure, nothing)
     active_nqubits = get(input_args, :active_nqubits, nqubits)
     unit_cell = Symbol(get(input_args, :unit_cell, :single))
     conv_step = Int(get(input_args, :conv_step, 100))
@@ -64,6 +65,7 @@ function analyze_result(filename::String; pepskit_results_file::Union{String,Not
     skip_resample = (nqubits >= 5)  # Skip resampling for large systems
     fig_exp = plot_expectation_values(result; g=g, J=J, row=row, p=p, nqubits=nqubits,
                                       share_params=share_params,
+                                      structure=structure,
                                       active_nqubits=active_nqubits,
                                       unit_cell=unit_cell,
                                       use_exact=use_exact,
@@ -143,7 +145,8 @@ save_M2_vs_J2(
 
 plot_M2_comparison(
                 sampling_file="project/results/M2_sampling.json",
-                save_path="project/results/figures/M2_comparison.pdf")   
+                save_path="project/results/figures/M2_comparison.pdf",
+                show_errorbars=false)   
 
                 J2_values = Float64[
                     0.0, 0.1, 0.2, 0.3, 0.4, 0.5,

@@ -65,12 +65,16 @@ function plot_energy_dynamics_vs_g(data_dir::String, g_values::Vector{Float64};
         model     = _construct_model(model_str, Dict{Symbol,Any}(k => v for (k, v) in input_args))
         has_y     = needs_y_measurement(model)
         params    = _select_plot_params(result, parameter_source, idx; random_seed=random_seed)
+        share_params = get(input_args, :share_params, true)
+        structure = get(input_args, :structure, nothing)
 
         two_by_two = default_unit_cell(model) == :two_by_two
         if two_by_two
             gates_odd, gates_even = build_unitary_gate_2x2(params, p, row, nqubits)
         else
-            gates = build_unitary_gate(params, p, row, nqubits)
+            gates = build_unitary_gate(params, p, row, nqubits;
+                                       share_params=share_params,
+                                       structure=structure)
         end
 
         exact_E = nothing
@@ -274,11 +278,15 @@ function plot_local_xz_dynamics_vs_g(data_dir::String, g_values::Vector{Float64}
         model_str = String(get(input_args, :model, "tfim"))
         model     = _construct_model(model_str, Dict{Symbol,Any}(k => v for (k, v) in input_args))
         params    = _select_plot_params(result, parameter_source, idx; random_seed=random_seed)
+        share_params = get(input_args, :share_params, true)
+        structure = get(input_args, :structure, nothing)
         two_by_two = default_unit_cell(model) == :two_by_two
         if two_by_two
             gates_odd, gates_even = build_unitary_gate_2x2(params, p, row, nqubits)
         else
-            gates = build_unitary_gate(params, p, row, nqubits)
+            gates = build_unitary_gate(params, p, row, nqubits;
+                                       share_params=share_params,
+                                       structure=structure)
         end
 
         x_curves = Matrix{Float64}(undef, M, shots)

@@ -26,6 +26,12 @@ function construct_model_from_config(model_cfg::Dict)
     end
 end
 
+function result_structure_suffix(unit_cell::Symbol, structure, share_params::Bool)
+    unit_cell === :two_by_two && return ""
+    gate_structure = IsoPEPS._normalize_gate_structure(structure, share_params)
+    return gate_structure === :aaa ? "" : "_structure=$(gate_structure)"
+end
+
 function run_simulation(config_path::String)
     config = load_config(config_path)
 
@@ -41,6 +47,8 @@ function run_simulation(config_path::String)
     nqubits = circuit_cfg["nqubits"]
     unit_cell = Symbol(get(circuit_cfg, "unit_cell", "single"))
     share_params = get(circuit_cfg, "share_params", true)
+    structure = get(circuit_cfg, "structure", nothing)
+    gate_structure = unit_cell === :single ? IsoPEPS._normalize_gate_structure(structure, share_params) : nothing
 
     # Optimization parameters
     maxiter = opt_cfg["maxiter"]
@@ -65,6 +73,7 @@ function run_simulation(config_path::String)
     println("IsoPEPS Simulation Runner")
     println("Config: $config_path")
     println("Model: $(model_label(base_model))")
+    unit_cell === :single && println("Gate structure: $gate_structure")
     println("Scanning $scan_param: $scan_values")
     println("Output: $output_dir")
     println("=" ^ 70)
@@ -80,7 +89,8 @@ function run_simulation(config_path::String)
         n_params = IsoPEPS.gate_parameter_count(p, nqubits;
                                                 unit_cell=unit_cell,
                                                 row=row,
-                                                share_params=share_params)
+                                                share_params=share_params,
+                                                structure=structure)
         params = rand(n_params)
 
         println("\nRunning $scan_param = $val ...")
@@ -94,15 +104,20 @@ function run_simulation(config_path::String)
                                   n_runs=n_runs,
                                   parallel_sampling=parallel_sampling,
                                   abstol=abstol,
-                                  unit_cell=unit_cell)
+                                  unit_cell=unit_cell,
+                                  structure=structure)
 
         # Save result
-        filename = joinpath(output_dir, "circuit_$(mname)_$(scan_param)=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
+        structure_suffix = result_structure_suffix(unit_cell, structure, share_params)
+        filename = joinpath(output_dir, "circuit_$(mname)_$(scan_param)=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)$(structure_suffix).json")
         input_args = Dict{Symbol,Any}(
             :model => model_name(m),
             :scan_param => scan_param,
             scan_param => val,
             :row => row, :p => p, :nqubits => nqubits,
+            :unit_cell => unit_cell,
+            :share_params => share_params,
+            :structure => gate_structure,
             :maxiter => maxiter, :seed => seed,
             :parallel_sampling => parallel_sampling
         )

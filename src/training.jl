@@ -77,14 +77,14 @@ struct ManifoldOptimizationResult
     converged::Bool
 end
 
-const _SAMPLING_CHECKPOINT_VERSION = 3
+const _SAMPLING_CHECKPOINT_VERSION = 4
 
 _checkpoint_model_signature(m::TFIM) = "J=$(repr(m.J)),g=$(repr(m.g))"
 _checkpoint_model_signature(m::HeisenbergJ1J2) = "J1=$(repr(m.J1)),J2=$(repr(m.J2))"
 _checkpoint_model_signature(m::AbstractModel) = repr(m)
 
 function _sampling_checkpoint_signature(model, row, p, nqubits, unit_cell,
-                                        active_nqubits, share_params)
+                                        active_nqubits, share_params, structure)
     return join((
         "v=$(_SAMPLING_CHECKPOINT_VERSION)",
         "model=$(model_name(model))",
@@ -95,6 +95,7 @@ function _sampling_checkpoint_signature(model, row, p, nqubits, unit_cell,
         "unit_cell=$(unit_cell)",
         "active_nqubits=$(active_nqubits)",
         "share_params=$(share_params)",
+        "structure=$(structure)",
     ), "|")
 end
 
@@ -135,7 +136,9 @@ function _flush_generation!(generation_energies, generation_params,
 end
 
 """
-    initialize_tfim_params(p, nqubits, g; mode=:meanfield, rng=Random.default_rng())
+    initialize_tfim_params(p, nqubits, g; mode=:meanfield, row=1,
+                           share_params=true, structure=nothing,
+                           rng=Random.default_rng())
 
 Create an initial Rx-Rz parameter vector for TFIM circuit optimization.
 
@@ -146,18 +149,28 @@ Modes:
 """
 function initialize_tfim_params(p::Int, nqubits::Int, g::Real;
                                 mode::Symbol=:meanfield,
+                                row::Int=1,
+                                share_params::Bool=true,
+                                structure::Union{Symbol,String,Nothing}=nothing,
                                 rng::AbstractRNG=Random.default_rng())
-    params = zeros(Float64, gate_parameter_count(p, nqubits))
+    params = zeros(Float64, gate_parameter_count(p, nqubits;
+                                                row=row,
+                                                share_params=share_params,
+                                                structure=structure))
     blocks = _rotation_blocks_per_layer(nqubits)
+    chunk = _gate_param_count(p, nqubits)
+    n_chunks = length(params) ÷ chunk
 
     if mode === :meanfield
         θ_mf = atan(1.0 / Float64(g))
-        for block in 1:blocks, layer in 1:p, q in 1:nqubits
-            idx = _rotation_param_index(p, nqubits, layer, q, block)
+        for c in 0:(n_chunks-1), block in 1:blocks, layer in 1:p, q in 1:nqubits
+            idx = c * chunk + _rotation_param_index(p, nqubits, layer, q, block)
             params[idx] = θ_mf
         end
     elseif mode === :entangled
-        params[_rotation_param_index(p, nqubits, 1, nqubits, 1)] = π/2
+        for c in 0:(n_chunks-1)
+            params[c * chunk + _rotation_param_index(p, nqubits, 1, nqubits, 1)] = π/2
+        end
     elseif mode === :random
         params .= 2π .* rand(rng, length(params))
     else
@@ -181,6 +194,8 @@ Optimize a quantum circuit using sampling-based CMA-ES.
 # Keyword Arguments
 - `model`: `"tfim"` or `"heisenberg_j1j2"` (string) or an `AbstractModel` instance
 - `share_params::Bool=true`: Whether to share parameters across layers
+- `structure`: Single-column gate structure (`:aaa`, `:abb`, or `:abc`).
+  When omitted, `share_params=true` maps to `:aaa` and `false` maps to `:abc`.
 - `conv_step::Int=100`: Thermalization steps before sampling
 - `samples::Int=10000`: Samples per sampling run
 - `n_runs::Int=44`: Number of independent sampling runs
@@ -206,6 +221,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
     samples=10000, maxiter=5000, abstol=0.01, n_runs=44,
     parallel_sampling::Bool=true,
     unit_cell::Symbol=:single,
+    structure::Union{Symbol,String,Nothing}=nothing,
     active_nqubits::Int=nqubits,
     checkpoint_file::Union{String,Nothing}=nothing,
     checkpoint_every::Int=10,
@@ -219,13 +235,15 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
     m = model isa AbstractModel ? model : _construct_model(model, kw)
     mlabel = model_label(m)
     model_str = model_name(m)
+    gate_structure = unit_cell == :single ? _normalize_gate_structure(structure, share_params) : nothing
     expected_params = gate_parameter_count(p, nqubits;
                                            unit_cell=unit_cell,
                                            row=row,
                                            share_params=share_params,
+                                           structure=structure,
                                            active_nqubits=active_nqubits)
     checkpoint_signature = _sampling_checkpoint_signature(
-        m, row, p, nqubits, unit_cell, active_nqubits, share_params)
+        m, row, p, nqubits, unit_cell, active_nqubits, share_params, gate_structure)
 
     # Resume from checkpoint if available
     if checkpoint_file !== nothing && isfile(checkpoint_file)
@@ -285,6 +303,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         else
             gates = build_unitary_gate(x, p, row, nqubits;
                                        share_params=share_params,
+                                       structure=structure,
                                        active_nqubits=active_nqubits)
         end
 
@@ -459,6 +478,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
     else
         final_gates = build_unitary_gate(final_params, p, row, nqubits;
                                          share_params=share_params,
+                                         structure=structure,
                                          active_nqubits=active_nqubits)
     end
 
@@ -479,6 +499,8 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         :row => row, :p => p, :nqubits => nqubits,
         :initial_params => initial_params,
         :share_params => share_params,
+        :structure => gate_structure,
+        :unit_cell => unit_cell,
         :conv_step => conv_step,
         :samples => samples,
         :n_runs => n_runs,
@@ -526,6 +548,8 @@ Optimize circuit parameters using exact tensor contraction (no sampling noise).
 function optimize_exact(params, p::Int, row::Int, nqubits::Int;
                         model::Union{String,AbstractModel}="tfim", maxiter=5000, abstol=1e-6,
                         unit_cell::Symbol=:single,
+                        share_params::Bool=true,
+                        structure::Union{Symbol,String,Nothing}=nothing,
                         active_nqubits::Int=nqubits,
                         model_kwargs...)
     kw = Dict{Symbol,Any}(model_kwargs)
@@ -534,11 +558,15 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
     m = model isa AbstractModel ? model : _construct_model(model isa String ? model : string(model), kw)
     mlabel = model_label(m)
     model_str = model_name(m)
+    gate_structure = unit_cell == :single ? _normalize_gate_structure(structure, share_params) : nothing
 
     # Store initial parameters
     initial_params = copy(params)
     expected_params = gate_parameter_count(p, nqubits;
                                            unit_cell=unit_cell,
+                                           row=row,
+                                           share_params=share_params,
+                                           structure=structure,
                                            active_nqubits=active_nqubits)
     @info "Starting exact optimization with $(length(params)) parameters (expected $expected_params; model=$model_str, unit_cell=$unit_cell)"
 
@@ -576,7 +604,10 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
             energy, X_cost, ZZ_vert, ZZ_horiz = compute_exact_energy_from_gates(
                 m, gates_odd, row, virtual_qubits; unit_cell=unit_cell, gates_even=gates_even)
         else
-            gates = build_unitary_gate(x, p, row, nqubits; active_nqubits=active_nqubits)
+            gates = build_unitary_gate(x, p, row, nqubits;
+                                       share_params=share_params,
+                                       structure=structure,
+                                       active_nqubits=active_nqubits)
             _, gap, eigenvalues, _ = compute_transfer_spectrum(gates, row, nqubits)
             energy, X_cost, ZZ_vert, ZZ_horiz = compute_exact_energy_from_gates(
                 m, gates, row, virtual_qubits; unit_cell=unit_cell)
@@ -627,6 +658,8 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
                                              active_nqubits=active_nqubits)
     else
         final_gates = build_unitary_gate(final_params, p, row, nqubits;
+                                         share_params=share_params,
+                                         structure=structure,
                                          active_nqubits=active_nqubits)
     end
 
@@ -655,6 +688,9 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
         :parameter_count => length(params),
         :expected_parameter_count => expected_params,
         :active_nqubits => active_nqubits,
+        :share_params => share_params,
+        :structure => gate_structure,
+        :unit_cell => unit_cell,
         :best_iteration => best_idx,
         :total_iterations => length(energy_history)
     )
@@ -666,7 +702,11 @@ end
 
 # Backward-compatible TFIM convenience method
 function optimize_exact(params, J::Float64, g::Float64, p::Int, row::Int, nqubits::Int;
-                        maxiter=5000, abstol=1e-6)
+                        maxiter=5000, abstol=1e-6,
+                        share_params::Bool=true,
+                        structure::Union{Symbol,String,Nothing}=nothing)
     return optimize_exact(params, p, row, nqubits; model="tfim", J=J, g=g,
-                          maxiter=maxiter, abstol=abstol)
+                          maxiter=maxiter, abstol=abstol,
+                          share_params=share_params,
+                          structure=structure)
 end

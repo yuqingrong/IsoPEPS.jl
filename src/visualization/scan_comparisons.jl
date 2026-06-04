@@ -148,7 +148,15 @@ function _find_circuit_result_file(data_dir::String, val, spec::Dict{Symbol,Any}
         end
         return ""
     else
-        suffixes = collect(get(spec, :suffixes, ["_1x1", "_1x1_100*1000", "_1x1_6w", ""]))
+        default_suffixes = if haskey(spec, :structure) || get(spec, :share_params, true) == false
+            gate_structure = _normalize_gate_structure(get(spec, :structure, nothing),
+                                                       Bool(get(spec, :share_params, true)))
+            primary = gate_structure === :aaa ? "_1x1" : "_1x1_$(gate_structure)"
+            unique([primary, "_1x1", ""])
+        else
+            ["_1x1", "_1x1_100*1000", "_1x1_6w", ""]
+        end
+        suffixes = collect(get(spec, :suffixes, default_suffixes))
         candidates = String[]
         for suffix in suffixes
             push!(candidates, joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)$(suffix).json"))
@@ -216,6 +224,7 @@ function _compute_circuit_energy_from_result(filename::String, result, input_arg
     J1 = Float64(get(spec, :J1, get(input_args, :J1, 1.0)))
     p = Int(get(spec, :p, get(input_args, :p, 3)))
     share_params = get(input_args, :share_params, get(spec, :share_params, true))
+    structure = get(input_args, :structure, get(spec, :structure, nothing))
     virtual_qubits = (nqubits - 1) ÷ 2
 
     if model == "heisenberg_j1j2"
@@ -234,7 +243,9 @@ function _compute_circuit_energy_from_result(filename::String, result, input_arg
                                       conv_step=conv_step, samples=samples,
                                       repeats=resample_repeats, result=result)
     else
-        gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
+        gates = build_unitary_gate(result.final_params, p, row, nqubits;
+                                   share_params=share_params,
+                                   structure=structure)
         X_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, :X; position=i)) for i in 1:row)
 
         if row > 1
@@ -783,7 +794,10 @@ function plot_connected_corr_vs_g(data_dir::String, g_values::Vector{Float64};
             result, input_args = load_result(filename)
             virtual_qubits = (nqubits - 1) ÷ 2
             share_params   = get(input_args, :share_params, true)
-            gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
+            structure      = get(input_args, :structure, nothing)
+            gates = build_unitary_gate(result.final_params, p, row, nqubits;
+                                       share_params=share_params,
+                                       structure=structure)
 
             mean_C = r -> mean(abs(correlation_function(gates, row, virtual_qubits, :Z, r;
                                                         connected=true, position=pos)[r])
@@ -908,7 +922,10 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
 
         # Reconstruct gates
         share_params = get(input_args, :share_params, true)
-        gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
+        structure = get(input_args, :structure, nothing)
+        gates = build_unitary_gate(result.final_params, p, row, nqubits;
+                                   share_params=share_params,
+                                   structure=structure)
 
         # Compute correlation length from transfer matrix
         _, gap, _, _ = compute_transfer_spectrum(
@@ -1095,6 +1112,7 @@ function plot_correlation_vs_J2(data_dir::String, J2_values::Vector{Float64};
         result, input_args = load_result(filename)
         virtual_qubits = (nqubits - 1) ÷ 2
         share_params = get(input_args, :share_params, true)
+        structure = get(input_args, :structure, nothing)
 
         # Detect 2x2 unit cell from filename
         is_2x2 = endswith(filename, "_2x2.json")
@@ -1103,7 +1121,9 @@ function plot_correlation_vs_J2(data_dir::String, J2_values::Vector{Float64};
             gates_odd, gates_even = build_unitary_gate_2x2(result.final_params, p, row, nqubits)
             op = TransferOperator(gates_odd, gates_even, row, nqubits)
         else
-            gates = build_unitary_gate(result.final_params, p, row, nqubits; share_params=share_params)
+            gates = build_unitary_gate(result.final_params, p, row, nqubits;
+                                       share_params=share_params,
+                                       structure=structure)
             op = TransferOperator(gates, row, nqubits)
         end
 
@@ -1323,13 +1343,16 @@ function plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
             _row = input_args[:row]
             _nqubits = input_args[:nqubits]
             share_params = get(input_args, :share_params, true)
+            structure = get(input_args, :structure, nothing)
 
             is_2x2 = endswith(filename, "_2x2.json")
             if is_2x2
                 gates_odd, gates_even = build_unitary_gate_2x2(params, _p, _row, _nqubits)
                 op = TransferOperator(gates_odd, gates_even, _row, _nqubits)
             else
-                gates = build_unitary_gate(params, _p, _row, _nqubits; share_params=share_params)
+                gates = build_unitary_gate(params, _p, _row, _nqubits;
+                                           share_params=share_params,
+                                           structure=structure)
                 op = TransferOperator(gates, _row, _nqubits)
             end
 
@@ -1608,13 +1631,16 @@ function save_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
             _row = input_args[:row]
             _nqubits = input_args[:nqubits]
             share_params = get(input_args, :share_params, true)
+            structure = get(input_args, :structure, nothing)
 
             is_2x2 = endswith(filename, "_2x2.json")
             if is_2x2
                 gates_odd, gates_even = build_unitary_gate_2x2(params, _p, _row, _nqubits)
                 op = TransferOperator(gates_odd, gates_even, _row, _nqubits)
             else
-                gates = build_unitary_gate(params, _p, _row, _nqubits; share_params=share_params)
+                gates = build_unitary_gate(params, _p, _row, _nqubits;
+                                           share_params=share_params,
+                                           structure=structure)
                 op = TransferOperator(gates, _row, _nqubits)
             end
 
@@ -1774,6 +1800,7 @@ end
     plot_M2_comparison(; exact_file="", sampling_file="", dmrg_file="",
                         save_path=nothing, dmrg_Lx_key="Lx2",
                         show_sampling_stderr_panel=false,
+                        show_errorbars=true,
                         show_exact=false, show_dmrg=false)
 
 Plot M²(π,π) (Néel) and M²(0,π) together vs J₂/J₁. By default, only the
@@ -1791,6 +1818,8 @@ Each file is a JSON produced by `save_M2_vs_J2` (for exact/sampling) or
 - `dmrg_Lx_key`: suffix for DMRG keys — `"Lx1"` or `"Lx2"` (default: `"Lx2"`)
 - `show_sampling_stderr_panel`: Show sampling errors in a lower log-scale panel when
   standard-error arrays are available (default: `false`)
+- `show_errorbars`: Show sampling standard-error bars in the main panel when
+  standard-error arrays are available (default: `true`)
 - `show_exact`: Overlay the TN contraction series when `exact_file` is provided
   (default: `false`)
 - `show_dmrg`: Overlay the DMRG series when `dmrg_file` is provided (default:
@@ -1802,6 +1831,7 @@ function plot_M2_comparison(; exact_file::String="",
                               dmrg_file::String="",
                               dmrg_Lx_key::String="Lx2",
                               show_sampling_stderr_panel::Bool=false,
+                              show_errorbars::Bool=true,
                               show_exact::Bool=false,
                               show_dmrg::Bool=false,
                               save_path=nothing)
@@ -1813,18 +1843,18 @@ function plot_M2_comparison(; exact_file::String="",
          dmrg_key="M2_0pi_$dmrg_Lx_key", marker=:diamond),
     ]
 
-    # Colors and markers distinguish the two q-points; line style distinguishes methods.
+    # Colors and markers distinguish the two q-points.
     q_colors = [:blue, :orange]
     method_styles = [
-        (key="exact",    label="TN",    linestyle=:solid, markersize=4.2, strokewidth=1.0),
-        (key="sampling", label="Samp.", linestyle=:dash,  markersize=4.4, strokewidth=1.0),
-        (key="dmrg",     label="DMRG",  linestyle=:dot,   markersize=4.8, strokewidth=1.0),
+        (key="exact",    label="TN",    linestyle=:solid, markersize=3.4, strokewidth=0.0),
+        (key="sampling", label="",      linestyle=:solid, markersize=3.4, strokewidth=0.0),
+        (key="dmrg",     label="DMRG",  linestyle=:solid, markersize=3.6, strokewidth=0.0),
     ]
     method_style_by_key = Dict(style.key => style for style in method_styles)
 
     marker_attrs(style, color) = (; marker=style.marker,
                                   markersize=style.markersize,
-                                  markercolor=(:white, 0.0),
+                                  markercolor=color,
                                   strokecolor=color,
                                   strokewidth=style.strokewidth)
 
@@ -1848,14 +1878,16 @@ function plot_M2_comparison(; exact_file::String="",
     end
 
     has_stderr_panel = show_sampling_stderr_panel && !isempty(sampling_stderr)
-    fig_height = (has_stderr_panel ? round(Int, 1.35 * PAPER_FIGSIZE[2]) : PAPER_FIGSIZE[2]) + 24
+    phase_band_height = 32
+    fig_height = (has_stderr_panel ? round(Int, 1.35 * PAPER_FIGSIZE[2]) : PAPER_FIGSIZE[2]) +
+                 phase_band_height + 2
     fig = Figure(size=(PAPER_FIGSIZE[1], fig_height))
     phase_ax = Axis(fig[1, 1])
     ax = Axis(fig[2, 1], xlabel=has_stderr_panel ? "" : "J₂ / J₁", ylabel="M²(q)")
     stderr_ax = has_stderr_panel ?
         Axis(fig[3, 1], xlabel="J₂ / J₁", ylabel="Sampling SE", yscale=log10) :
         nothing
-    rowsize!(fig.layout, 1, Fixed(22))
+    rowsize!(fig.layout, 1, Fixed(phase_band_height))
     rowgap!(fig.layout, 1)
     hidedecorations!(phase_ax)
     hidespines!(phase_ax)
@@ -1896,11 +1928,13 @@ function plot_M2_comparison(; exact_file::String="",
             max_M2_value = max(max_M2_value, maximum(M2))
             stderr = get(sampling_stderr, qi.stderr_key, nothing)
             if !isnothing(stderr)
-                max_M2_value = max(max_M2_value, maximum(m + e for (m, e) in zip(M2, stderr)))
-                errorbars!(ax, J2, M2, stderr; color=color, whiskerwidth=5)
+                if show_errorbars
+                    max_M2_value = max(max_M2_value, maximum(m + e for (m, e) in zip(M2, stderr)))
+                    errorbars!(ax, J2, M2, stderr; color=color, whiskerwidth=5)
+                end
                 if has_stderr_panel
                     scatterlines!(stderr_ax, J2, stderr; color=color, marker=:rect,
-                                  linestyle=:dash, markersize=4, linewidth=0.8)
+                                  linestyle=:solid, markersize=4, linewidth=0.8)
                 end
             end
             lbl = get(method_labelled, "sampling", false) ? nothing : "Sampling"
@@ -1952,18 +1986,33 @@ function plot_M2_comparison(; exact_file::String="",
     xlims!(ax, xmin, xmax)
     xlims!(phase_ax, xmin, xmax)
 
+    phase_tick_low = 0.20
+    phase_tick_high = 0.36
     for ann in phase_annotations
         xlo, xhi = ann.range
         lines!(phase_ax, [xlo, xhi], [ann.bar_y, ann.bar_y];
                color=:firebrick, linewidth=0.9)
-        lines!(phase_ax, [xlo, xlo], [ann.tick_low, ann.tick_high];
+        lines!(phase_ax, [xlo, xlo], [phase_tick_low, phase_tick_high];
                color=:firebrick, linewidth=0.9)
-        lines!(phase_ax, [xhi, xhi], [ann.tick_low, ann.tick_high];
+        lines!(phase_ax, [xhi, xhi], [phase_tick_low, phase_tick_high];
                color=:firebrick, linewidth=0.9)
         text!(phase_ax, ann.x, ann.y;
               text=ann.label,
               align=ann.align,
               fontsize=PAPER_LEGEND_LABELSIZE,
+              color=:firebrick,
+              strokecolor=:firebrick,
+              strokewidth=0)
+    end
+
+    for i in 1:(length(phase_annotations) - 1)
+        left_edge = phase_annotations[i].range[2]
+        right_edge = phase_annotations[i + 1].range[1]
+        transition = (left_edge + right_edge) / 2
+        text!(phase_ax, transition, phase_tick_low - 0.02;
+              text="$(round(transition, digits=2))",
+              align=(:center, :top),
+              fontsize=PAPER_LEGEND_LABELSIZE - 3,
               color=:firebrick,
               strokecolor=:firebrick,
               strokewidth=0)
@@ -1979,11 +2028,12 @@ function plot_M2_comparison(; exact_file::String="",
             get(method_labelled, style.key, false) || continue
             push!(all_elems, [
                 LineElement(color=color, linestyle=style.linestyle),
-                MarkerElement(color=(:white, 0.0), marker=qi.marker,
+                MarkerElement(color=color, marker=qi.marker,
                               markersize=style.markersize,
                               strokecolor=color, strokewidth=style.strokewidth),
             ])
-            push!(all_labels, "$(qi.label) $(style.label)")
+            label = isempty(style.label) ? qi.label : "$(qi.label) $(style.label)"
+            push!(all_labels, label)
         end
     end
 
