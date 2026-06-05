@@ -118,7 +118,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
                     maxiter::Int, seed::Int=123, verbose::Bool=true,
                     output_dir::String, share_params::Bool=true, conv_step::Int=100, samples::Int=10000,
                     n_runs::Int=44, abstol::Float64=0.01,
-                    parallel_sampling::Bool=false,
+                    parallel_sampling::Bool=true,
                     active_nqubits::Int=nqubits,
                     unit_cell::Symbol=:single,
                     structure::Union{Symbol,String,Nothing}=nothing,
@@ -273,11 +273,11 @@ end
      abstol=1e-5,
      unit_cell=:two_by_two
  )
-=#
+
 simulation(;
     model="tfim",
     scan_param=:g,
-    scan_values=[1.0],
+    scan_values=[4.0],
     J=1.0,
     row=3,
     p=3,
@@ -285,13 +285,26 @@ simulation(;
     maxiter=500,
     seed=123,
     verbose=true,
-    output_dir=joinpath(@__DIR__, "results_tfim"),
+    output_dir=joinpath(@__DIR__, "results_tfim_aaa"),
     share_params=true,      # legacy fallback; kept for compatibility
-    structure=:abb,         # A-B-B
+    structure=:aaa,         # A-B-B
     conv_step=300,
     samples=3000,
     n_runs=10,
     abstol=1e-5,
     unit_cell=:single
 )
+=#
+    structure = :abc                                                                                 
+    Random.seed!(123)
+    row, p, nqubits = 3, 3, 3
+    n_params = gate_parameter_count(p, nqubits; row=row, structure=structure)
+    params = rand(n_params)
 
+    result = optimize_exact(params, p, row, nqubits;
+        model="tfim", J=1.0, g=2.0,
+        maxiter=2000,
+        abstol=1e-5,
+        structure=structure,
+    )
+    println("$(structure): energy=$(result.energy), gap=$(result.gap), converged=$(result.converged)")

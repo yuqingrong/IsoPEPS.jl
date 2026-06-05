@@ -695,7 +695,7 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
         :total_iterations => length(energy_history)
     )
     merge!(input_args, Dict{Symbol,Any}(model_kwargs))
-    save_result("data/exact_$(model_str)_row=$(row).json", result, input_args)
+    save_result("data/exact_$(model_str)_row=$(row)_structure=$(structure).json", result, input_args)
 
     return result
 end

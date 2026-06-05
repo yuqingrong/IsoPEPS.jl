@@ -627,7 +627,7 @@ conv = check_bulk_convergence(
 fig = plot_bulk_convergence(conv; save_path="project/results/figures/bulk_convergence.pdf")
 display(fig)
 
-
+=#
 # ==================== Example usage ====================
 scan_results = run_dmrg_bulk_scan(
     model="heisenberg_j1j2",
@@ -635,7 +635,7 @@ scan_results = run_dmrg_bulk_scan(
     scan_param=:J2, scan_values=0.0:0.1:1.0,
     J1=1.0
 )
-=#
+#=
 # TFIM
 run_dmrg_bulk_scan(
     model="tfim",
@@ -643,7 +643,7 @@ run_dmrg_bulk_scan(
     scan_param=:g, scan_values=0.0:1.0:4.0,
     J=1.0
 )
-#=
+
 output_file = "dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json"
 plot_M2_vs_J2(output_file; Lx1=100, Lx2=200)
 

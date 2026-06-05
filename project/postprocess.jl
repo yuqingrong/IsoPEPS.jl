@@ -103,9 +103,9 @@ end
 # Uncomment the block below (remove #= and =#) to run analysis examples
 
 # Analyze a single result
-J=1.0;g = 2.0; row=4 ; nqubits=3; p=3; virtual_qubits=1;D=2
-data_dir = joinpath(@__DIR__, "results")
-datafile = joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json")
+J=1.0;g = 2.0; row=3 ; nqubits=3; p=3; virtual_qubits=1;D=2
+data_dir = joinpath(@__DIR__, "results_tfim_abc")
+datafile = joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile, dmrg_bulk_file="project/results/dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json")
 
@@ -204,11 +204,11 @@ fig, _, _ = plot_combined_structure_factors(
  display(fig)
 
 # Reconstruct gates and analyze
-plot_energy_error_vs_g("project/results", [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0];                            
+plot_energy_error_vs_g("project/results_tfim_abc", [2.0,3.0,4.0];                            
       model="tfim",                                              
-      J1=1.0, row=3, p=3, nqubits=3,                        
+      J=1.0, row=3, p=3, nqubits=3,                        
       energy_source=:computed,
-      conv_step=102,
+      conv_step=300,
       samples=3000000,
       dmrg_file="project/results/dmrg_bulk_tfim_Ly3_D2_gscan.json",save_path="project/results/figures/tfim_energy_vs_g.pdf")
     
