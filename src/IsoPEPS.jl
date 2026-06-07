@@ -44,6 +44,7 @@ using OptimizationCMAEvolutionStrategy
 using CMAEvolutionStrategy
 using Optim
 using JSON3
+using FFTW
 using CairoMakie
 using LsqFit
 
@@ -125,7 +126,7 @@ function load_dmrg_state end
 # =============================================================================
 
 # Quantum Channel Simulation
-export sample_quantum_channel, track_convergence_to_steady_state, estimate_correlation_length_from_sampling, estimate_correlation_length_exact
+export sample_quantum_channel
 
 # Model Types
 export AbstractModel, TFIM, HeisenbergJ1J2
@@ -145,10 +146,10 @@ export optimize_circuit, optimize_exact, optimize_manifold, initialize_tfim_para
 
 # Exact Tensor Contraction - Transfer Matrix
 export TransferOperator, matrix_size, apply_transfer
-export compute_transfer_spectrum, compute_single_transfer
+export compute_transfer_spectrum
 export get_combined_transfer_matrix, compute_transfer_spectrum_2x2
-export contract_transfer_matrix, gates_to_tensors, get_transfer_matrix, get_physical_channel
-export build_transfer_code, build_physical_channel_code, apply_transfer_matvec
+export contract_transfer_matrix, gates_to_tensors, get_transfer_matrix
+export build_transfer_code, apply_transfer_matvec
 export get_transfer_matrix_with_operator, compute_correlation_coefficients
 export compute_theoretical_correlation_decay, compute_theoretical_lambda_eff
 export reshape_to_mps, spectrum_MPSKit, transfer_matrix_ITensor
@@ -174,14 +175,13 @@ export save_dmrg_state, load_dmrg_state
 
 # Data I/O
 export save_result, load_result, save_results, load_results, resample_circuit
-export reconstruct_gates
+export reconstruct_gates, save_finite_cylinder_samples
 
 # Visualization (loaded via CairoMakie extension)
 export paper_theme, PAPER_FIGSIZE, PAPER_FIGSIZE_WIDE
 export plot_circuit_block, plot_channel_circuit
-export corr_exp_fit, fit_acf_oscillatory
+export corr_exp_fit
 export plot_training_history, plot_variance_vs_samples, plot_expectation_values
-export plot_corr_scale
 export plot_eigenvalue_spectrum, plot_correlation_function
 export plot_energy_error_vs_g, plot_correlation_vs_g, plot_correlation_vs_J2, plot_M2_vs_J2
 export plot_connected_corr_vs_g, plot_magnetization_vs_g

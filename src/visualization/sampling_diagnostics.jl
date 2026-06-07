@@ -297,10 +297,11 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
 
         if !isnothing(errors)
             errorbars!(ax, ns, vars, collect(Float64, errors);
-                       color=(:steelblue, 0.4), whiskerwidth=4)
+                       color=:steelblue, whiskerwidth=6, fxaa=false)
         end
         scatter!(ax, ns, vars;
-                 label="bootstrap estimate", color=:steelblue, marker=:circle)
+                 label="bootstrap estimate", color=:steelblue, marker=:circle,
+                 markersize=3, strokewidth=0)
 
         if fit_scaling && length(ns) > 1
             log_N   = log.(ns)

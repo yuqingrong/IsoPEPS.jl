@@ -4,23 +4,25 @@
 
 """
     sample_quantum_channel(gates, row, nqubits; conv_step=1000, samples=10000,
-                           model::AbstractModel=TFIM())
+                           model::AbstractModel=TFIM(), measure_y=nothing)
 
 Sample observables from an iterative quantum channel defined by gates.
 
 Each basis (Z, X, and optionally Y) is sampled in a separate sequential phase,
 each receiving exactly `conv_step + samples` raw measurements.
 
-The model determines which bases are sampled:
+The model determines which bases are sampled unless `measure_y` is provided:
 - `TFIM()` → Z, X
 - `HeisenbergJ1J2()` → Z, X, Y
+- `measure_y=true` → force Z, X, Y
 
 # Returns
-- `(rho, Z_samples, X_samples)` when model needs no Y measurement
-- `(rho, Z_samples, X_samples, Y_samples)` when model needs Y measurement
+- `(rho, Z_samples, X_samples)` when Y sampling is not requested
+- `(rho, Z_samples, X_samples, Y_samples)` when the model or `measure_y=true`
+  requests Y sampling
 """
 function sample_quantum_channel(gates, row, nqubits; conv_step=1000, samples=10000,
-                                model::AbstractModel=TFIM())
+                                model::AbstractModel=TFIM(), measure_y=nothing)
     remaining_qubits = (nqubits - 1) ÷ 2
     fixed_qubits     = (nqubits + 1) ÷ 2
     n_env            = remaining_qubits * (row + 1)
@@ -38,7 +40,7 @@ function sample_quantum_channel(gates, row, nqubits; conv_step=1000, samples=100
     SdagH_block = put(total_qubits, 1 => chain(Yao.shift(-π/2), H))
 
     rho = zero_state(n_env)
-    need_y = needs_y_measurement(model)
+    need_y = isnothing(measure_y) ? needs_y_measurement(model) : Bool(measure_y)
 
     Z_samples = Float64[]
     X_samples = Float64[]
@@ -101,7 +103,7 @@ function sample_quantum_channel(gates_odd::Vector{<:AbstractMatrix},
                                  gates_even::Vector{<:AbstractMatrix},
                                  row, nqubits;
                                  conv_step=100, samples=10000,
-                                 model::AbstractModel=TFIM())
+                                 model::AbstractModel=TFIM(), measure_y=nothing)
     remaining_qubits = (nqubits - 1) ÷ 2
     fixed_qubits     = (nqubits + 1) ÷ 2
     n_env            = remaining_qubits * (row + 1)
@@ -125,7 +127,7 @@ function sample_quantum_channel(gates_odd::Vector{<:AbstractMatrix},
     SdagH_block = put(total_qubits, 1 => chain(Yao.shift(-π/2), H))
 
     rho = zero_state(n_env)
-    need_y = needs_y_measurement(model)
+    need_y = isnothing(measure_y) ? needs_y_measurement(model) : Bool(measure_y)
 
     Z_samples = Float64[]
     X_samples = Float64[]

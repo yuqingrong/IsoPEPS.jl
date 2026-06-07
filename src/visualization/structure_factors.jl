@@ -25,16 +25,23 @@ function plot_dimer_structure_factor(filename::String;
                                      use_exact::Bool=true,
                                      conv_step::Int=1000,
                                      samples::Int=100000,
+                                     samples_file::Union{Nothing,String}=nothing,
                                      save_path=nothing)
 
-    result, input_args = load_result(filename)
-    params = result isa ExactOptimizationResult ? result.params : result.final_params
-    _p = input_args[:p]
-    _row = input_args[:row]
-    _nqubits = input_args[:nqubits]
-    share_params = get(input_args, :share_params, true)
-    structure = get(input_args, :structure, nothing)
-    is_2x2 = endswith(filename, "_2x2.json")
+    if use_exact || isnothing(samples_file)
+        result, input_args = load_result(filename)
+        params = result isa ExactOptimizationResult ? result.params : result.final_params
+        _p = input_args[:p]
+        _row = input_args[:row]
+        _nqubits = input_args[:nqubits]
+        share_params = get(input_args, :share_params, true)
+        structure = get(input_args, :structure, nothing)
+        is_2x2 = endswith(filename, "_2x2.json")
+    else
+        sf_data = load_results(samples_file)
+        _row = Int(sf_data["row"])
+        _p = 0; _nqubits = 0
+    end
 
     qvals = range(0.0, 2Float64(π), length=nq)
     SD = zeros(nq, nq)
@@ -200,13 +207,20 @@ function plot_dimer_structure_factor(filename::String;
             end
         end
     else
-        resample_result = resample_circuit(filename; conv_step=conv_step,
-                                            samples=samples, measure_y=true)
-        isnothing(resample_result) && error("Resampling failed for $filename")
-        _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
-        Z_vec = _discard_burnin(Z_samples, _row, conv_step; requested_samples=samples)
-        X_vec = _discard_burnin(X_samples, _row, conv_step; requested_samples=samples)
-        Y_vec = _discard_burnin(Y_samples, _row, conv_step; requested_samples=samples)
+        if !isnothing(samples_file)
+            X_all, Z_all, Y_all = _load_samples_from_file(samples_file, _row)
+            X_vec = _discard_burnin(X_all, _row, 0; requested_samples=samples)
+            Z_vec = _discard_burnin(Z_all, _row, 0; requested_samples=samples)
+            Y_vec = _discard_burnin(Y_all, _row, 0; requested_samples=samples)
+        else
+            resample_result = resample_circuit(filename; conv_step=conv_step,
+                                                samples=samples, measure_y=true)
+            isnothing(resample_result) && error("Resampling failed for $filename")
+            _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
+            Z_vec = _discard_burnin(Z_samples, _row, conv_step; requested_samples=samples)
+            X_vec = _discard_burnin(X_samples, _row, conv_step; requested_samples=samples)
+            Y_vec = _discard_burnin(Y_samples, _row, conv_step; requested_samples=samples)
+        end
 
         # Precompute dimer values matrix once
         println("Precomputing dimer values from samples...")
@@ -327,18 +341,25 @@ function plot_spin_structure_factor(filename::String;
                                     use_exact::Bool=true,
                                     conv_step::Int=1000,
                                     samples::Int=100000,
+                                    samples_file::Union{Nothing,String}=nothing,
                                     J2::Float64=0.0,
                                     D::Int=2,
                                     save_path=nothing)
 
-    result, input_args = load_result(filename)
-    params = result isa ExactOptimizationResult ? result.params : result.final_params
-    _p = input_args[:p]
-    _row = input_args[:row]
-    _nqubits = input_args[:nqubits]
-    share_params = get(input_args, :share_params, true)
-    structure = get(input_args, :structure, nothing)
-    is_2x2 = endswith(filename, "_2x2.json")
+    if use_exact || isnothing(samples_file)
+        result, input_args = load_result(filename)
+        params = result isa ExactOptimizationResult ? result.params : result.final_params
+        _p = input_args[:p]
+        _row = input_args[:row]
+        _nqubits = input_args[:nqubits]
+        share_params = get(input_args, :share_params, true)
+        structure = get(input_args, :structure, nothing)
+        is_2x2 = endswith(filename, "_2x2.json")
+    else
+        sf_data = load_results(samples_file)
+        _row = Int(sf_data["row"])
+        _p = 0; _nqubits = 0
+    end
 
     qvals = range(0.0, 2Float64(π), length=nq)
     SSS = zeros(nq, nq)
@@ -367,13 +388,20 @@ function plot_spin_structure_factor(filename::String;
         end
         println()
     else
-        resample_result = resample_circuit(filename; conv_step=conv_step,
-                                            samples=samples, measure_y=true)
-        isnothing(resample_result) && error("Resampling failed for $filename")
-        _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
-        Z_vec = _discard_burnin(Z_samples, _row, conv_step; requested_samples=samples)
-        X_vec = _discard_burnin(X_samples, _row, conv_step; requested_samples=samples)
-        Y_vec = _discard_burnin(Y_samples, _row, conv_step; requested_samples=samples)
+        if !isnothing(samples_file)
+            X_all, Z_all, Y_all = _load_samples_from_file(samples_file, _row)
+            X_vec = _discard_burnin(X_all, _row, 0; requested_samples=samples)
+            Z_vec = _discard_burnin(Z_all, _row, 0; requested_samples=samples)
+            Y_vec = _discard_burnin(Y_all, _row, 0; requested_samples=samples)
+        else
+            resample_result = resample_circuit(filename; conv_step=conv_step,
+                                                samples=samples, measure_y=true)
+            isnothing(resample_result) && error("Resampling failed for $filename")
+            _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
+            Z_vec = _discard_burnin(Z_samples, _row, conv_step; requested_samples=samples)
+            X_vec = _discard_burnin(X_samples, _row, conv_step; requested_samples=samples)
+            Y_vec = _discard_burnin(Y_samples, _row, conv_step; requested_samples=samples)
+        end
 
         for (i, qx) in enumerate(qvals)
             for (j, qy) in enumerate(qvals)
@@ -441,14 +469,25 @@ function save_combined_structure_factor_data(output_file::String,
         dimer_orientation::Symbol=:vertical,
         use_exact::Bool=true,
         conv_step::Int=1000,
-        samples::Int=100000)
+        samples::Int=100000,
+        samples_files::Union{Nothing,Dict{Float64,String}}=nothing)
 
     n = length(J2_values)
-    spin_matrices = Vector{Matrix{Float64}}(undef, n)
-    dimer_matrices = Vector{Matrix{Float64}}(undef, n)
-    filenames = Vector{String}(undef, n)
+    spin_matrices = Matrix{Float64}[]
+    dimer_matrices = Matrix{Float64}[]
+    found_J2_values = Float64[]
+    filenames = String[]
+    samples_file_for = String[]
 
-    for (idx, val) in enumerate(J2_values)
+    for val in J2_values
+        sf = isnothing(samples_files) ? nothing : get(samples_files, val, nothing)
+        if !use_exact && !isnothing(sf)
+            push!(found_J2_values, val)
+            push!(filenames, "")
+            push!(samples_file_for, sf)
+            println("J2=$val  →  samples from $(basename(sf))")
+            continue
+        end
         candidates = [
             joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json"),
             joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
@@ -457,33 +496,39 @@ function save_combined_structure_factor_data(output_file::String,
         ]
         found = ""
         for c in candidates
-            if isfile(c)
-                found = c
-                break
-            end
+            isfile(c) && (found = c; break)
         end
-        isempty(found) && error("No file found for J2=$val, tried $(length(candidates)) patterns")
-        filenames[idx] = found
+        if isempty(found)
+            use_exact ? error("No file found for J2=$val, tried $(length(candidates)) patterns") :
+                        (@warn "No file found for J2=$val, skipping"; continue)
+        end
+        push!(found_J2_values, val)
+        push!(filenames, found)
+        push!(samples_file_for, something(sf, ""))
         println("J2=$val  →  $(basename(found))")
     end
 
-    for idx in 1:n
-        println("\n--- Computing spin structure factor for J2=$(J2_values[idx]) ---")
+    for (idx, val) in enumerate(found_J2_values)
+        sf = isempty(samples_file_for[idx]) ? nothing : samples_file_for[idx]
+
+        println("\n--- Computing spin structure factor for J2=$val ---")
         _, SSS = plot_spin_structure_factor(filenames[idx];
                     nq=nq, max_separation=max_separation_spin,
-                    use_exact=use_exact, conv_step=conv_step, samples=samples)
-        spin_matrices[idx] = SSS
+                    use_exact=use_exact, conv_step=conv_step, samples=samples,
+                    samples_file=sf)
+        push!(spin_matrices, SSS)
 
-        println("\n--- Computing dimer structure factor for J2=$(J2_values[idx]) ---")
+        println("\n--- Computing dimer structure factor for J2=$val ---")
         _, SD = plot_dimer_structure_factor(filenames[idx];
                     nq=nq, dimer_orientation=dimer_orientation,
                     max_separation=max_separation_dimer,
-                    use_exact=use_exact, conv_step=conv_step, samples=samples)
-        dimer_matrices[idx] = SD
+                    use_exact=use_exact, conv_step=conv_step, samples=samples,
+                    samples_file=sf)
+        push!(dimer_matrices, SD)
     end
 
     save_results(output_file;
-        J2_values=J2_values,
+        J2_values=found_J2_values,
         nq=nq,
         use_exact=use_exact,
         spin_matrices=[collect(eachcol(m)) for m in spin_matrices],

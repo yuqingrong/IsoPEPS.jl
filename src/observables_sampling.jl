@@ -34,6 +34,24 @@ function _discard_burnin(samples::AbstractVector, row::Int, conv_step::Int;
     return collect(@view samples[burnin+1:burnin+usable])
 end
 
+# Load pre-computed samples from a multi-chain JSON file.
+# Applies per-chain burn-in removal (using the file's own conv_step), then concatenates.
+function _load_samples_from_file(path::String, row::Int)
+    data = load_results(path)
+    file_conv_step = Int(data["conv_step"])
+    X_chains = [Float64.(c) for c in data["X_samples"]]
+    Z_chains = [Float64.(c) for c in data["Z_samples"]]
+    X_vec = reduce(vcat, [_discard_burnin(c, row, file_conv_step) for c in X_chains])
+    Z_vec = reduce(vcat, [_discard_burnin(c, row, file_conv_step) for c in Z_chains])
+    if haskey(data, "Y_samples")
+        Y_chains = [Float64.(c) for c in data["Y_samples"]]
+        Y_vec = reduce(vcat, [_discard_burnin(c, row, file_conv_step) for c in Y_chains])
+        return (X_vec, Z_vec, Y_vec)
+    else
+        return (X_vec, Z_vec, nothing)
+    end
+end
+
 # =============================================================================
 # Section 2: Core expect API for samples
 # =============================================================================
@@ -869,17 +887,19 @@ function resample_circuit(filename::String; conv_step=100, samples=1000000, meas
 
     # Run the quantum channel to generate new samples
     println("\nGenerating new samples...")
-    need_y = needs_y_measurement(m)
+    need_y = measure_y || needs_y_measurement(m)
     if is_two_by_two
         channel_result = sample_quantum_channel(gates_odd, gates_even, row, nqubits;
                                                 conv_step=conv_step,
                                                 samples=samples,
-                                                model=m)
+                                                model=m,
+                                                measure_y=need_y)
     else
         channel_result = sample_quantum_channel(gates, row, nqubits;
                                                 conv_step=conv_step,
                                                 samples=samples,
-                                                model=m)
+                                                model=m,
+                                                measure_y=need_y)
     end
 
     if need_y
@@ -891,6 +911,118 @@ function resample_circuit(filename::String; conv_step=100, samples=1000000, meas
         println("Generated $(length(Z_samples)) Z samples and $(length(X_samples)) X samples")
         return rho, Z_samples, X_samples, params, (is_two_by_two ? (gates_odd, gates_even) : gates)
     end
+end
+
+"""
+    save_finite_cylinder_samples(source_file, output_file; Lx, n_chains, conv_step, measure_y)
+
+Generate and save multiple independent sample chains from a trained circuit to a JSON file.
+
+Each chain runs the quantum channel for `Lx` steps (column sweeps), producing `Lx × row`
+measurements per basis. The `conv_step` value is stored as metadata so that
+`_load_samples_from_file` can remove the burn-in period from the start of each chain
+when the file is later loaded.
+
+# Arguments
+- `source_file`: Path to a `CircuitOptimizationResult` JSON
+- `output_file`: Path to write the samples JSON
+- `Lx`: Total number of column steps per chain (includes burn-in period); default 10000
+- `n_chains`: Number of independent chains to generate; default 100
+- `conv_step`: Number of steps at the start of each chain treated as burn-in; default 400
+- `measure_y`: Force Y-basis measurements (default: inferred from model)
+"""
+function save_finite_cylinder_samples(source_file::String, output_file::String;
+                                       Lx::Int=10000,
+                                       n_chains::Int=100,
+                                       conv_step::Int=400,
+                                       measure_y::Bool=false)
+    result, input_args = load_result(source_file)
+    result isa CircuitOptimizationResult ||
+        error("Source file must contain a CircuitOptimizationResult, got $(typeof(result))")
+
+    params     = result.final_params
+    p          = input_args[:p]
+    row        = input_args[:row]
+    nqubits    = input_args[:nqubits]
+    share_params = get(input_args, :share_params, true)
+    structure    = get(input_args, :structure, nothing)
+
+    model_str = get(input_args, :model, "tfim")
+    m = _construct_model(model_str,
+            Dict{Symbol,Any}(k => v for (k, v) in input_args
+                             if k in (:J, :g, :J1, :J2)))
+    need_y = measure_y || needs_y_measurement(m)
+
+    is_two_by_two = (model_str == "heisenberg_j1j2") &&
+        (length(params) == gate_parameter_count(p, nqubits; unit_cell=:two_by_two))
+
+    if is_two_by_two
+        gates_odd, gates_even = build_unitary_gate_2x2(params, p, row, nqubits)
+    else
+        gates = build_unitary_gate(params, p, row, nqubits;
+                                   share_params=share_params, structure=structure)
+    end
+
+    println("=== Generating Samples ===")
+    println("Source : $(basename(source_file))")
+    println("Config : row=$row, nqubits=$nqubits, p=$p")
+    println("Chains : n_chains=$n_chains, Lx=$Lx, conv_step=$conv_step")
+    println("Measure Y: $need_y")
+
+    # Lx steps × row sites = total measurements per chain (burn-in included).
+    # Pass conv_step=0 so sample_quantum_channel treats the full run as measurements;
+    # we store the burn-in length as metadata for _load_samples_from_file.
+    samples_per_chain = Lx * row
+
+    X_chains = Vector{Vector{Float64}}(undef, n_chains)
+    Z_chains = Vector{Vector{Float64}}(undef, n_chains)
+    Y_chains = need_y ? Vector{Vector{Float64}}(undef, n_chains) : nothing
+
+    for i in 1:n_chains
+        print("\rChain $i/$n_chains...")
+        if is_two_by_two
+            ch = sample_quantum_channel(gates_odd, gates_even, row, nqubits;
+                                        conv_step=0, samples=samples_per_chain,
+                                        model=m, measure_y=need_y)
+        else
+            ch = sample_quantum_channel(gates, row, nqubits;
+                                        conv_step=0, samples=samples_per_chain,
+                                        model=m, measure_y=need_y)
+        end
+        if need_y
+            _, Z, X, Y = ch
+            Z_chains[i] = Z; X_chains[i] = X; Y_chains[i] = Y
+        else
+            _, Z, X = ch
+            Z_chains[i] = Z; X_chains[i] = X
+        end
+    end
+    println()
+
+    save_data = Dict{String,Any}(
+        "sample_layout" => "chains_flat_column_major",
+        "row"           => row,
+        "Lx"            => Lx,
+        "conv_step"     => conv_step,
+        "n_chains"      => n_chains,
+        "model"         => model_str,
+        "J1"            => get(input_args, :J1, get(input_args, :J, nothing)),
+        "J2"            => get(input_args, :J2, nothing),
+        "g"             => get(input_args, :g, nothing),
+        "J"             => get(input_args, :J, nothing),
+        "measure_y"     => need_y,
+        "source_file"   => source_file,
+        "X_samples"     => X_chains,
+        "Z_samples"     => Z_chains,
+    )
+    need_y && (save_data["Y_samples"] = Y_chains)
+
+    mkpath(dirname(abspath(output_file)))
+    open(output_file, "w") do io
+        JSON3.pretty(io, save_data)
+    end
+    println("Saved $n_chains chains (Lx=$Lx, row=$row) → $output_file")
+    return save_data
 end
 
 """

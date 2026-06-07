@@ -1585,7 +1585,8 @@ function save_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
                        max_separation::Int=20,
                        conv_step=100, samples=1000000,
                        n_bootstrap::Int=200,
-                       bootstrap_block_cols::Union{Nothing,Int}=nothing)
+                       bootstrap_block_cols::Union{Nothing,Int}=nothing,
+                       samples_files::Union{Nothing,Dict{Float64,String}}=nothing)
     method in (:exact, :sampling) || error("method must be :exact or :sampling")
     method == :sampling && n_bootstrap < 2 &&
         throw(ArgumentError("n_bootstrap must be at least 2"))
@@ -1648,16 +1649,24 @@ function save_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
             m2_stripe     = magnetic_order_squared(op, q1; max_separation=max_separation)
             m2_stripe_0pi = magnetic_order_squared(op, q2; max_separation=max_separation)
         else
-            resample_result = resample_circuit(filename; conv_step=conv_step,
-                                               samples=samples, measure_y=true)
-            if isnothing(resample_result)
-                @warn "Resampling failed for J2=$val, skipping"
-                continue
+            sf = isnothing(samples_files) ? nothing : get(samples_files, val, nothing)
+            if !isnothing(sf)
+                X_all, Z_all, Y_all = _load_samples_from_file(sf, row)
+                Z_vec = _discard_burnin(Z_all, row, 0; requested_samples=samples)
+                X_vec = _discard_burnin(X_all, row, 0; requested_samples=samples)
+                Y_vec = _discard_burnin(Y_all, row, 0; requested_samples=samples)
+            else
+                resample_result = resample_circuit(filename; conv_step=conv_step,
+                                                   samples=samples, measure_y=true)
+                if isnothing(resample_result)
+                    @warn "Resampling failed for J2=$val, skipping"
+                    continue
+                end
+                _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
+                Z_vec = _discard_burnin(Z_samples, row, conv_step; requested_samples=samples)
+                X_vec = _discard_burnin(X_samples, row, conv_step; requested_samples=samples)
+                Y_vec = _discard_burnin(Y_samples, row, conv_step; requested_samples=samples)
             end
-            _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
-            Z_vec = _discard_burnin(Z_samples, row, conv_step; requested_samples=samples)
-            X_vec = _discard_burnin(X_samples, row, conv_step; requested_samples=samples)
-            Y_vec = _discard_burnin(Y_samples, row, conv_step; requested_samples=samples)
 
             ncols = _n_cols(X_vec, row)
             _n_cols(Z_vec, row) == ncols && _n_cols(Y_vec, row) == ncols ||

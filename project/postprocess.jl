@@ -109,30 +109,10 @@ datafile = joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqub
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile, dmrg_bulk_file="project/results/dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json")
 
-fig, data = plot_M2_vs_J2(                                                                                                                    
-      data_dir,           # directory with saved JSON result files
-      [0.0];   # J2 values to scan                                                                                          
-      J1=1.0, row=4, nqubits=3, p=3,                    
-      samples=1000000,
-      max_separation=10,
-      save_path="project/results/figures/M2_vs_J2.pdf"  # optional
-  )
-display(fig)
-
-save_M2_vs_J2("project/results", [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57,0.58,0.59,0.6,0.7,0.8,0.9,1.0];                                                                              
-                method=:exact, output_file="project/results/M2_exact.json",                                                                     
-                row=4, nqubits=3, p=3, max_separation=20) 
-
-J2_values = Float64[
-                    0.0, 0.1, 0.2, 0.3, 0.4, 0.5,
-                    0.51, 0.52, 0.53, 0.54, 0.55, 0.56,
-                    0.57, 0.58, 0.59, 0.6, 0.7, 0.8, 0.9, 1.0
-                ]
-                
-save_M2_vs_J2(
-                    "project/results",
+# M^2(q)
+save_M2_vs_J2(      "project/results",
                     J2_values;
-                    method=:sampling,
+                    method=:sampling,  # sampling or exact
                     output_file="project/results/M2_sampling.json",
                     row=4,
                     nqubits=3,
@@ -142,118 +122,65 @@ save_M2_vs_J2(
                     samples=1000000,
                     n_bootstrap=200,
                 ) 
-
 plot_M2_comparison(
                 sampling_file="project/results/M2_sampling.json",
                 save_path="project/results/figures/M2_comparison.pdf",
                 show_errorbars=false)   
 
-                J2_values = Float64[
-                    0.0, 0.1, 0.2, 0.3, 0.4, 0.5,
-                    0.51, 0.52, 0.53, 0.54, 0.55, 0.56,
-                    0.57, 0.58, 0.59, 0.6, 0.7, 0.8, 0.9, 1.0
-                ]
-                
-                save_M2_vs_J2(
-                    "project/results",
-                    J2_values;
-                    method=:sampling,
-                    output_file="project/results/M2_sampling.json",
-                    row=4,
-                    nqubits=3,
-                    p=3,
-                    max_separation=20,
-                    conv_step=100,
-                    samples=1_000_000,
-                    n_bootstrap=200,
-                )
-# Combined spin + dimer structure factor panel (J2 = 0.0, 0.5, 1.0)
-fig, spin_mats, dimer_mats = plot_combined_structure_factors(
+# structure factor
+save_combined_structure_factor_data("sf.json", "project/results/heisenberg", [0.0, 0.5, 1.0];
+      use_exact=false, max_separation_spin=10, max_separation_dimer=10,
+      samples_files=Dict(
+          0.0 => "project/results/heisenberg/samples_heisenberg_J2=0.0.json",
+          0.5 => "project/results/heisenberg/samples_heisenberg_J2=0.5.json",
+          1.0 => "project/results/heisenberg/samples_heisenberg_J2=1.0.json",
+      ))
+ fig, _, _ = plot_combined_structure_factors(
     "project/results", [0.0, 0.5, 1.0];
-    row=4, p=3, nqubits=3, nq=50,
-    max_separation_spin=10, max_separation_dimer=10,
-    use_exact=true,
+    data_file="sf.json",
     save_path="project/results/figures/structure_factors_combined.pdf"
 )
-display(fig)
 
+# spin-spin correlation
 fig, data = plot_bond_energy_pattern("project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.0_row=4_p=3_nqubits=3_2x2.json";
       use_exact=true, save_path="project/results/figures/bond_energy——exact.pdf")
 
 fig, data = plot_bond_energy_pattern("project/results/circuit_heisenberg_j1j2_J1=1.0_J2=1.0_row=4_p=3_nqubits=3_2x2.json";
       use_exact=false,
       samples=1000000,
-      conv_step=100,
+      conv_step=100, 
       save_path="project/results/figures/bond_energy_sampling.pdf"
     )
-display(fig)
 
-# Save the heavy computation once:
-save_combined_structure_factor_data(
-     "project/results/structure_factors_sampling.json",
-     "project/results", [0.0, 0.5, 1.0];
-     use_exact=false, conv_step=100, samples=1000000
- )
-
-# Re-plot from saved data without recomputing:
-fig, _, _ = plot_combined_structure_factors(
-      "project/results", [0.0, 0.5, 1.0];
-      data_file="project/results/structure_factors_sampling.json",
-      save_path="project/results/figures/structure_factors_combined.pdf"
-  )
- display(fig)
-
-# Reconstruct gates and analyze
+# energy vs g
 plot_energy_error_vs_g("project/results_tfim_abc", [2.0,3.0,4.0];                            
       model="tfim",                                              
       J=1.0, row=3, p=3, nqubits=3,                        
-      energy_source=:computed,
+      energy_source=:computed, # computed or resampled
       conv_step=300,
       samples=3000000,
       dmrg_file="project/results/dmrg_bulk_tfim_Ly3_D2_gscan.json",save_path="project/results/figures/tfim_energy_vs_g.pdf")
     
- fig, data = plot_energy_error_vs_g("project/results", [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0];
-      model="tfim",
-      J=1.0,
-      row=3,
-      p=3,
-      nqubits=3,
-      energy_source=:resampled,
-      conv_step=102,
-      samples=30000,
-      resample_repeats=30,
-      dmrg_file=[
-          (file="project/results/dmrg_bulk_tfim_Ly3_D2_gscan.json", label="DMRG(W=3,D=2)"),
-          (file="project/results/dmrg_bulk_tfim_Ly3_D4_gscan.json", label="DMRG(W=3,D=4)"),
-      ],
-      circuit_series=[
-          (
-              label="IsoPEPS qubits=5",
-              nqubits=5,
-              suffixes=["_1x1_6w"],
-              energy_source=:resampled,
-          ),
-      ],
-      save_path="project/results/figures/tfim_energy_error_nq3_nq5.pdf",
-  )
-
+      
+# variance vs samples
 ns, vars, errs = compute_variance_vs_samples(
-        "project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json",
+        "project/results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json",
         [1000, 2000, 3000, 4000,5000,6000, 7000,8000,9000, 10000,20000,30000,40000,50000,60000,70000,80000,90000,100000];
         conv_step=100, n_bootstrap=200,
-        save_path="project/results/heisenberg_variance_vs_samples.json"   # optional
+        save_path="project/results/heisenberg/heisenberg_variance_vs_samples.json"   # optional
     )
-# Step 2 — plot
-fig = plot_variance_vs_samples(ns, vars; errors=errs,
-              save_path="project/results/figures/heisenberg_variance_vs_samples_J2=.pdf")
 
-fig, E_mat = plot_energy_vs_inv_samples(
+fig = plot_variance_vs_samples(ns, vars; errors=errs,
+              save_path="project/results/figures/heisenberg_variance_vs_samples_J2=0.5.pdf")
+
+ fig, E_mat = plot_energy_vs_inv_samples(
                 "project/results/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json",
                 [1000, 2000, 3000, 4000,5000,6000, 7000,8000,9000, 10000,20000,30000,40000,50000,60000,70000,80000,90000,100000];
                 conv_step=100, n_bootstrap=200,
                 save_path="project/results/figures/tfim_energy_vs_inv_samples_g=3.0.pdf")
                 # total_samples defaults to 20 * 10000 * 4 = 800_000 spins → ~200_000 columns pool
 
+# correlation and magnetization
 fig, data = plot_connected_corr_vs_g(
                     "project/results",
                     [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0];
@@ -261,24 +188,20 @@ fig, data = plot_connected_corr_vs_g(
                     use_exact=true,
                     save_path="project/results/figures/NNconnected_corr_vs_g.pdf")
 
+plot_correlation_vs_g(data_dir, [2.0, 3.0];row=3, nqubits=5,p=2,dmrg_file=joinpath(data_dir,"dmrg_bulk_tfim_Ly3_D2_gscan.json"),pepskit_file=referfile, g_c=3.04,
+                    spectrum_krylovdim=200,
+                    spectrum_tol=1e-7,
+                    spectrum_maxiter=2000,
+                    save_path="project/results/figures/corr_length_vs_g_row=3.pdf")
+
+plot_correlation_vs_J2("project/results", [0.0, 0.1, 0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0];
+                    row=4, dmrg_file="project/results/dmrg_j1j2_100x4_D=2.json")       
 fig, data = plot_magnetization_vs_g(
     "project/results",
     [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0];
     J=1.0, row=3, p=3, nqubits=3,
     conv_step=100, samples=40000,
     save_path="project/results/figures/magnetization_vs_g.pdf")
-display(fig)
-                   
- 
-plot_correlation_vs_g(data_dir, [2.0, 3.0];row=3, nqubits=5,p=2,dmrg_file=joinpath(data_dir,"dmrg_bulk_tfim_Ly3_D2_gscan.json"),pepskit_file=referfile, g_c=3.04,
-spectrum_krylovdim=200,
-spectrum_tol=1e-7,
-spectrum_maxiter=2000,
-save_path="project/results/figures/corr_length_vs_g_row=3.pdf")
-
-fig, data = plot_correlation_vs_J2("project/results", [0.0, 0.1, 0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0];
-row=4, dmrg_file="project/results/dmrg_j1j2_100x4_D=2.json")
-display(fig)
 
 fig, data = plot_correlation_function(datafile;
                                    max_separation=14,
@@ -286,6 +209,7 @@ fig, data = plot_correlation_function(datafile;
                                    samples=4000000,
                                    save_path="project/results/figures/correlation_function_heisenberg_2x2_J1=$(J)_J2=0.5.pdf")
 
+# energy dynamic
 fig = plot_energy_dynamics_vs_g("project/results", [0.5, 1.0, 1.5, 2.0, 2.5, 3.0];
 J=1.0, row=3, p=3, nqubits=5,                                                                                                
 M=10000, shots=20, conv_step=0, save_path="project/results/figures/energy_dynamics_vs_g_D=4.pdf")
@@ -309,6 +233,7 @@ fig = plot_local_xz_dynamics_vs_g("project/results", [4.0];
     random_seed=123,
     save_path="project/results/figures/local_xz_dynamics_vs_g_random.pdf")
 
+# circuit and gate structure
 fig = plot_circuit_block(3, 5; save_path="project/results/figures/circuit_block_3x5.pdf")
 display(fig)
 
