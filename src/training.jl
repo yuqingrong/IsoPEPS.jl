@@ -526,7 +526,8 @@ end
 """
     optimize_exact(params, p, row, nqubits; model="tfim", maxiter=5000, abstol=1e-6, model_kwargs...)
 
-Optimize circuit parameters using exact tensor contraction (no sampling noise).
+Optimize circuit parameters using exact tensor contraction and bounded Nelder-Mead
+(no sampling noise).
 
 # Arguments
 - `params`: Initial parameter vector
@@ -536,7 +537,7 @@ Optimize circuit parameters using exact tensor contraction (no sampling noise).
 
 # Keyword Arguments
 - `model`: `"tfim"` or `"heisenberg_j1j2"`
-- `maxiter`: Maximum CMA-ES generations
+- `maxiter`: Maximum objective evaluations
 - `abstol`: Convergence tolerance
 - Model-specific parameters:
   - TFIM: `J` (coupling), `g` (transverse field)
@@ -625,17 +626,19 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
         return real(energy)
     end
 
-    @info "Optimizing with CMA-ES (exact contraction, model=$model_str)"
-
-    f = OptimizationFunction(objective)
-    prob = Optimization.OptimizationProblem(f, params,
-                                             lb=zeros(length(params)),
-                                             ub=fill(2π, length(params)))
+    @info "Optimizing with Nelder-Mead (exact contraction, model=$model_str)"
 
     converged = false
     try
-        sol = solve(prob, CMAEvolutionStrategyOpt(), maxiters=maxiter, abstol=abstol)
-        converged = true
+        sol = Optim.optimize(
+            x -> objective(x, nothing),
+            zeros(length(params)),
+            fill(2π, length(params)),
+            params,
+            Optim.Fminbox(Optim.NelderMead()),
+            Optim.Options(iterations=maxiter, f_abstol=abstol),
+        )
+        converged = Optim.converged(sol)
     catch e
         if occursin("Maximum iterations reached", string(e))
             @info "Optimization stopped at iteration $maxiter"
