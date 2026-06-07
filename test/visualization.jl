@@ -2,7 +2,7 @@ using Test
 using IsoPEPS
 using Random
 using Statistics
-using CairoMakie: Axis, Errorbars, Figure, Legend, Theme, to_color, with_theme
+using CairoMakie: Axis, Errorbars, Figure, Legend, Makie, Scatter, Theme, to_color, with_theme
 
 function write_test_tfim_circuit(path; g=2.0, row=3, p=3, nqubits=3, energy=0.0)
     params = zeros(gate_parameter_count(p, nqubits))
@@ -637,6 +637,14 @@ end
     errors = [0.01, 0.002, 0.001, 0.0002]
     fig2 = plot_variance_vs_samples(samples, variances; errors=errors)
     @test fig2 isa Figure
+
+    styled_fig = plot_variance_vs_samples(samples, variances;
+                                          marker=:diamond, markersize=7)
+    ax = only(filter(content -> content isa Axis, styled_fig.content))
+    scatter = only(filter(plot -> plot isa Scatter, ax.scene.plots))
+    @test scatter.marker[] == Makie.to_spritemarker(:diamond)
+    @test all(==(7), scatter.markersize[])
+    @test scatter.strokewidth[] == 0.5
 end
 
 @testset "Sampled expectations match transfer matrix fixed point" begin

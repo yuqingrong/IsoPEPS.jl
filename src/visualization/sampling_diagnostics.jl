@@ -275,9 +275,17 @@ end
 # plot_variance_vs_samples
 # ============================================================================
 
+"""
+    plot_variance_vs_samples(sample_sizes, variances; kwargs...)
+
+Plot bootstrap variance estimates against sample count on logarithmic axes.
+Use `marker` and `markersize` to customize the data markers.
+"""
 function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::AbstractVector;
                                    errors::Union{AbstractVector,Nothing}=nothing,
                                    fit_scaling::Bool=true,
+                                   marker=:circle,
+                                   markersize::Real=6,
                                    figsize=nothing,
                                    save_path::Union{String,Nothing}=nothing)
 
@@ -300,8 +308,8 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
                        color=:steelblue, whiskerwidth=6, fxaa=false)
         end
         scatter!(ax, ns, vars;
-                 label="bootstrap estimate", color=:steelblue, marker=:circle,
-                 markersize=3, strokewidth=0)
+                 label="bootstrap estimate", color=:steelblue, marker=marker,
+                 markersize=markersize, strokecolor=:black, strokewidth=0.5)
 
         if fit_scaling && length(ns) > 1
             log_N   = log.(ns)
