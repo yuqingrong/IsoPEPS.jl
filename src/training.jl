@@ -582,17 +582,10 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
     gap_history = Float64[]
     eigenvalues_history = Vector{Float64}[]
     current_params = copy(params)
-    iter_count = Ref(0)
+    generation_count = Ref(0)
     converged = false
 
     function objective(x, _)
-        iter_count[] += 1
-
-        if iter_count[] > maxiter
-            @warn "Reached maximum iterations ($maxiter). Stopping..."
-            error("Maximum iterations reached")
-        end
-
         current_params .= x
         push!(params_history, copy(x))
 
@@ -621,31 +614,38 @@ function optimize_exact(params, p::Int, row::Int, nqubits::Int;
         push!(eigenvalues_history, eigenvalues)
         push!(energy_history, real(energy))
 
-        @info "$mlabel $(row)×∞ PEPS (exact) | Iter $(length(energy_history)) | Energy: $(round(energy, digits=6)) | Gap: $(round(gap, digits=4))"
-
         return real(energy)
     end
 
-    @info "Optimizing with Nelder-Mead (exact contraction, model=$model_str)"
+    @info "Optimizing with CMA-ES (exact contraction, model=$model_str)"
 
-    converged = false
-    try
-        sol = Optim.optimize(
-            x -> objective(x, nothing),
-            zeros(length(params)),
-            fill(2π, length(params)),
-            params,
-            Optim.Fminbox(Optim.NelderMead()),
-            Optim.Options(iterations=maxiter, f_abstol=abstol),
-        )
-        converged = Optim.converged(sol)
-    catch e
-        if occursin("Maximum iterations reached", string(e))
-            @info "Optimization stopped at iteration $maxiter"
-        else
-            rethrow(e)
+    actual_popsize = 4 + floor(Int, 3 * log(length(params)))
+
+    function optimization_callback(state, loss_val)
+        if length(energy_history) % actual_popsize == 0 && !isempty(energy_history)
+            generation_count[] += 1
+            if generation_count[] % 10 == 0
+                best_so_far = minimum(energy_history)
+                @info "$mlabel $(row)×∞ PEPS (exact) | Generation $(generation_count[]) | Evals: $(length(energy_history)) | Best: $(round(best_so_far, digits=6))"
+            end
         end
+        return false
     end
+
+    opt_func = OptimizationFunction(objective)
+    prob = OptimizationProblem(opt_func, params, nothing;
+        lb = zeros(length(params)),
+        ub = fill(2π, length(params))
+    )
+    opt_result = solve(
+        prob,
+        CMAEvolutionStrategyOpt(),
+        abstol   = abstol,
+        maxiters = maxiter,
+        callback = optimization_callback,
+    )
+    converged = (opt_result.retcode == :Success || opt_result.retcode == :MaxIters ||
+                 string(opt_result.retcode) == "Success" || string(opt_result.retcode) == "MaxIters")
 
     # Find the best iteration (lowest energy) from history
     best_idx = argmin(energy_history)

@@ -2,7 +2,7 @@ using Test
 using IsoPEPS
 using Random
 using Statistics
-using CairoMakie: Axis, Errorbars, Figure, Legend, Makie, Scatter, Theme, to_color, with_theme
+using CairoMakie: Axis, Colorbar, Errorbars, Figure, Label, Legend, Makie, Scatter, Theme, to_color, with_theme
 
 function write_test_tfim_circuit(path; g=2.0, row=3, p=3, nqubits=3, energy=0.0)
     params = zeros(gate_parameter_count(p, nqubits))
@@ -431,6 +431,15 @@ end
     @test any(plot -> plot.marker[] == :diamond, styled_series)
     @test !any(plot -> plot.marker[] == :xcross, styled_series)
 
+    larger_marker_fig = plot_M2_comparison(sampling_file=sampling_file;
+                                           markersize=6)
+    larger_marker_axes = filter(content -> content isa Axis,
+                                larger_marker_fig.content)
+    larger_marker_series = filter(larger_marker_axes[2].scene.plots) do plot
+        hasproperty(plot, :marker) && hasproperty(plot, :markersize)
+    end
+    @test all(plot -> plot.markersize[] == 6, larger_marker_series)
+
     no_errorbar_fig = plot_M2_comparison(sampling_file=sampling_file;
                                          show_errorbars=false)
     no_errorbar_axes = filter(content -> content isa Axis, no_errorbar_fig.content)
@@ -504,7 +513,65 @@ end
     scatter = only(filter(plot -> plot isa Scatter, ax.scene.plots))
     @test scatter.marker[] == Makie.to_spritemarker(:diamond)
     @test all(==(7), scatter.markersize[])
-    @test scatter.strokewidth[] == 0.5
+    @test scatter.strokewidth[] == 0
+end
+
+@testset "plot_bond_energy_pattern loads saved samples" begin
+    data_dir = mktempdir()
+    samples_file = joinpath(data_dir, "samples.json")
+    chain = ones(8)
+    save_results(samples_file;
+                 row=2,
+                 conv_step=0,
+                 source_file="circuit_heisenberg_J2=0.0_2x2.json",
+                 X_samples=[chain],
+                 Y_samples=[chain],
+                 Z_samples=[chain])
+
+    fig, bond_data = plot_bond_energy_pattern("unused.json";
+                                              use_exact=false,
+                                              samples=8,
+                                              samples_file=samples_file,
+                                              max_cols=4)
+
+    @test fig isa Figure
+    @test size(bond_data[:vertical]) == (2, 4)
+    @test size(bond_data[:horizontal]) == (2, 3)
+    @test all(==(0.75), bond_data[:vertical])
+    @test all(==(0.75), bond_data[:horizontal])
+end
+
+@testset "plot_bond_energy_pattern stacks J2 panels" begin
+    data_dir = mktempdir()
+    chain = ones(8)
+    for J2 in (0.0, 0.5)
+        save_results(joinpath(data_dir, "samples_heisenberg_J2=$J2.json");
+                     row=2,
+                     conv_step=0,
+                     J2=J2,
+                     source_file="circuit_heisenberg_J2=$(J2)_2x2.json",
+                     X_samples=[chain],
+                     Y_samples=[chain],
+                     Z_samples=[chain])
+    end
+
+    fig, patterns = plot_bond_energy_pattern(data_dir, [0.0, 0.5];
+                                             max_cols=4)
+
+    @test fig isa Figure
+    @test sort!(collect(keys(patterns))) == [0.0, 0.5]
+    @test all(==(0.75), patterns[0.0][:vertical])
+    axes = filter(content -> content isa Axis, fig.content)
+    @test length(axes) == 2
+    @test all(ax -> !ax.leftspinevisible[] && !ax.bottomspinevisible[] &&
+                    !ax.xticklabelsvisible[] && !ax.yticklabelsvisible[], axes)
+    panel_labels = filter(content -> content isa Label, fig.content)
+    @test [label.text[] for label in panel_labels] == ["J₂ = 0.0", "J₂ = 0.5"]
+    @test all(label -> label.fontsize[] == IsoPEPS.PAPER_TICKLABELSIZE, panel_labels)
+
+    colorbar = only(filter(content -> content isa Colorbar, fig.content))
+    @test colorbar.vertical[] == false
+    @test colorbar.limits[] == (-0.5, 0.5)
 end
 
 @testset "Sampled expectations match transfer matrix fixed point" begin

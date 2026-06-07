@@ -293,8 +293,9 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
     vars = collect(Float64, variances)
 
     _figsize = isnothing(figsize) ? PAPER_FIGSIZE : figsize
+    variance_theme = merge(Theme(Scatter=(strokewidth=0,)), paper_theme())
 
-    fig = with_theme(paper_theme()) do
+    fig = with_theme(variance_theme) do
         fig = Figure(size=_figsize)
 
         ax = Axis(fig[1, 1];
@@ -305,11 +306,11 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
 
         if !isnothing(errors)
             errorbars!(ax, ns, vars, collect(Float64, errors);
-                       color=:steelblue, whiskerwidth=6, fxaa=false)
+                       color=:steelblue, whiskerwidth=6)
         end
         scatter!(ax, ns, vars;
                  label="bootstrap estimate", color=:steelblue, marker=marker,
-                 markersize=markersize, strokecolor=:black, strokewidth=0.5)
+                 markersize=markersize, strokewidth=0)
 
         if fit_scaling && length(ns) > 1
             log_N   = log.(ns)

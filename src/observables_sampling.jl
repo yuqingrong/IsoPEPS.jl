@@ -34,10 +34,7 @@ function _discard_burnin(samples::AbstractVector, row::Int, conv_step::Int;
     return collect(@view samples[burnin+1:burnin+usable])
 end
 
-# Load pre-computed samples from a multi-chain JSON file.
-# Applies per-chain burn-in removal (using the file's own conv_step), then concatenates.
-function _load_samples_from_file(path::String, row::Int)
-    data = load_results(path)
+function _load_samples(data::AbstractDict, row::Int)
     file_conv_step = Int(data["conv_step"])
     X_chains = [Float64.(c) for c in data["X_samples"]]
     Z_chains = [Float64.(c) for c in data["Z_samples"]]
@@ -50,6 +47,12 @@ function _load_samples_from_file(path::String, row::Int)
     else
         return (X_vec, Z_vec, nothing)
     end
+end
+
+# Load pre-computed samples from a multi-chain JSON file.
+# Applies per-chain burn-in removal (using the file's own conv_step), then concatenates.
+function _load_samples_from_file(path::String, row::Int)
+    return _load_samples(load_results(path), row)
 end
 
 # =============================================================================

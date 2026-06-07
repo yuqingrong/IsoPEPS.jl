@@ -145,10 +145,8 @@ save_combined_structure_factor_data("sf.json", "project/results/heisenberg", [0.
 fig, data = plot_bond_energy_pattern("project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.0_row=4_p=3_nqubits=3_2x2.json";
       use_exact=true, save_path="project/results/figures/bond_energy——exact.pdf")
 
-fig, data = plot_bond_energy_pattern("project/results/circuit_heisenberg_j1j2_J1=1.0_J2=1.0_row=4_p=3_nqubits=3_2x2.json";
+fig, data = plot_bond_energy_pattern("project/results/heisenberg", [0.0, 0.5, 1.0];
       use_exact=false,
-      samples=1000000,
-      conv_step=100, 
       save_path="project/results/figures/bond_energy_sampling.pdf"
     )
 

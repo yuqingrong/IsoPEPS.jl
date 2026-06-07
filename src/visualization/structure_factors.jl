@@ -12,7 +12,9 @@ Brillouin-zone heatmap of the dimer static structure factor S_D(qx, qy).
 - `max_separation`: Max column separation in the structure factor sum
 - `use_exact`: If true, use exact transfer matrix; if false, use sampling
 - `conv_step`: Thermalization steps for sampling (only when `use_exact=false`)
-- `samples`: Number of measurement samples (only when `use_exact=false`)
+- `samples`: Number of stored measurements to use. With `samples_file=nothing`,
+  defaults to 100,000 freshly generated measurements; with a saved sample file,
+  `nothing` uses all stored measurements.
 - `save_path`: Optional path to save the figure
 
 # Returns
@@ -705,8 +707,8 @@ end
 
 """
     plot_bond_energy_pattern(filename; max_cols=10, use_exact=true,
-                             conv_step=1000, samples=100000, title="",
-                             save_path=nothing)
+                             conv_step=1000, samples=nothing,
+                             samples_file=nothing, save_path=nothing)
 
 Visualize bond energies ⟨S_i · S_j⟩ on every nearest-neighbour bond of the
 cylinder lattice. Strong/weak bond alternation directly reveals VBS order.
@@ -717,7 +719,8 @@ cylinder lattice. Strong/weak bond alternation directly reveals VBS order.
 - `use_exact`: If true, use exact transfer matrix; if false, use sampling
 - `conv_step`: Thermalization steps for sampling (only when `use_exact=false`)
 - `samples`: Number of measurement samples (only when `use_exact=false`)
-- `title`: Optional figure title
+- `samples_file`: Optional precomputed multi-chain sample JSON. When provided
+  with `use_exact=false`, load samples directly instead of resampling.
 - `save_path`: Optional path to save the figure
 
 # Returns
@@ -729,18 +732,28 @@ function plot_bond_energy_pattern(filename::String;
                                   max_cols::Int=10,
                                   use_exact::Bool=true,
                                   conv_step::Int=1000,
-                                  samples::Int=100000,
+                                  samples::Union{Nothing,Int}=nothing,
+                                  samples_file::Union{Nothing,String}=nothing,
                                   figsize=nothing,
                                   save_path=nothing)
 
-    result, input_args = load_result(filename)
-    params = result isa ExactOptimizationResult ? result.params : result.final_params
-    _p = input_args[:p]
-    _row = input_args[:row]
-    _nqubits = input_args[:nqubits]
-    share_params = get(input_args, :share_params, true)
-    structure = get(input_args, :structure, nothing)
-    is_2x2 = endswith(filename, "_2x2.json")
+    if use_exact || isnothing(samples_file)
+        result, input_args = load_result(filename)
+        params = result isa ExactOptimizationResult ? result.params : result.final_params
+        _p = input_args[:p]
+        _row = input_args[:row]
+        _nqubits = input_args[:nqubits]
+        share_params = get(input_args, :share_params, true)
+        structure = get(input_args, :structure, nothing)
+        is_2x2 = endswith(filename, "_2x2.json")
+    else
+        sample_data = load_results(samples_file)
+        _row = Int(sample_data["row"])
+        _p = 0
+        _nqubits = 0
+        sample_source = String(get(sample_data, "source_file", filename))
+        is_2x2 = endswith(sample_source, "_2x2.json")
+    end
 
     method_str = use_exact ? "exact" : "sampling"
     println("=== Bond Energy Pattern [$method_str] ===")
@@ -788,19 +801,34 @@ function plot_bond_energy_pattern(filename::String;
 
     else
         # Sampling branch
-        resample_result = resample_circuit(filename; conv_step=conv_step, samples=samples)
-        isnothing(resample_result) && error("Resampling failed for $filename")
-        if length(resample_result) == 6
-            _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
+        if !isnothing(samples_file)
+            X_all, Z_all, Y_all = _load_samples(sample_data, _row)
+            isnothing(Y_all) && throw(ArgumentError(
+                "bond energies require Y_samples in $samples_file"))
+            X_vec = _discard_burnin(X_all, _row, 0; requested_samples=samples)
+            Z_vec = _discard_burnin(Z_all, _row, 0; requested_samples=samples)
+            Y_vec = _discard_burnin(Y_all, _row, 0; requested_samples=samples)
+            println("  Loaded precomputed samples from: $samples_file")
         else
-            _rho, Z_samples, X_samples, _params, _gates = resample_result
-            Y_samples = zeros(length(X_samples))
+            sample_count = something(samples, 100000)
+            resample_result = resample_circuit(filename; conv_step=conv_step,
+                                                samples=sample_count)
+            isnothing(resample_result) && error("Resampling failed for $filename")
+            if length(resample_result) == 6
+                _rho, Z_samples, X_samples, Y_samples, _params, _gates = resample_result
+            else
+                _rho, Z_samples, X_samples, _params, _gates = resample_result
+                Y_samples = zeros(length(X_samples))
+            end
+            Z_vec = _discard_burnin(Z_samples, _row, conv_step;
+                                    requested_samples=sample_count)
+            X_vec = _discard_burnin(X_samples, _row, conv_step;
+                                    requested_samples=sample_count)
+            Y_vec = length(resample_result) == 6 ?
+                _discard_burnin(Y_samples, _row, conv_step;
+                                requested_samples=sample_count) :
+                zeros(length(Z_vec))
         end
-        Z_vec = _discard_burnin(Z_samples, _row, conv_step; requested_samples=samples)
-        X_vec = _discard_burnin(X_samples, _row, conv_step; requested_samples=samples)
-        Y_vec = length(resample_result) == 6 ?
-            _discard_burnin(Y_samples, _row, conv_step; requested_samples=samples) :
-            zeros(length(Z_vec))
 
         dimer_vals_v, dimer_vals_h = _build_all_dimer_values(X_vec, Z_vec, Y_vec, _row)
 
@@ -954,4 +982,213 @@ function plot_bond_energy_pattern(filename::String;
 
     bond_data = Dict(:vertical => vert_tiled, :horizontal => horiz_tiled)
     return (fig, bond_data)
+end
+
+function _sampled_bond_energy_data(samples_file::String;
+                                   max_cols::Int,
+                                   samples::Union{Nothing,Int}=nothing)
+    sample_data = load_results(samples_file)
+    row = Int(sample_data["row"])
+    source_file = String(get(sample_data, "source_file", samples_file))
+    N_uc = endswith(source_file, "_2x2.json") ? 2 : 1
+
+    X_all, Z_all, Y_all = _load_samples(sample_data, row)
+    isnothing(Y_all) && throw(ArgumentError(
+        "bond energies require Y_samples in $samples_file"))
+    X_vec = _discard_burnin(X_all, row, 0; requested_samples=samples)
+    Z_vec = _discard_burnin(Z_all, row, 0; requested_samples=samples)
+    Y_vec = _discard_burnin(Y_all, row, 0; requested_samples=samples)
+
+    dimer_vals_v, dimer_vals_h = _build_all_dimer_values(X_vec, Z_vec, Y_vec, row)
+    ncols_v = size(dimer_vals_v, 2)
+    ncols_h = size(dimer_vals_h, 2)
+    ncols_v >= N_uc || throw(ArgumentError(
+        "not enough complete columns in $samples_file for a $N_uc-column unit cell"))
+
+    vert_uc = zeros(Float64, row, N_uc)
+    for pos in 1:row, c in 1:N_uc
+        vert_uc[pos, c] = mean(dimer_vals_v[pos, c:N_uc:ncols_v])
+    end
+
+    if N_uc == 1
+        horiz_uc = zeros(Float64, row, 0)
+        horiz_inter = [mean(dimer_vals_h[pos, :]) for pos in 1:row]
+    else
+        ncols_h >= 2 || throw(ArgumentError(
+            "not enough horizontal bonds in $samples_file for a 2-column unit cell"))
+        horiz_uc = zeros(Float64, row, 1)
+        horiz_inter = zeros(Float64, row)
+        for pos in 1:row
+            horiz_uc[pos, 1] = mean(dimer_vals_h[pos, 1:2:ncols_h])
+            horiz_inter[pos] = mean(dimer_vals_h[pos, 2:2:ncols_h])
+        end
+    end
+
+    vert_tiled = zeros(Float64, row, max_cols)
+    for col in 1:max_cols, pos in 1:row
+        vert_tiled[pos, col] = vert_uc[pos, mod1(col, N_uc)]
+    end
+
+    horiz_tiled = zeros(Float64, row, max_cols - 1)
+    for col in 1:(max_cols - 1), pos in 1:row
+        c_uc = mod1(col, N_uc)
+        c_next_uc = mod1(col + 1, N_uc)
+        if c_next_uc > c_uc && size(horiz_uc, 2) >= c_uc
+            horiz_tiled[pos, col] = horiz_uc[pos, c_uc]
+        else
+            horiz_tiled[pos, col] = horiz_inter[pos]
+        end
+    end
+
+    return Dict(:vertical => vert_tiled, :horizontal => horiz_tiled), row
+end
+
+function _draw_bond_energy_panel!(ax::Axis, bond_data::AbstractDict;
+                                  colorrange=(-0.5, 0.5))
+    vert = bond_data[:vertical]
+    horiz = bond_data[:horizontal]
+    row, max_cols = size(vert)
+    scale = max(abs(colorrange[1]), abs(colorrange[2]))
+
+    for col in 1:max_cols, pos in 1:row
+        pos2 = pos % row + 1
+        val = vert[pos, col]
+        linewidth = 0.8 + 3.0 * clamp(abs(val) / scale, 0.0, 1.0)
+        if pos2 < pos
+            linesegments!(ax, [Float64(col), Float64(col)],
+                          [Float64(pos), Float64(pos) + 0.5];
+                          color=[val, val], colorrange=colorrange,
+                          colormap=:RdBu, linewidth=linewidth)
+            linesegments!(ax, [Float64(col), Float64(col)],
+                          [Float64(pos2) - 0.5, Float64(pos2)];
+                          color=[val, val], colorrange=colorrange,
+                          colormap=:RdBu, linewidth=linewidth)
+        else
+            linesegments!(ax, [Float64(col), Float64(col)],
+                          [Float64(pos), Float64(pos2)];
+                          color=[val, val], colorrange=colorrange,
+                          colormap=:RdBu, linewidth=linewidth)
+        end
+    end
+
+    for col in 1:(max_cols - 1), pos in 1:row
+        val = horiz[pos, col]
+        linewidth = 0.8 + 3.0 * clamp(abs(val) / scale, 0.0, 1.0)
+        linesegments!(ax, [Float64(col), Float64(col + 1)],
+                      [Float64(pos), Float64(pos)];
+                      color=[val, val], colorrange=colorrange,
+                      colormap=:RdBu, linewidth=linewidth)
+    end
+
+    xs = [Float64(col) for col in 1:max_cols for _ in 1:row]
+    ys = [Float64(pos) for _ in 1:max_cols for pos in 1:row]
+    scatter!(ax, xs, ys; color=:gray30, markersize=5, strokewidth=0)
+    xlims!(ax, 0.5, max_cols + 0.5)
+    ylims!(ax, 0.5, row + 0.5)
+    return ax
+end
+
+"""
+    plot_bond_energy_pattern(results_dir, J2_values; use_exact=false,
+                             samples=nothing, samples_files=nothing,
+                             max_cols=10, save_path=nothing)
+
+Plot saved sampling-based bond-energy patterns for several `J2` values in
+vertically stacked panels. All panels use the fixed color scale `[-0.5, 0.5]`
+and share one horizontal colorbar at the bottom.
+
+By default, sample files are inferred as
+`samples_heisenberg_J2=<value>.json` inside `results_dir`. Pass
+`samples_files=Dict(J2 => path, ...)` to override individual paths.
+"""
+function plot_bond_energy_pattern(results_dir::String,
+                                  J2_values::AbstractVector{<:Real};
+                                  max_cols::Int=10,
+                                  use_exact::Bool=false,
+                                  samples::Union{Nothing,Int}=nothing,
+                                  samples_files::Union{Nothing,AbstractDict}=nothing,
+                                  figsize=nothing,
+                                  save_path=nothing)
+    isempty(J2_values) && throw(ArgumentError("J2_values must not be empty"))
+    use_exact && throw(ArgumentError(
+        "the multi-J2 bond pattern currently uses saved sampling data; set use_exact=false"))
+
+    J2 = Float64.(J2_values)
+    patterns = Dict{Float64,Dict{Symbol,Matrix{Float64}}}()
+    rows = Int[]
+
+    for value in J2
+        samples_file = String(if isnothing(samples_files)
+            joinpath(results_dir, "samples_heisenberg_J2=$(value).json")
+        else
+            get(samples_files, value) do
+                throw(ArgumentError("no samples file provided for J2=$value"))
+            end
+        end)
+        isfile(samples_file) || throw(ArgumentError(
+            "samples file not found for J2=$value: $samples_file"))
+
+        println("=== Bond Energy Pattern [sampling, J2=$value] ===")
+        bond_data, row = _sampled_bond_energy_data(samples_file;
+                                                   max_cols=max_cols,
+                                                   samples=samples)
+        patterns[value] = bond_data
+        push!(rows, row)
+        println("  Loaded precomputed samples from: $samples_file")
+    end
+
+    all(==(first(rows)), rows) || throw(ArgumentError(
+        "all sample files must use the same cylinder row count"))
+    row = first(rows)
+    colorrange = (-0.5, 0.5)
+
+    unit = 35
+    default_width = max_cols * unit + 80
+    default_height = length(J2) * (row * unit + 20) + 65
+    figure_size = isnothing(figsize) ? (default_width, default_height) : figsize
+
+    fig = with_theme(paper_theme()) do
+        fig = Figure(size=figure_size)
+
+        for (panel, value) in enumerate(J2)
+            ax = Axis(fig[panel, 1]; aspect=DataAspect())
+            _draw_bond_energy_panel!(ax, patterns[value]; colorrange=colorrange)
+            hidedecorations!(ax)
+            hidespines!(ax)
+            Label(fig[panel, 1], "J₂ = $value";
+                  fontsize=PAPER_TICKLABELSIZE,
+                  font=PAPER_FONT,
+                  halign=:left,
+                  valign=:center,
+                  justification=:right,
+                  width=70,
+                  padding=(0, 0, 0, 0),
+                  tellwidth=false,
+                  tellheight=false)
+            rowsize!(fig.layout, panel, Fixed(row * unit + 10))
+        end
+
+        Colorbar(fig[length(J2) + 1, 1];
+                 colormap=:RdBu,
+                 limits=colorrange,
+                 vertical=false,
+                 label="⟨𝐒ᵢ · 𝐒ⱼ⟩",
+                 labelsize=PAPER_AXIS_LABELSIZE,
+                 ticklabelsize=PAPER_TICKLABELSIZE,
+                 height=12,
+                 width=Relative(0.82),
+                 halign=:center)
+        rowsize!(fig.layout, length(J2) + 1, Fixed(45))
+        rowgap!(fig.layout, 4)
+
+        if !isnothing(save_path)
+            mkpath(dirname(save_path))
+            save(save_path, fig)
+            println("Figure saved to: $save_path")
+        end
+
+        fig
+    end
+
+    return fig, patterns
 end

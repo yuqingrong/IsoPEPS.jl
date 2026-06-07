@@ -1833,6 +1833,8 @@ Each file is a JSON produced by `save_M2_vs_J2` (for exact/sampling) or
   (default: `false`)
 - `show_dmrg`: Overlay the DMRG series when `dmrg_file` is provided (default:
   `false`)
+- `markersize`: Marker size for TN and sampling series (default: `3.4`)
+- `dmrg_markersize`: Marker size for DMRG series (default: `3.6`)
 - `save_path`: Optional path to save the figure
 """
 function plot_M2_comparison(; exact_file::String="",
@@ -1843,6 +1845,8 @@ function plot_M2_comparison(; exact_file::String="",
                               show_errorbars::Bool=true,
                               show_exact::Bool=false,
                               show_dmrg::Bool=false,
+                              markersize::Real=3.4,
+                              dmrg_markersize::Real=3.6,
                               save_path=nothing)
     # M²(π,π) = Néel, M²(0,π) uses key M2_0pi / M2_stripe_0pi
     q_info = [
@@ -1855,9 +1859,12 @@ function plot_M2_comparison(; exact_file::String="",
     # Colors and markers distinguish the two q-points.
     q_colors = [:blue, :orange]
     method_styles = [
-        (key="exact",    label="TN",    linestyle=:solid, markersize=3.4, strokewidth=0.0),
-        (key="sampling", label="",      linestyle=:solid, markersize=3.4, strokewidth=0.0),
-        (key="dmrg",     label="DMRG",  linestyle=:solid, markersize=3.6, strokewidth=0.0),
+        (key="exact",    label="TN",    linestyle=:solid,
+         markersize=Float64(markersize), strokewidth=0.0),
+        (key="sampling", label="",      linestyle=:solid,
+         markersize=Float64(markersize), strokewidth=0.0),
+        (key="dmrg",     label="DMRG",  linestyle=:solid,
+         markersize=Float64(dmrg_markersize), strokewidth=0.0),
     ]
     method_style_by_key = Dict(style.key => style for style in method_styles)
 

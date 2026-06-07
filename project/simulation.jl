@@ -296,11 +296,16 @@ simulation(;
 )
 =#
 
-save_finite_cylinder_samples(
-    "project/results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=1.0_row=4_p=3_nqubits=3_2x2.json",
-    "project/results/heisenberg/samples_heisenberg_J2=1.0.json";
-    Lx=10000,
-    n_chains=100,
-    conv_step=400,
-    measure_y=true,
+structure = :abc                                                                                 
+Random.seed!(123)
+row, p, nqubits = 3, 3, 3
+n_params = gate_parameter_count(p, nqubits; row=row, structure=structure)
+params = rand(n_params)
+
+result = optimize_exact(params, p, row, nqubits;
+    model="tfim", J=1.0, g=2.0,
+    maxiter=3000,
+    abstol=1e-5,
+    structure=structure,
 )
+println("$(structure): energy=$(result.energy), gap=$(result.gap), converged=$(result.converged)")
