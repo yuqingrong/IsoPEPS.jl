@@ -123,6 +123,8 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
                     unit_cell::Symbol=:single,
                     structure::Union{Symbol,String,Nothing}=nothing,
                     resume_checkpoint::Bool=true,
+                    post_select_exact::Bool=false,
+                    post_select_n::Int=15,
                     model_params...)
 
     # Create output directory if it doesn't exist
@@ -222,6 +224,8 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
                                   structure=structure,
                                   checkpoint_file=checkpoint_file,
                                   resume_checkpoint=resume_checkpoint,
+                                  post_select_exact=post_select_exact,
+                                  post_select_n=post_select_n,
                                   model_kw...)
 
         results[i] = result
@@ -245,7 +249,9 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
             :parallel_sampling => parallel_sampling,
             :share_params => share_params, :seed => seed,
             :warm_started_from => warm_val,
-            :warm_started_from_nqubits => warm_from_nqubits
+            :warm_started_from_nqubits => warm_from_nqubits,
+            :post_select_exact => post_select_exact,
+            :post_select_n => post_select_n,
         )
         merge!(input_args, fixed_params)
         save_result(filename, result, input_args)
@@ -296,16 +302,22 @@ simulation(;
 )
 =#
 
-structure = :abc                                                                                 
-Random.seed!(123)
-row, p, nqubits = 3, 3, 3
-n_params = gate_parameter_count(p, nqubits; row=row, structure=structure)
-params = rand(n_params)
-
-result = optimize_exact(params, p, row, nqubits;
-    model="tfim", J=1.0, g=2.0,
+simulation(;
+    model="tfim",
+    scan_param=:g,
+    scan_values=[2.0],
+    J=1.0,
+    row=3, p=3, nqubits=3,
     maxiter=3000,
-    abstol=1e-5,
-    structure=structure,
+    seed=123,
+    verbose=true,
+    output_dir=joinpath(@__DIR__, "results_tfim_abc"),
+    structure=:abc,
+    conv_step=100,
+    samples=10000,
+    n_runs=44,
+    abstol=0.01,
+    unit_cell=:single,
+    post_select_exact=true,
+    post_select_n=15,
 )
-println("$(structure): energy=$(result.energy), gap=$(result.gap), converged=$(result.converged)")
