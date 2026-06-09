@@ -18,6 +18,7 @@ Result from circuit-based optimization using sampling (optimize_circuit).
 """
 struct CircuitOptimizationResult
     energy_history::Vector{Float64}
+    params_history::Vector{Vector{Float64}}
     final_gates::Any
     final_params::Vector{Float64}
     final_cost::Float64
@@ -226,6 +227,8 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
     checkpoint_file::Union{String,Nothing}=nothing,
     checkpoint_every::Int=10,
     resume_checkpoint::Bool=true,
+    post_select_exact::Bool=false,
+    post_select_n::Int=15,
     model_kwargs...)
 
     kw = Dict{Symbol,Any}(model_kwargs)
@@ -472,6 +475,44 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         final_Y_samples = Float64[]
     end
 
+    # Post-selection: re-evaluate top-N candidates with exact contraction
+    if post_select_exact && length(params_history) >= 2
+        virtual_qubits = (nqubits - 1) ÷ 2
+        n_candidates = min(post_select_n, length(energy_history))
+        top_indices = sortperm(energy_history)[1:n_candidates]
+        @info "Post-selecting among $n_candidates candidates using exact contraction..."
+
+        exact_energies = Vector{Float64}(undef, n_candidates)
+        for (k, idx) in enumerate(top_indices)
+            cand_params = params_history[idx]
+            if unit_cell == :two_by_two && model_str == "heisenberg_j1j2"
+                gates_odd, gates_even = build_unitary_gate_2x2(cand_params, p, row, nqubits;
+                                                               active_nqubits=active_nqubits)
+                e, _, _, _ = compute_exact_energy_from_gates(m, gates_odd, row, virtual_qubits;
+                                                              unit_cell=unit_cell, gates_even=gates_even)
+            else
+                cand_gates = build_unitary_gate(cand_params, p, row, nqubits;
+                                                share_params=share_params,
+                                                structure=structure,
+                                                active_nqubits=active_nqubits)
+                e, _, _, _ = compute_exact_energy_from_gates(m, cand_gates, row, virtual_qubits;
+                                                              unit_cell=unit_cell)
+            end
+            exact_energies[k] = real(e)
+        end
+
+        best_exact_k = argmin(exact_energies)
+        best_exact_idx = top_indices[best_exact_k]
+        @info "Post-selection exact energies: min=$(round(minimum(exact_energies), digits=6)), max=$(round(maximum(exact_energies), digits=6))"
+        @info "Post-selected candidate $(best_exact_k)/$(n_candidates): exact energy=$(round(exact_energies[best_exact_k], digits=6)) (sampling estimate=$(round(energy_history[best_exact_idx], digits=6)))"
+
+        final_params = params_history[best_exact_idx]
+        final_cost = energy_history[best_exact_idx]
+        final_Z_samples = Z_samples_history[best_exact_idx]
+        final_X_samples = X_samples_history[best_exact_idx]
+        final_Y_samples = Y_samples_history[best_exact_idx]
+    end
+
     if unit_cell == :two_by_two && model_str == "heisenberg_j1j2"
         final_gates = build_unitary_gate_2x2(final_params, p, row, nqubits;
                                              active_nqubits=active_nqubits)
@@ -484,6 +525,7 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
 
     result = CircuitOptimizationResult(
         energy_history,
+        params_history,
         final_gates,
         final_params,
         final_cost,
@@ -512,6 +554,8 @@ function optimize_circuit(params, p::Int, row::Int, nqubits::Int;
         :total_generations => generation_count[],
         :active_nqubits => active_nqubits,
         :resume_checkpoint => resume_checkpoint,
+        :post_select_exact => post_select_exact,
+        :post_select_n => post_select_n,
     )
     merge!(input_args, Dict{Symbol,Any}(model_kwargs))
 

@@ -32,6 +32,7 @@ function save_result(filename::String, result::CircuitOptimizationResult, input_
     data = Dict{Symbol, Any}(
         :type => "CircuitOptimizationResult",
         :energy_history => result.energy_history,
+        :params_history => result.params_history,
         :params => result.final_params,
         :energy => result.final_cost,
         :converged => result.converged,
@@ -189,6 +190,7 @@ function load_result(filename::String; result_type::Symbol=:auto)
         Y_samples_data = get(data, "Y_samples", get(data, :Y_samples, nothing))
 
         energy_history = get_data(data, :energy_history)
+        params_history_data = get_data(data, :params_history)
         params = get_data(data, :params)
         energy = get_data(data, :energy)
         converged = get_data(data, :converged)
@@ -200,8 +202,16 @@ function load_result(filename::String; result_type::Symbol=:auto)
         X_samples_vec = X_samples isa AbstractMatrix ? vec(collect(X_samples)) : Vector{Float64}(collect(X_samples))
         Y_samples_vec = Y_samples_data === nothing ? Float64[] : Vector{Float64}(collect(Y_samples_data))
 
+        # Reconstruct params_history (absent in files saved before this field was added)
+        loaded_params_history = if params_history_data !== nothing && !isempty(params_history_data)
+            [Vector{Float64}(collect(p)) for p in params_history_data]
+        else
+            Vector{Float64}[]
+        end
+
         result = CircuitOptimizationResult(
             Vector{Float64}(energy_history === nothing ? Float64[] : energy_history),
+            loaded_params_history,
             Vector{Matrix{ComplexF64}}[],  # Gates not saved to JSON
             Vector{Float64}(params === nothing ? Float64[] : params),
             Float64(energy === nothing ? 0.0 : energy),
