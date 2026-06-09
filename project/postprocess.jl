@@ -125,6 +125,7 @@ save_M2_vs_J2(      "project/results",
 plot_M2_comparison(
                 sampling_file="project/results/M2_sampling.json",
                 save_path="project/results/figures/M2_comparison.pdf",
+                markersize=4,
                 show_errorbars=false)   
 
 # structure factor
@@ -176,7 +177,7 @@ plot_variance_vs_samples(
     "project/results/heisenberg/heisenberg_variance_vs_samples.json";
     fit_scaling=true,
     marker=:circle,
-    markersize=6,
+    markersize=4,
     figsize=PAPER_FIGSIZE,
     save_path="project/results/figures/heisenberg_variance_vs_samples_J2=0.5.pdf",
 )
