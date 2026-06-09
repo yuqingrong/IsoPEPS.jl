@@ -161,15 +161,25 @@ plot_energy_error_vs_g("project/results_tfim_abc", [2.0,3.0,4.0];
     
       
 # variance vs samples
-ns, vars, errs = compute_variance_vs_samples(
-        "project/results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json",
-        [1000, 2000, 3000, 4000,5000,6000, 7000,8000,9000, 10000,20000,30000,40000,50000,60000,70000,80000,90000,100000];
-        conv_step=100, n_bootstrap=200,
-        save_path="project/results/heisenberg/heisenberg_variance_vs_samples.json"   # optional
-    )
+compute_variance_vs_samples(
+    "project/results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json",
+    [1000, 2000, 3000, 4000,5000,6000, 7000,8000,9000, 10000,20000,30000,40000,50000,60000,70000,80000,90000,100000];
+    total_samples=nothing,
+    conv_step=100,
+    n_bootstrap=200,
+    n_ci_bootstrap=5000,
+    confidence_level=0.68,
+    save_path="project/results/heisenberg/heisenberg_variance_vs_samples.json",
+)
 
-fig = plot_variance_vs_samples(ns, vars; errors=errs,
-              save_path="project/results/figures/heisenberg_variance_vs_samples_J2=0.5.pdf")
+plot_variance_vs_samples(
+    "project/results/heisenberg/heisenberg_variance_vs_samples.json";
+    fit_scaling=true,
+    marker=:circle,
+    markersize=6,
+    figsize=PAPER_FIGSIZE,
+    save_path="project/results/figures/heisenberg_variance_vs_samples_J2=0.5.pdf",
+)
 
  fig, E_mat = plot_energy_vs_inv_samples(
                 "project/results/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json",

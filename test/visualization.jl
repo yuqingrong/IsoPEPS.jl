@@ -2,6 +2,7 @@ using Test
 using IsoPEPS
 using Random
 using Statistics
+using Bootstrap
 using CairoMakie: Axis, Colorbar, Errorbars, Figure, Label, Legend, Makie, Scatter, Theme, to_color, with_theme
 
 function write_test_tfim_circuit(path; g=2.0, row=3, p=3, nqubits=3, energy=0.0)
@@ -495,6 +496,28 @@ end
 end
 
 
+@testset "variance bootstrap confidence interval" begin
+    energies = [-1.3, -1.1, -0.9, -0.8, -0.7, -0.5]
+
+    Random.seed!(42)
+    estimate, lower, upper = IsoPEPS._variance_bootstrap_ci(
+        energies; n_resamples=200, confidence_level=0.68)
+
+    Random.seed!(42)
+    expected = only(confint(
+        bootstrap(var, energies, BasicSampling(200)),
+        PercentileConfInt(0.68)))
+
+    @test (estimate, lower, upper) == expected
+    @test lower <= estimate <= upper
+    @test_throws ArgumentError IsoPEPS._variance_bootstrap_ci(
+        [1.0]; n_resamples=200)
+    @test_throws ArgumentError IsoPEPS._variance_bootstrap_ci(
+        energies; n_resamples=1)
+    @test_throws ArgumentError IsoPEPS._variance_bootstrap_ci(
+        energies; confidence_level=1.0)
+end
+
 @testset "plot_variance_vs_samples" begin
     samples = [100, 500, 1000, 5000]
     variances = [0.1, 0.02, 0.01, 0.002]
@@ -506,6 +529,44 @@ end
     errors = [0.01, 0.002, 0.001, 0.0002]
     fig2 = plot_variance_vs_samples(samples, variances; errors=errors)
     @test fig2 isa Figure
+
+    asymmetric_errors = [
+        (0.01, 0.02),
+        (0.002, 0.003),
+        (0.001, 0.0015),
+        (0.0002, 0.0004),
+    ]
+    asymmetric_fig = plot_variance_vs_samples(
+        samples, variances;
+        errors=asymmetric_errors,
+        confidence_level=0.68)
+    @test asymmetric_fig isa Figure
+    asymmetric_ax = only(filter(content -> content isa Axis, asymmetric_fig.content))
+    @test count(plot -> plot isa Errorbars, asymmetric_ax.scene.plots) == 1
+    asymmetric_scatter = only(filter(
+        plot -> plot isa Scatter, asymmetric_ax.scene.plots))
+    @test asymmetric_scatter.label[] == "Bootstrap 68% CI"
+
+    results_file = tempname() * ".json"
+    save_results(results_file;
+                 sample_sizes=samples,
+                 variances=variances,
+                 variance_ci_lower=variances .- first.(asymmetric_errors),
+                 variance_ci_upper=variances .+ last.(asymmetric_errors),
+                 confidence_level=0.68,
+                 n_bootstrap=200,
+                 n_ci_bootstrap=5000)
+    file_fig = plot_variance_vs_samples(results_file)
+    @test file_fig isa Figure
+    file_ax = only(filter(content -> content isa Axis, file_fig.content))
+    @test count(plot -> plot isa Errorbars, file_ax.scene.plots) == 1
+    file_scatter = only(filter(plot -> plot isa Scatter, file_ax.scene.plots))
+    @test file_scatter.label[] == "Bootstrap 68% CI"
+
+    @test_throws DimensionMismatch plot_variance_vs_samples(
+        samples, variances; errors=[0.1])
+    @test_throws ArgumentError plot_variance_vs_samples(
+        samples, variances; errors=Any[(0.1, 0.2), 0.1, 0.1, 0.1])
 
     styled_fig = plot_variance_vs_samples(samples, variances;
                                           marker=:diamond, markersize=7)

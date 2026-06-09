@@ -35,6 +35,7 @@ module IsoPEPS
 using LinearAlgebra
 using Statistics
 using Random
+using Bootstrap
 using KrylovKit
 using Yao, Yao.EasyBuild
 using OMEinsum

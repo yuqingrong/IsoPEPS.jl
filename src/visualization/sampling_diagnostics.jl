@@ -7,19 +7,22 @@
 
 Run the circuit once at `maximum(sample_sizes)` samples, then estimate the
 variance of the energy estimator at each target sample size via bootstrap
-subsampling.  The returned vectors can be passed directly to
+subsampling. A second bootstrap over those energy estimates gives a percentile
+confidence interval for the variance. The returned vectors can be passed directly to
 `plot_variance_vs_samples`.
 
 # Arguments
 - `filename`: Path to a saved optimization result JSON
 - `sample_sizes`: Vector of sample counts to evaluate (e.g. `[1_000, 10_000, 100_000]`)
 - `conv_step`: Thermalization steps discarded from the front of the chain (default 100)
-- `n_bootstrap`: Number of bootstrap draws per sample size (default 200)
+- `n_bootstrap`: Number of independent energy estimates per sample size (default 200)
+- `n_ci_bootstrap`: Number of bootstrap resamples used for the variance CI (default 5000)
+- `confidence_level`: Coverage of the percentile confidence interval (default 0.68)
 - `save_path`: If provided, saves the results as JSON for later use
 
 # Returns
-- `(sample_sizes, variances, errors)` — each is a `Vector{Float64}` of the same
-  length.  `errors` is the standard error on each variance estimate.
+- `(sample_sizes, variances, errors)`, where `errors[i]` is
+  `(variances[i] - lower_ci[i], upper_ci[i] - variances[i])`.
 
 # Example
 ```julia
@@ -27,17 +30,40 @@ sizes = [1_000, 5_000, 10_000, 50_000, 100_000]
 ns, vars, errs = compute_variance_vs_samples(
     "project/results/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json",
     sizes; conv_step=100, n_bootstrap=200)
-fig = plot_variance_vs_samples(ns, vars; errors=errs)
+fig = plot_variance_vs_samples(ns, vars; errors=errs, confidence_level=0.68)
 ```
 """
+function _variance_bootstrap_ci(energies::AbstractVector{<:Real};
+                                n_resamples::Int=5000,
+                                confidence_level::Real=0.68)
+    length(energies) >= 2 ||
+        throw(ArgumentError("at least two energy estimates are required"))
+    n_resamples >= 2 || throw(ArgumentError("n_resamples must be at least 2"))
+    0 < confidence_level < 1 ||
+        throw(ArgumentError("confidence_level must be between 0 and 1"))
+
+    bootstrap_sample = bootstrap(var, energies, BasicSampling(n_resamples))
+    estimate, lower, upper =
+        only(confint(bootstrap_sample, PercentileConfInt(confidence_level)))
+    return Float64(estimate), Float64(lower), Float64(upper)
+end
+
 function compute_variance_vs_samples(filename::String,
                                      sample_sizes::AbstractVector{Int};
                                      total_samples::Union{Int,Nothing}=nothing,
                                      conv_step::Int=100,
                                      n_bootstrap::Int=200,
+                                     n_ci_bootstrap::Int=5000,
+                                     confidence_level::Real=0.68,
                                      save_path::Union{String,Nothing}=nothing)
 
-    result, input_args = load_result(filename)
+    isempty(sample_sizes) && throw(ArgumentError("sample_sizes must not be empty"))
+    n_bootstrap >= 2 || throw(ArgumentError("n_bootstrap must be at least 2"))
+    n_ci_bootstrap >= 2 || throw(ArgumentError("n_ci_bootstrap must be at least 2"))
+    0 < confidence_level < 1 ||
+        throw(ArgumentError("confidence_level must be between 0 and 1"))
+
+    _result, input_args = load_result(filename)
     model_str  = get(input_args, :model, "tfim")
     is_heisenberg = (model_str == "heisenberg_j1j2")
     row        = Int(input_args[:row])
@@ -83,8 +109,10 @@ function compute_variance_vs_samples(filename::String,
 
     _block(pool, start_col, n_cols) = @view pool[(start_col-1)*row+1 : (start_col+n_cols-1)*row]
 
-    variances    = Vector{Float64}(undef, length(sorted_sizes))
-    errors       = Vector{Float64}(undef, length(sorted_sizes))
+    variances = Vector{Float64}(undef, length(sorted_sizes))
+    ci_lower = similar(variances)
+    ci_upper = similar(variances)
+    errors = Vector{Tuple{Float64,Float64}}(undef, length(sorted_sizes))
 
     for (k, n_spins) in enumerate(sorted_sizes)
         # n_spins is number of spin measurements; convert to column count
@@ -113,18 +141,28 @@ function compute_variance_vs_samples(filename::String,
             end
         end
 
-        v = var(energies)
+        v, lower, upper = _variance_bootstrap_ci(
+            energies;
+            n_resamples=n_ci_bootstrap,
+            confidence_level=confidence_level)
         variances[k] = v
-        errors[k]    = v * sqrt(2 / (n_bootstrap - 1))
-        println("  n=$n_spins ($(n_cols) cols)  →  E̅ = $(round(mean(energies), sigdigits=6))  Var(E) = $(round(v, sigdigits=4))")
+        ci_lower[k] = lower
+        ci_upper[k] = upper
+        errors[k] = (v - lower, upper - v)
+        println("  n=$n_spins ($(n_cols) cols)  →  E̅ = $(round(mean(energies), sigdigits=6))  Var(E) = $(round(v, sigdigits=4))  CI = ($(round(lower, sigdigits=4)), $(round(upper, sigdigits=4)))")
     end
 
     if !isnothing(save_path)
         save_results(save_path;
                      sample_sizes=collect(Int, sorted_sizes),
                      variances=variances,
-                     errors=errors,
-                     model=model_str, conv_step=conv_step, n_bootstrap=n_bootstrap)
+                     variance_ci_lower=ci_lower,
+                     variance_ci_upper=ci_upper,
+                     confidence_level=Float64(confidence_level),
+                     model=model_str,
+                     conv_step=conv_step,
+                     n_bootstrap=n_bootstrap,
+                     n_ci_bootstrap=n_ci_bootstrap)
         println("Data saved to: $save_path")
     end
 
@@ -277,12 +315,16 @@ end
 
 """
     plot_variance_vs_samples(sample_sizes, variances; kwargs...)
+    plot_variance_vs_samples(results_file; kwargs...)
 
 Plot bootstrap variance estimates against sample count on logarithmic axes.
+`errors` may contain symmetric scalar errors or `(lower, upper)` error pairs.
+The file-based method reads the JSON produced by `compute_variance_vs_samples`.
 Use `marker` and `markersize` to customize the data markers.
 """
 function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::AbstractVector;
                                    errors::Union{AbstractVector,Nothing}=nothing,
+                                   confidence_level::Union{Real,Nothing}=nothing,
                                    fit_scaling::Bool=true,
                                    marker=:circle,
                                    markersize::Real=6,
@@ -305,11 +347,26 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
                   yscale   = log10)
 
         if !isnothing(errors)
-            errorbars!(ax, ns, vars, collect(Float64, errors);
-                       color=:steelblue, whiskerwidth=6)
+            length(errors) == length(vars) ||
+                throw(DimensionMismatch("errors and variances must have the same length"))
+            if all(error -> error isa Real, errors)
+                errorbars!(ax, ns, vars, Float64.(errors);
+                           color=:steelblue, whiskerwidth=6)
+            elseif all(error -> error isa Tuple && length(error) == 2, errors)
+                lower_errors = Float64[first(error) for error in errors]
+                upper_errors = Float64[last(error) for error in errors]
+                errorbars!(ax, ns, vars, lower_errors, upper_errors;
+                           color=:steelblue, whiskerwidth=6)
+            else
+                throw(ArgumentError(
+                    "errors must contain either scalar values or (lower, upper) pairs"))
+            end
         end
+        estimate_label = isnothing(confidence_level) ?
+            "Bootstrap estimate" :
+            "Bootstrap $(round(Int, 100 * confidence_level))% CI"
         scatter!(ax, ns, vars;
-                 label="bootstrap estimate", color=:steelblue, marker=marker,
+                 label=estimate_label, color=:steelblue, marker=marker,
                  markersize=markersize, strokewidth=0)
 
         if fit_scaling && length(ns) > 1
@@ -334,4 +391,43 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
     end
 
     return fig
+end
+
+function plot_variance_vs_samples(results_file::String;
+                                  confidence_level::Union{Real,Nothing}=nothing,
+                                  kwargs...)
+    data = load_results(results_file)
+    get_value(key) = get(data, key, get(data, Symbol(key), nothing))
+
+    sample_sizes = get_value("sample_sizes")
+    variances = get_value("variances")
+    ci_lower = get_value("variance_ci_lower")
+    ci_upper = get_value("variance_ci_upper")
+    saved_confidence_level = get_value("confidence_level")
+
+    isnothing(sample_sizes) &&
+        throw(ArgumentError("results file is missing sample_sizes"))
+    isnothing(variances) &&
+        throw(ArgumentError("results file is missing variances"))
+    isnothing(ci_lower) &&
+        throw(ArgumentError("results file is missing variance_ci_lower"))
+    isnothing(ci_upper) &&
+        throw(ArgumentError("results file is missing variance_ci_upper"))
+
+    vars = Float64.(variances)
+    lower = Float64.(ci_lower)
+    upper = Float64.(ci_upper)
+    length(vars) == length(lower) == length(upper) ||
+        throw(DimensionMismatch("variances and confidence interval bounds must match"))
+    errors = collect(zip(vars .- lower, upper .- vars))
+    label_confidence_level = isnothing(confidence_level) ?
+        saved_confidence_level : confidence_level
+
+    return plot_variance_vs_samples(
+        sample_sizes,
+        vars;
+        errors=errors,
+        confidence_level=isnothing(label_confidence_level) ?
+            nothing : Float64(label_confidence_level),
+        kwargs...)
 end
