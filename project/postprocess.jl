@@ -152,13 +152,14 @@ fig, data = plot_bond_energy_pattern("project/results/heisenberg", [0.0, 0.5, 1.
     )
 
 # energy vs g
-plot_energy_error_vs_g("project/results_tfim_abc", [2.0,3.0,4.0];                            
+plot_energy_error_vs_g("project/results/tfim", [2.0,3.0,4.0];                            
       model="tfim",                                              
       J=1.0, row=3, p=3, nqubits=3,                        
       energy_source=:computed, # computed or resampled
       conv_step=300,
       samples=3000000,
-      dmrg_file="project/results/dmrg_bulk_tfim_Ly3_D2_gscan.json",save_path="project/results/figures/tfim_energy_vs_g.pdf")
+      dmrg_file="project/results/reference/dmrg_bulk_tfim_Ly3_D2_gscan.json",save_path="project/results/figures/tfim_energy_vs_g.pdf",
+      markersize=6)
     
       
 # variance vs samples

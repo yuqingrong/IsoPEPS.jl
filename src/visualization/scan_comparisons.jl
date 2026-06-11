@@ -48,9 +48,6 @@ function _auto_reference_label(file::String, fallback::String)
     ly_match = match(r"Ly(\d+)", base)
 
     if occursin("dmrg", lower)
-        if !isnothing(ly_match)
-            return "DMRG(W=$(ly_match.captures[1]))"
-        end
         return "DMRG"
     elseif occursin("pepskit", lower) || occursin("ipeps", lower)
         label = "iPEPS"
@@ -388,6 +385,7 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
                                 energy_source::Symbol=:computed,
                                 error_reference=:all,
                                 figsize=nothing,
+                                markersize::Int=4,
                                 save_path::Union{String,Nothing}=nothing,
                                 save_path_error::Union{String,Nothing}=nothing)
 
@@ -537,6 +535,7 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
                           label=series.label,
                           color=colors[mod1(idx, length(colors))],
                           marker=markers[mod1(idx, length(markers))],
+                          markersize=markersize,
                           linestyle=:solid)
         end
 
@@ -547,6 +546,7 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
                           label=series.label,
                           color=ref_color,
                           marker=markers[mod1(idx + length(circuits), length(markers))],
+                          markersize=markersize,
                           linestyle=ref_style)
         end
 
@@ -587,6 +587,7 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
                           label=label,
                           color=colors[mod1(idx, length(colors))],
                           marker=markers[mod1(idx, length(markers))],
+                          markersize=markersize,
                           linestyle=:solid)
             has_error = true
         end

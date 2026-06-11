@@ -669,7 +669,7 @@ function dimer_structure_factor(X_samples::Vector{Float64},
         end
     end
 
-    N_d = n_pos * (2 * max_sep + 1)
+    N_d = n_pos
     return SD / N_d
 end
 # =============================================================================

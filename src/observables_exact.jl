@@ -938,7 +938,7 @@ function dimer_structure_factor(op::TransferOperator, q::Tuple{Real,Real};
         end
     end
 
-    N_d = row * (2 * max_separation + 1)
+    N_d = row
     return SD / N_d
 end
 
