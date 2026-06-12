@@ -160,6 +160,20 @@ plot_energy_error_vs_g("project/results/tfim", [2.0,3.0,4.0];
       samples=3000000,
       dmrg_file="project/results/reference/dmrg_bulk_tfim_Ly3_D2_gscan.json",save_path="project/results/figures/tfim_energy_vs_g.pdf",
       markersize=6)
+
+fig_energy, fig_error, data = plot_energy_error_vs_g(
+      "project/results/heisenberg",
+      collect(0.0:0.1:1.0);
+      model="heisenberg_j1j2",
+      J1=1.0, row=4, p=3, nqubits=3,
+      energy_source=:computed,
+      dmrg_file=[
+          "dmrg_bulk_heisenberg_j1j2_Ly4_D32_J2scan.json",
+          "project/results/reference/dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json",
+      ],
+      save_path="project/results/figures/heisenberg_energy_vs_J2.pdf",
+      markersize=6,
+)
        
 # variance vs samples
 compute_variance_vs_samples(

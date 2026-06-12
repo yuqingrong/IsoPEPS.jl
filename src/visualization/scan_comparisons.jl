@@ -48,7 +48,11 @@ function _auto_reference_label(file::String, fallback::String)
     ly_match = match(r"Ly(\d+)", base)
 
     if occursin("dmrg", lower)
-        return "DMRG"
+        label = "DMRG"
+        if !isnothing(d_match)
+            label *= " D=$(d_match.captures[1])"
+        end
+        return label
     elseif occursin("pepskit", lower) || occursin("ipeps", lower)
         label = "iPEPS"
         if !isnothing(d_match)
