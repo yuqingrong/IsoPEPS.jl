@@ -244,12 +244,12 @@ plot_channel_circuit(3, 3, 5;
 
 # readout_noise
 result = compute_readout_energy_scan(
-    "samples.json";
+    "project/results_tfim_abc/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json";
     p_values=[0.0, 0.005, 0.01, 0.02, 0.05],
     repeats=100,
-    seed=1234,
-    save_path="readout_energy.json",
+    seed=123,
+    save_path="project/results_tfim_abc/readout_noise_energ_g=3.0.json",
 )
 
-plot_readout_energy("readout_energy.json")
-plot_readout_energy_bias("readout_energy.json")
+plot_readout_energy("project/results_tfim_abc/readout_noise_energ_g=3.0.json"; markersize=4, save_path="project/results_tfim_abc/figures/readout_noise_energ_g=3.0.pdf")
+plot_readout_energy_bias("project/results_tfim_abc/readout_noise_energ_g=3.0.json"; markersize=4, save_path="project/results_tfim_abc/figures/readout_noise_energ_error_g=3.0.pdf")
