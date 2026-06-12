@@ -46,9 +46,9 @@ end
         @test plot_data.energy_mean == [-2.00, -1.96, -1.90]
 
         energy_fig = plot_readout_energy(
-            results_file; save_path=energy_figure_file)
+            results_file; markersize=10, save_path=energy_figure_file)
         bias_fig = plot_readout_energy_bias(
-            results_file; save_path=bias_figure_file)
+            results_file; markersize=10, save_path=bias_figure_file)
         @test energy_fig isa Figure
         @test bias_fig isa Figure
         @test isfile(energy_figure_file)
@@ -62,10 +62,33 @@ end
         @test bias_ax.ylabel[] == "|e(p) - e(0)|"
         @test count(plot -> plot isa Errorbars, energy_ax.scene.plots) == 1
         @test count(plot -> plot isa Errorbars, bias_ax.scene.plots) == 1
+        energy_markers = filter(
+            plot -> hasproperty(plot, :markersize), energy_ax.scene.plots)
+        bias_markers = filter(
+            plot -> hasproperty(plot, :markersize), bias_ax.scene.plots)
+        @test any(plot -> plot.markersize[] == 10, energy_markers)
+        @test any(plot -> plot.markersize[] == 10, bias_markers)
 
-        figures = plot_readout_noise(results_file)
+        figures = plot_readout_noise(results_file; markersize=11)
         @test figures.energy_figure isa Figure
         @test figures.bias_figure isa Figure
+        wrapper_energy_ax = only(filter(
+            content -> content isa Axis, figures.energy_figure.content))
+        wrapper_bias_ax = only(filter(
+            content -> content isa Axis, figures.bias_figure.content))
+        @test any(
+            plot -> hasproperty(plot, :markersize) && plot.markersize[] == 11,
+            wrapper_energy_ax.scene.plots)
+        @test any(
+            plot -> hasproperty(plot, :markersize) && plot.markersize[] == 11,
+            wrapper_bias_ax.scene.plots)
+
+        @test_throws ArgumentError plot_readout_energy(
+            results_file; markersize=0)
+        @test_throws ArgumentError plot_readout_energy_bias(
+            results_file; markersize=-1)
+        @test_throws ArgumentError plot_readout_noise(
+            results_file; markersize=0)
 
         broken_file = joinpath(dir, "broken.json")
         save_results(

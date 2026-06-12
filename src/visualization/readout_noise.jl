@@ -50,19 +50,22 @@ function _load_readout_plot_data(results_file::String)
 end
 
 """
-    plot_readout_energy(results_file; figsize=PAPER_FIGSIZE, save_path=nothing)
+    plot_readout_energy(results_file; figsize=PAPER_FIGSIZE, markersize=6,
+                        save_path=nothing)
 
 Plot `e(p)` with standard-error bars and a dashed horizontal line at the
 noiseless `p=0` energy. The input JSON must be written by
 [`compute_readout_energy_scan`](@ref).
 
 The horizontal axis is displayed as a percentage, so `p=0.005` appears as
-`0.5%`.
+`0.5%`. Use `markersize` to control the measured-energy marker size.
 """
 function plot_readout_energy(
         results_file::String;
         figsize=PAPER_FIGSIZE,
+        markersize::Real=6,
         save_path::Union{Nothing,String}=nothing)
+    markersize > 0 || throw(ArgumentError("markersize must be positive"))
     data = _load_readout_plot_data(results_file)
     p = data.p_percent
     energy = data.energy_mean
@@ -87,6 +90,7 @@ function plot_readout_energy(
             energy_ax, p, energy;
             color=:steelblue,
             marker=:circle,
+            markersize=markersize,
             label="Measured energy",
         )
         hlines!(
@@ -111,18 +115,22 @@ function plot_readout_energy(
 end
 
 """
-    plot_readout_energy_bias(results_file; figsize=PAPER_FIGSIZE, save_path=nothing)
+    plot_readout_energy_bias(results_file; figsize=PAPER_FIGSIZE, markersize=6,
+                             save_path=nothing)
 
 Plot the absolute measured-energy bias `|e(p) - e(0)|` with standard-error bars
 from a JSON file written by [`compute_readout_energy_scan`](@ref).
 
 The baseline is fixed by the original samples, so the bias uses the same
-standard error as `e(p)`. Its lower error bar is clipped at zero.
+standard error as `e(p)`. Its lower error bar is clipped at zero. Use
+`markersize` to control the bias marker size.
 """
 function plot_readout_energy_bias(
         results_file::String;
         figsize=PAPER_FIGSIZE,
+        markersize::Real=6,
         save_path::Union{Nothing,String}=nothing)
+    markersize > 0 || throw(ArgumentError("markersize must be positive"))
     data = _load_readout_plot_data(results_file)
     p = data.p_percent
     stderr = data.energy_stderr
@@ -148,6 +156,7 @@ function plot_readout_energy_bias(
             bias_ax, p, bias;
             color=:firebrick,
             marker=:diamond,
+            markersize=markersize,
         )
 
         if !isnothing(save_path)
@@ -163,19 +172,25 @@ function plot_readout_energy_bias(
 end
 
 """
-    plot_readout_noise(results_file; energy_save_path=nothing, bias_save_path=nothing)
+    plot_readout_noise(results_file; markersize=6, energy_save_path=nothing,
+                       bias_save_path=nothing)
 
 Create the readout-energy and absolute-bias plots as two independent figures.
-Returns `(energy_figure=..., bias_figure=...)`.
+Returns `(energy_figure=..., bias_figure=...)`. The same `markersize` is used in
+both figures.
 """
 function plot_readout_noise(
         results_file::String;
         figsize=PAPER_FIGSIZE,
+        markersize::Real=6,
         energy_save_path::Union{Nothing,String}=nothing,
         bias_save_path::Union{Nothing,String}=nothing)
+    markersize > 0 || throw(ArgumentError("markersize must be positive"))
     energy_figure = plot_readout_energy(
-        results_file; figsize=figsize, save_path=energy_save_path)
+        results_file; figsize=figsize, markersize=markersize,
+        save_path=energy_save_path)
     bias_figure = plot_readout_energy_bias(
-        results_file; figsize=figsize, save_path=bias_save_path)
+        results_file; figsize=figsize, markersize=markersize,
+        save_path=bias_save_path)
     return (energy_figure=energy_figure, bias_figure=bias_figure)
 end
