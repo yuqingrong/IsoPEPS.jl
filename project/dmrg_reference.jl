@@ -261,19 +261,12 @@ function run_dmrg_bulk_scan(; model::String="heisenberg_j1j2",
         "Lx1_energies_per_site"=> Float64[],
         "Lx2_energies"         => Float64[],
         "Lx2_energies_per_site"=> Float64[],
-        "e_bulk_values"        => Float64[],
-        "xi_Lx1"               => Union{Float64,Nothing}[],
-        "xi_Lx2"               => Union{Float64,Nothing}[]
+        "e_bulk_values"        => Float64[]
     )
 
-    if is_j1j2
-        scan_results["M2_neel_Lx1"]    = Float64[]
-        scan_results["M2_neel_Lx2"]    = Float64[]
-        scan_results["M2_stripe_Lx1"]  = Float64[]
-        scan_results["M2_stripe_Lx2"]  = Float64[]
-        scan_results["M2_0pi_Lx1"]     = Float64[]
-        scan_results["M2_0pi_Lx2"]     = Float64[]
-    else
+    if !is_j1j2
+        scan_results["xi_Lx1"] = Union{Float64,Nothing}[]
+        scan_results["xi_Lx2"] = Union{Float64,Nothing}[]
         scan_results["Sx_Lx1"] = Float64[]
         scan_results["Sx_Lx2"] = Float64[]
         scan_results["Sz_Lx1"] = Float64[]
@@ -317,31 +310,13 @@ function run_dmrg_bulk_scan(; model::String="heisenberg_j1j2",
         push!(scan_results["Lx2_energies_per_site"], result2.energy_per_site)
         push!(scan_results["e_bulk_values"],         e_bulk)
 
-        ξ1 = try compute_correlation_length_dmrg(result1).ξ catch e; @warn "ξ(Lx1) failed: $e"; nothing end
-        ξ2 = try compute_correlation_length_dmrg(result2).ξ catch e; @warn "ξ(Lx2) failed: $e"; nothing end
-        push!(scan_results["xi_Lx1"], ξ1)
-        push!(scan_results["xi_Lx2"], ξ2)
-        println("  ξ(Lx=$Lx1) = $ξ1,  ξ(Lx=$Lx2) = $ξ2")
+        if !is_j1j2
+            ξ1 = try compute_correlation_length_dmrg(result1).ξ catch e; @warn "ξ(Lx1) failed: $e"; nothing end
+            ξ2 = try compute_correlation_length_dmrg(result2).ξ catch e; @warn "ξ(Lx2) failed: $e"; nothing end
+            push!(scan_results["xi_Lx1"], ξ1)
+            push!(scan_results["xi_Lx2"], ξ2)
+            println("  ξ(Lx=$Lx1) = $ξ1,  ξ(Lx=$Lx2) = $ξ2")
 
-        if is_j1j2
-            M2_neel1   = compute_M2_dmrg(result1, (pi, pi))
-            M2_neel2   = compute_M2_dmrg(result2, (pi, pi))
-            M2_stripe1 = compute_M2_dmrg(result1, (pi, 0.0))
-            M2_stripe2 = compute_M2_dmrg(result2, (pi, 0.0))
-            M2_0pi1    = compute_M2_dmrg(result1, (0.0, pi))
-            M2_0pi2    = compute_M2_dmrg(result2, (0.0, pi))
-
-            println("  M²(π,π) Lx1=$(M2_neel1), Lx2=$(M2_neel2)")
-            println("  M²(π,0) Lx1=$(M2_stripe1), Lx2=$(M2_stripe2)")
-            println("  M²(0,π) Lx1=$(M2_0pi1), Lx2=$(M2_0pi2)")
-
-            push!(scan_results["M2_neel_Lx1"],   M2_neel1)
-            push!(scan_results["M2_neel_Lx2"],   M2_neel2)
-            push!(scan_results["M2_stripe_Lx1"], M2_stripe1)
-            push!(scan_results["M2_stripe_Lx2"], M2_stripe2)
-            push!(scan_results["M2_0pi_Lx1"],    M2_0pi1)
-            push!(scan_results["M2_0pi_Lx2"],    M2_0pi2)
-        else
             mag1 = compute_magnetization(result1)
             mag2 = compute_magnetization(result2)
 
@@ -631,7 +606,7 @@ display(fig)
 # ==================== Example usage ====================
 scan_results = run_dmrg_bulk_scan(
     model="heisenberg_j1j2",
-    Ly=4, Lx1=1000, Lx2=1200, D=2,
+    Ly=4, Lx1=1000, Lx2=1200, D=32,
     scan_param=:J2, scan_values=0.0:0.1:1.0,
     J1=1.0
 )

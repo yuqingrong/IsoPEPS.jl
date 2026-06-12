@@ -6,6 +6,7 @@ const TEST_FILES = [
     "transfer_matrix" => "transfer_matrix.jl",
     "observables" => "observables.jl",
     "quantum_channels" => "quantum_channels.jl",
+    "readout_noise" => "readout_noise.jl",
     "reference" => "reference.jl",
     "training" => "training.jl",
     "visualization" => "visualization.jl",

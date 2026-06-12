@@ -11,10 +11,10 @@ function _select_plot_params(result, parameter_source::Symbol, series_index::Int
 end
 
 """
-    plot_energy_dynamics_vs_g(data_dir, g_values; J, row, p, nqubits, M, shots, conv_step, ylims, save_path)
+    plot_energy_dynamics_vs_g(data_dir, scan_values; model, scan_param, row, p, nqubits, M, shots, conv_step, ylims, save_path, fixed_params...)
 
-Plot multi-g energy dynamics on a single figure.
-Each g value gets its own color: a mean energy line and a ±1 SE band. Here one
+Plot multi-value energy dynamics on a single figure.
+Each scan value gets its own color: a mean energy line and a ±1 SE band. Here one
 channel iteration is one full column of `row` samples; the point at iteration `k`
 uses only columns `k-1` and `k`.
 For `nqubits >= 5`, the exact contraction reference line is omitted because the
@@ -22,26 +22,41 @@ transfer matrix is too large for this diagnostic plot.
 Set `parameter_source=:random` to replace the optimized parameters loaded from
 disk by random angles in `[0, 2π)`.
 
-# Example
+# Examples
 ```julia
+# TFIM — scan over g
 fig = plot_energy_dynamics_vs_g("project/results", [0.5, 1.0, 1.5, 2.0];
     J=1.0, row=3, p=3, nqubits=3, M=1000, shots=500)
+
+# Heisenberg J1-J2 — scan over J2
+fig = plot_energy_dynamics_vs_g("project/results_heisenberg", [0.0, 0.25, 0.5];
+    model="heisenberg_j1j2", scan_param="J2", J1=1.0,
+    row=4, p=3, nqubits=5, M=1000, shots=200)
 ```
 """
-function plot_energy_dynamics_vs_g(data_dir::String, g_values::Vector{Float64};
-        J=1.0, row::Int=3, p::Int=3, nqubits::Int=3,
+function plot_energy_dynamics_vs_g(data_dir::String, scan_values::Vector{Float64};
+        model::String      = "tfim",
+        scan_param::String = "g",
+        row::Int=3, p::Int=3, nqubits::Int=3,
         M::Int = 10_000,
         shots::Int = 1000,
         conv_step::Int = 100,
         parameter_source::Symbol = :optimized,
         random_seed = nothing,
         ylims = :auto,
-        save_path::Union{String, Nothing} = nothing)
+        save_path::Union{String, Nothing} = nothing,
+        fixed_params...)
 
     shots >= 2 || throw(ArgumentError("shots must be at least 2 channel iterations"))
-    effective_ylims = ylims === :auto ?
-        (parameter_source === :random ? (-1.5, 1.0) : (-5.0, -3.0)) :
+    effective_ylims = if ylims !== :auto
         ylims
+    elseif parameter_source === :random
+        (-1.5, 1.0)
+    elseif model == "tfim"
+        (-5.0, -3.0)
+    else
+        nothing
+    end
 
     palette = [:steelblue, :firebrick, :seagreen, :darkorange,
                :purple, :saddlebrown, :hotpink, :teal, :gray]
@@ -53,22 +68,28 @@ function plot_energy_dynamics_vs_g(data_dir::String, g_values::Vector{Float64};
               ylabel  = "E / site",
               limits  = (nothing, effective_ylims))
 
-    for (idx, g) in enumerate(g_values)
-        filename = joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json")
-        if !isfile(filename)
-            @warn "File not found: $(basename(filename)), skipping g=$g"
+    fixed_str   = join(["$(k)=$(v)" for (k, v) in sort(collect(fixed_params), by=first)], "_")
+    name_prefix = isempty(fixed_str) ? "circuit_$(model)" : "circuit_$(model)_$(fixed_str)"
+
+    for (idx, val) in enumerate(scan_values)
+        pattern = "$(name_prefix)_$(scan_param)=$(val)_row=$(row)_p=$(p)_nqubits=$(nqubits)"
+        matches = filter(f -> startswith(f, pattern) && endswith(f, ".json"),
+                         readdir(data_dir))
+        if isempty(matches)
+            @warn "No file matching $(pattern)*.json, skipping $(scan_param)=$(val)"
             continue
         end
+        filename = joinpath(data_dir, first(matches))
 
         result, input_args = load_result(filename)
         model_str = String(get(input_args, :model, "tfim"))
-        model     = _construct_model(model_str, Dict{Symbol,Any}(k => v for (k, v) in input_args))
-        has_y     = needs_y_measurement(model)
+        model_obj = _construct_model(model_str, Dict{Symbol,Any}(k => v for (k, v) in input_args))
+        has_y     = needs_y_measurement(model_obj)
         params    = _select_plot_params(result, parameter_source, idx; random_seed=random_seed)
         share_params = get(input_args, :share_params, true)
         structure = get(input_args, :structure, nothing)
 
-        two_by_two = default_unit_cell(model) == :two_by_two
+        two_by_two = default_unit_cell(model_obj) == :two_by_two
         if two_by_two
             gates_odd, gates_even = build_unitary_gate_2x2(params, p, row, nqubits)
         else
@@ -85,14 +106,14 @@ function plot_energy_dynamics_vs_g(data_dir::String, g_values::Vector{Float64};
                 TransferOperator([gates], row, (nqubits-1)÷2)
             end
 
-            exact_E = if model isa TFIM
-                e, _ = compute_exact_energy(model, op)
+            exact_E = if model_obj isa TFIM
+                e, _ = compute_exact_energy(model_obj, op)
                 real(e) / row
-            elseif model isa HeisenbergJ1J2
-                real(compute_exact_heisenberg_energy(op, model.J1, model.J2)) / row
+            elseif model_obj isa HeisenbergJ1J2
+                real(compute_exact_heisenberg_energy(op, model_obj.J1, model_obj.J2)) / row
             end
         else
-            @info "Skipping exact contraction reference for nqubits=$nqubits in plot_energy_dynamics_vs_g" g
+            @info "Skipping exact contraction reference for nqubits=$nqubits in plot_energy_dynamics_vs_g" val
         end
 
         eval_indices = unique(round.(Int, range(2, shots,
@@ -105,16 +126,16 @@ function plot_energy_dynamics_vs_g(data_dir::String, g_values::Vector{Float64};
         Threads.@threads for m in 1:M
             ch = two_by_two ?
                  sample_quantum_channel(gates_odd, gates_even, row, nqubits;
-                                        conv_step=conv_samples, samples=run_samples, model=model) :
+                                        conv_step=conv_samples, samples=run_samples, model=model_obj) :
                  sample_quantum_channel(gates, row, nqubits;
-                                        conv_step=conv_samples, samples=run_samples, model=model)
+                                        conv_step=conv_samples, samples=run_samples, model=model_obj)
             sample_range = (conv_samples + 1):(conv_samples + run_samples)
             Z_s = ch[2][sample_range]
             X_s = ch[3][sample_range]
             Y_s = has_y ? ch[4][sample_range] : Float64[]
             for (i, k) in enumerate(eval_indices)
                 cols = ((k - 2) * row + 1):(k * row)
-                energy_curves[m, i] = compute_energy_from_samples(model,
+                energy_curves[m, i] = compute_energy_from_samples(model_obj,
                     X_s[cols], Z_s[cols], has_y ? Y_s[cols] : Float64[], row)
             end
         end
@@ -127,7 +148,7 @@ function plot_energy_dynamics_vs_g(data_dir::String, g_values::Vector{Float64};
               color=(color, 0.2))
         source_label = parameter_source === :random ? " random" : ""
         lines!(ax, eval_indices, mean_E,
-               color=color, label="g=$g$source_label")
+               color=color, label="$(scan_param)=$(val)$source_label")
         if !isnothing(exact_E)
             hlines!(ax, [exact_E], linestyle=:dash, color=color, label=nothing)
         end

@@ -79,6 +79,7 @@ include("observables_sampling.jl")
 
 include("training.jl")
 include("results_io.jl")
+include("readout_noise.jl")
 include("visualization.jl")
 
 # =============================================================================
@@ -178,12 +179,16 @@ export save_dmrg_state, load_dmrg_state
 export save_result, load_result, save_results, load_results, resample_circuit
 export reconstruct_gates, save_finite_cylinder_samples
 
+# Classical Readout Noise
+export apply_readout_noise, compute_readout_energy_scan
+
 # Visualization (loaded via CairoMakie extension)
 export paper_theme, PAPER_FIGSIZE, PAPER_FIGSIZE_WIDE
 export plot_circuit_block, plot_channel_circuit
 export corr_exp_fit
 export plot_training_history, plot_variance_vs_samples, plot_expectation_values
 export plot_eigenvalue_spectrum, plot_correlation_function
+export plot_readout_energy, plot_readout_energy_bias, plot_readout_noise
 export plot_energy_error_vs_g, plot_correlation_vs_g, plot_correlation_vs_J2, plot_M2_vs_J2
 export plot_connected_corr_vs_g, plot_magnetization_vs_g
 export save_M2_vs_J2, plot_M2_comparison

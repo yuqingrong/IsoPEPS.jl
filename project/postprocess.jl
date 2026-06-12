@@ -160,8 +160,7 @@ plot_energy_error_vs_g("project/results/tfim", [2.0,3.0,4.0];
       samples=3000000,
       dmrg_file="project/results/reference/dmrg_bulk_tfim_Ly3_D2_gscan.json",save_path="project/results/figures/tfim_energy_vs_g.pdf",
       markersize=6)
-    
-      
+       
 # variance vs samples
 compute_variance_vs_samples(
     "project/results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json",
@@ -221,27 +220,17 @@ fig, data = plot_correlation_function(datafile;
 
 # energy dynamic
 fig = plot_energy_dynamics_vs_g("project/results", [0.5, 1.0, 1.5, 2.0, 2.5, 3.0];
-J=1.0, row=3, p=3, nqubits=5,                                                                                                
+J=1.0, row=3, p=3, nqubits=3,                                                                                                
 M=10000, shots=20, conv_step=0, save_path="project/results/figures/energy_dynamics_vs_g_D=4.pdf")
+
+fig = plot_energy_dynamics_vs_g("project/results/heisenberg", [0.0, 0.5, 1.0];
+      model="heisenberg_j1j2", scan_param="J2", J1=1.0,
+      row=4, p=3, nqubits=3, M=10000, shots=20, conv_step=0, save_path="project/results/figures/energy_dynamics_vs_g_heisenberg_J2.pdf")   
 
 fig = plot_local_xz_dynamics_vs_g("project/results", [0.5];
     J=1.0, row=3, p=3, nqubits=5,
     M=10000, shots=20, conv_step=0,
     save_path="project/results/figures/local_xz_dynamics_vs_g_D=4.pdf")
-
-fig = plot_energy_dynamics_vs_g("project/results", [5.0];
-    J=1.0, row=3, p=3, nqubits=3,
-    M=10000, shots=100, conv_step=0,
-    parameter_source=:random,
-    random_seed=234,
-    save_path="project/results/figures/energy_dynamics_vs_g_random.pdf")
-
-fig = plot_local_xz_dynamics_vs_g("project/results", [4.0];
-    J=1.0, row=3, p=3, nqubits=5,
-    M=10000, shots=100, conv_step=0,
-    parameter_source=:random,
-    random_seed=123,
-    save_path="project/results/figures/local_xz_dynamics_vs_g_random.pdf")
 
 # circuit and gate structure
 fig = plot_circuit_block(3, 5; save_path="project/results/figures/circuit_block_3x5.pdf")
@@ -251,3 +240,16 @@ plot_channel_circuit(3, 3, 5;
     cycles=2,
     expanded=false,
     save_path="project/results/figures/circuit_full_3x3x5.pdf")
+
+
+# readout_noise
+result = compute_readout_energy_scan(
+    "samples.json";
+    p_values=[0.0, 0.005, 0.01, 0.02, 0.05],
+    repeats=100,
+    seed=1234,
+    save_path="readout_energy.json",
+)
+
+plot_readout_energy("readout_energy.json")
+plot_readout_energy_bias("readout_energy.json")
