@@ -239,8 +239,42 @@ end
     @test IsoPEPS._circuit_energy_mode("tfim", 5, :computed; row=2) == :exact
     @test IsoPEPS._circuit_energy_mode("tfim", 7, :computed; row=3) == :sampled
     @test IsoPEPS._circuit_energy_mode("tfim", 5, :resampled) == :sampled
-    @test IsoPEPS._circuit_energy_mode("heisenberg_j1j2", 5, :computed) == :sampled
+    @test IsoPEPS._circuit_energy_mode("heisenberg_j1j2", 5, :computed) == :exact
+    @test IsoPEPS._circuit_energy_mode("heisenberg_j1j2", 5, :resampled) == :sampled
     @test IsoPEPS._circuit_energy_mode("tfim", 5, :saved) == :saved
+end
+
+@testset "plot_energy_error_vs_g normalizes exact Heisenberg energy per site" begin
+    row = 3
+    p = 1
+    nqubits = 1
+    J1 = 1.0
+    J2 = 0.5
+    params = zeros(gate_parameter_count(p, nqubits;
+                                        unit_cell=:two_by_two, row=row))
+    result = CircuitOptimizationResult(
+        Float64[], Vector{Float64}[], Matrix{ComplexF64}[], params, 0.0,
+        Float64[], Float64[], Float64[], true
+    )
+    input_args = Dict{Symbol,Any}(
+        :model => "heisenberg_j1j2",
+        :J1 => J1,
+        :row => row,
+        :p => p,
+        :nqubits => nqubits,
+        :unit_cell => "two_by_two",
+        :active_nqubits => nqubits,
+    )
+    spec = Dict{Symbol,Any}(:energy_source => :computed)
+
+    energy = IsoPEPS._compute_circuit_energy_from_result(
+        "unused.json", result, input_args, J2, spec, 0, 1)
+    gates_odd, gates_even = build_unitary_gate_2x2(params, p, row, nqubits)
+    energy_per_column = compute_exact_heisenberg_energy_2x2(
+        gates_odd, gates_even, row, 0, J1, J2)
+
+    @test energy ≈ energy_per_column / row
+    @test energy != energy_per_column
 end
 
 @testset "random-parameter dynamics plots smoke test" begin

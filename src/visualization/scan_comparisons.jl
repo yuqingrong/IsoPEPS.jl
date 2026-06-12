@@ -178,7 +178,7 @@ function _circuit_energy_mode(model::String, nqubits::Int, energy_source::Symbol
     elseif energy_source != :computed
         error("Unsupported circuit energy_source=$energy_source. Use :computed, :resampled, or :saved.")
     elseif model == "heisenberg_j1j2"
-        return :sampled
+        return :exact
     end
     virtual_qubits = (nqubits - 1) ÷ 2
     bond_dim = 2^virtual_qubits
@@ -222,9 +222,11 @@ function _compute_circuit_energy_from_result(filename::String, result, input_arg
     p = Int(get(spec, :p, get(input_args, :p, 3)))
     share_params = get(input_args, :share_params, get(spec, :share_params, true))
     structure = get(input_args, :structure, get(spec, :structure, nothing))
+    active_nqubits = Int(get(input_args, :active_nqubits,
+                             get(spec, :active_nqubits, nqubits)))
     virtual_qubits = (nqubits - 1) ÷ 2
 
-    if model == "heisenberg_j1j2"
+    if source == :sampled && model == "heisenberg_j1j2"
         resample_result = resample_circuit(filename; conv_step=conv_step, samples=samples, measure_y=true)
         if isnothing(resample_result)
             return nothing
@@ -239,10 +241,39 @@ function _compute_circuit_energy_from_result(filename::String, result, input_arg
         return _resampled_tfim_energy(filename, val, J, row;
                                       conv_step=conv_step, samples=samples,
                                       repeats=resample_repeats, result=result)
+    elseif model == "heisenberg_j1j2"
+        unit_cell_value = get(input_args, :unit_cell, get(spec, :unit_cell, nothing))
+        unit_cell = isnothing(unit_cell_value) ?
+                    (endswith(filename, "_2x2.json") ? :two_by_two : :single) :
+                    Symbol(unit_cell_value)
+        heisenberg = HeisenbergJ1J2(J1, Float64(val))
+
+        energy = if unit_cell == :two_by_two
+            gates_odd, gates_even = build_unitary_gate_2x2(
+                result.final_params, p, row, nqubits;
+                active_nqubits=active_nqubits)
+            first(compute_exact_energy_from_gates(
+                heisenberg, gates_odd, row, virtual_qubits;
+                unit_cell=unit_cell, gates_even=gates_even))
+        else
+            gates = build_unitary_gate(
+                result.final_params, p, row, nqubits;
+                share_params=share_params,
+                structure=structure,
+                active_nqubits=active_nqubits)
+            first(compute_exact_energy_from_gates(
+                heisenberg, gates, row, virtual_qubits;
+                unit_cell=unit_cell))
+        end
+
+        # Exact Heisenberg contraction returns energy per column; references and
+        # sampled energies use energy per site.
+        return real(energy) / row
     else
         gates = build_unitary_gate(result.final_params, p, row, nqubits;
                                    share_params=share_params,
-                                   structure=structure)
+                                   structure=structure,
+                                   active_nqubits=active_nqubits)
         X_exact = mean(real(IsoPEPS.expect(gates, row, virtual_qubits, :X; position=i)) for i in 1:row)
 
         if row > 1
@@ -353,7 +384,7 @@ reference series can be overlaid with `circuit_series`, vector-valued
 - `pepskit_file`: Path, vector of paths, or specs `(file=..., label=...)` for PEPSKit references
 - `dmrg_file`: Path, vector of paths, or specs `(file=..., label=...)` for DMRG references
 - `circuit_series`: Additional circuit specs, e.g. `(label="IsoPEPS χ=5", nqubits=5, suffixes=["_1x1_6w"])`
-- `energy_source`: `:computed` recomputes energies; TFIM uses exact contraction up to `nqubits=3` and resampling from optimized parameters for `nqubits>=5`. `:resampled` always resamples from optimized parameters. `:saved` reads JSON `energy`
+- `energy_source`: `:computed` recomputes energies; Heisenberg uses exact contraction, while TFIM uses exact contraction when feasible and otherwise resamples from optimized parameters. `:resampled` always resamples from optimized parameters. `:saved` reads JSON `energy`
 - `save_path`: Path to save figure (optional)
 
 # Returns
