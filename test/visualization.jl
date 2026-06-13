@@ -231,6 +231,20 @@ end
     @test data.energies_dmrg == [-2.05, -3.05]
 end
 
+@testset "scan energy loader accepts incomplete DMRG scans" begin
+    dmrg_file = tempname() * "_dmrg_bulk_heisenberg_j1j2_Ly4_D32_J2scan.json"
+    save_results(dmrg_file;
+                 scan_values=collect(0.0:0.1:1.0),
+                 e_bulk_values=collect(-0.68:0.01:-0.62))
+
+    series = IsoPEPS._load_scan_energy_series(dmrg_file; fallback_label="DMRG")
+
+    @test series.label == "DMRG D=32"
+    @test length(series.scan_values) == 7
+    @test length(series.energies) == 7
+    @test series.scan_values == collect(0.0:0.1:0.6)
+end
+
 @testset "plot_energy_error_vs_g energy mode selection" begin
     @test IsoPEPS._circuit_energy_mode("tfim", 3, :computed) == :exact
     @test IsoPEPS._circuit_energy_mode("tfim", 3, :computed; row=3) == :exact

@@ -99,11 +99,21 @@ function _load_scan_energy_series(file::String; label::Union{String,Nothing}=not
         return nothing
     end
 
+    scan_values = Float64.(collect(scan_vals))
+    energy_values = Float64.(collect(energies))
+    n_points = min(length(scan_values), length(energy_values))
+    if n_points == 0
+        @warn "Reference JSON contains no completed scan points; skipping." file
+        return nothing
+    elseif length(scan_values) != length(energy_values)
+        @warn "Reference scan is incomplete; using completed prefix." file requested_points=length(scan_values) completed_points=length(energy_values) plotted_points=n_points
+    end
+
     series_label = isnothing(label) ? _auto_reference_label(file, fallback_label) : label
     return (
         label = series_label,
-        scan_values = Float64.(collect(scan_vals)),
-        energies = Float64.(collect(energies)),
+        scan_values = scan_values[1:n_points],
+        energies = energy_values[1:n_points],
         files = [file],
         kind = kind,
     )
