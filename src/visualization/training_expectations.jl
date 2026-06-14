@@ -86,7 +86,7 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
                   ygridvisible = false,
                   limits = (nothing, isnothing(ylims) ? nothing : (Float64(ylims[1]), Float64(ylims[2]))))
 
-        lines!(ax, collect(steps), collect(values), label="IsoPEPS (sampling)")
+        lines!(ax, collect(steps), collect(values), label="Training energy")
 
         if !isnothing(ref_energy)
             ref_label = compact_reference_label(:pepskit, ref_energy)
@@ -100,7 +100,7 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
 
         if !isnothing(exact_energy)
             hlines!(ax, [exact_energy], linestyle=:dash, color=to_color("#ff9900"),
-                    label="Exact contraction")
+                    label=math_label(raw"E_{\mathrm{final}}"))
         end
 
         add_paper_legend!(ax; position=:rt)
