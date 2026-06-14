@@ -13,7 +13,7 @@ const PAPER_TICKLABELSIZE = 9
 const PAPER_TITLESIZE = 11
 const PAPER_LEGEND_LABELSIZE = 8
 
-math_label(text::AbstractString) = Makie.LaTeXString(text)
+math_label(text::AbstractString) = Makie.LaTeXString("\\mathit{$text}")
 
 const ENERGY_PER_SITE_LABEL = math_label(raw"E/N_{\mathrm{site}}")
 const FIELD_LABEL = math_label(raw"g")
@@ -30,8 +30,8 @@ const Z_EXPECTATION_LABEL = math_label(raw"\langle Z\rangle")
 
 Quantum-journal-style Makie theme: Computer Modern serif text, compact margins,
 and light grids. Mathematical labels should use `math_label` so physical
-quantities are italic while descriptive subscripts remain upright. Apply with
-`set_theme!(paper_theme())` or
+quantities are italic while explicit `\\mathrm{...}` descriptions and numeric
+tick labels remain upright. Apply with `set_theme!(paper_theme())` or
 `with_theme(paper_theme()) do ... end`.
 """
 function paper_theme()

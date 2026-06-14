@@ -34,9 +34,11 @@ end
     ax = fig.content[1]
     @test ax.ylabel[] == IsoPEPS.ENERGY_PER_SITE_LABEL
     @test ax.titlefont[] == :regular
-    @test string(ax.ylabel[]) == raw"E/N_{\mathrm{site}}"
-    @test string(IsoPEPS.FIELD_LABEL) == "g"
-    @test string(IsoPEPS.J2_OVER_J1_LABEL) == "J_2/J_1"
+    @test ax.xticklabelfont[] == :regular
+    @test ax.yticklabelfont[] == :regular
+    @test string(ax.ylabel[]) == raw"\mathit{E/N_{\mathrm{site}}}"
+    @test string(IsoPEPS.FIELD_LABEL) == raw"\mathit{g}"
+    @test string(IsoPEPS.J2_OVER_J1_LABEL) == raw"\mathit{J_2/J_1}"
 end
 
 
