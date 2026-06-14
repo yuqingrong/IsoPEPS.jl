@@ -80,6 +80,18 @@ function _unique_label(label::String, used::Set{String})
     return candidate
 end
 
+function _energy_plot_label(label::String, is_heisenberg::Bool)
+    if !is_heisenberg
+        return replace(label, r" D=32\b" => "")
+    end
+
+    d_match = match(r"^(.*\s)D(=\d+.*)$", label)
+    isnothing(d_match) && return label
+    return rich(String(d_match.captures[1]),
+                rich("D", font=:italic),
+                String(d_match.captures[2]))
+end
+
 function _load_scan_energy_series(file::String; label::Union{String,Nothing}=nothing,
                                   fallback_label::String="Reference",
                                   kind::Symbol=:reference)
@@ -588,7 +600,7 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
             ref_color = colors[mod1(idx + length(circuits), length(colors))]
             ref_style = startswith(series.label, "DMRG") ? :dot : :dash
             scatterlines!(ax1, series.scan_values, series.energies;
-                          label=series.label,
+                          label=_energy_plot_label(series.label, is_heisenberg),
                           color=ref_color,
                           marker=markers[mod1(idx + length(circuits), length(markers))],
                           markersize=markersize,
@@ -630,7 +642,7 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
         for (idx, (label, err)) in enumerate(sort(collect(errors_by_reference); by=first))
             mask = .!isnan.(err.errors)
             scatterlines!(ax2, err.scan_values[mask], err.errors[mask];
-                          label=label,
+                          label=_energy_plot_label(label, is_heisenberg),
                           color=colors[mod1(idx, length(colors))],
                           marker=markers[mod1(idx, length(markers))],
                           markersize=markersize,

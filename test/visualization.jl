@@ -311,6 +311,19 @@ end
     @test data.energies_dmrg == [-2.05, -3.05]
 end
 
+@testset "plot_energy_error_vs_g formats DMRG bond-dimension labels" begin
+    @test IsoPEPS._energy_plot_label("DMRG D=32", false) == "DMRG"
+    @test IsoPEPS._energy_plot_label("DMRG D=2", false) == "DMRG D=2"
+
+    heisenberg_label = IsoPEPS._energy_plot_label("DMRG D=32", true)
+    @test heisenberg_label isa Makie.RichText
+    @test heisenberg_label.children[2].attributes[:font] == :italic
+
+    error_label = IsoPEPS._energy_plot_label("IsoPEPS − DMRG D=32", true)
+    @test error_label isa Makie.RichText
+    @test error_label.children[2].attributes[:font] == :italic
+end
+
 @testset "scan energy loader accepts incomplete DMRG scans" begin
     dmrg_file = tempname() * "_dmrg_bulk_heisenberg_j1j2_Ly4_D32_J2scan.json"
     save_results(dmrg_file;
