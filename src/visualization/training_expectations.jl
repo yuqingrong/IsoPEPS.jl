@@ -99,7 +99,7 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
         end
 
         if !isnothing(exact_energy)
-            hlines!(ax, [exact_energy], linestyle=:dash, color="#ff9900",
+            hlines!(ax, [exact_energy], linestyle=:dash, color=to_color("#ff9900"),
                     label="Exact contraction")
         end
 
@@ -270,14 +270,14 @@ function plot_expectation_values(; energy::Union{Real,Nothing}=nothing,
                                    nqubits::Union{Int,Nothing}=nothing,
                                    save_path::Union{String,Nothing}=nothing)
 
-    labels = String[]
+    labels = Any[]
     values = Float64[]
 
-    !isnothing(energy)   && (push!(labels, "E");      push!(values, energy))
-    !isnothing(X)        && (push!(labels, "⟨X⟩");   push!(values, X))
-    !isnothing(Z)        && (push!(labels, "⟨Z⟩");   push!(values, Z))
-    !isnothing(ZZ_vert)  && (push!(labels, "⟨ZZ⟩ᵥ"); push!(values, ZZ_vert))
-    !isnothing(ZZ_horiz) && (push!(labels, "⟨ZZ⟩ₕ"); push!(values, ZZ_horiz))
+    !isnothing(energy)   && (push!(labels, math_label(raw"E")); push!(values, energy))
+    !isnothing(X)        && (push!(labels, X_EXPECTATION_LABEL); push!(values, X))
+    !isnothing(Z)        && (push!(labels, Z_EXPECTATION_LABEL); push!(values, Z))
+    !isnothing(ZZ_vert)  && (push!(labels, math_label(raw"\langle ZZ\rangle_{\mathrm{v}}")); push!(values, ZZ_vert))
+    !isnothing(ZZ_horiz) && (push!(labels, math_label(raw"\langle ZZ\rangle_{\mathrm{h}}")); push!(values, ZZ_horiz))
 
     if isempty(values)
         @warn "No expectation values provided"
@@ -286,11 +286,13 @@ function plot_expectation_values(; energy::Union{Real,Nothing}=nothing,
 
     plot_title = title
     if !isnothing(g) && !isnothing(row) && !isnothing(nqubits)
-        plot_title = "Expectation Values: row=$row, g=$g, nqubits=$nqubits"
+        plot_title = math_label(
+            "\\mathrm{Expectation\\ values:}\\;\\mathrm{row}=$row,\\;g=$g,\\;n_{\\mathrm{qubits}}=$nqubits")
     elseif !isnothing(g) && !isnothing(row)
-        plot_title = "Expectation Values: row=$row, g=$g"
+        plot_title = math_label(
+            "\\mathrm{Expectation\\ values:}\\;\\mathrm{row}=$row,\\;g=$g")
     elseif !isnothing(g)
-        plot_title = "Expectation Values: g=$g"
+        plot_title = math_label("\\mathrm{Expectation\\ values:}\\;g=$g")
     end
 
     fig = Figure(size=PAPER_FIGSIZE)
@@ -434,7 +436,7 @@ function plot_expectation_values(result::CircuitOptimizationResult;
         can_compute_exact = false
     end
 
-    labels = String[]; sample_values = Float64[]; exact_values = Float64[]; sample_errors = Float64[]
+    labels = Any[]; sample_values = Float64[]; exact_values = Float64[]; sample_errors = Float64[]
 
     if m isa HeisenbergJ1J2
         N = length(Z_samples)
@@ -592,7 +594,7 @@ function plot_expectation_values(result::CircuitOptimizationResult;
             end
         end
 
-        push!(labels, "E"); push!(sample_values, energy_sample)
+        push!(labels, math_label(raw"E")); push!(sample_values, energy_sample)
         push!(exact_values, energy_exact); push!(sample_errors, 0.0)
 
         # Per-component NN correlations
@@ -603,10 +605,10 @@ function plot_expectation_values(result::CircuitOptimizationResult;
             horiz_ex = get(exact_horiz, pauli, NaN)
 
             if !isnothing(vv)
-                push!(labels, "⟨$(name)⟩ᵥ"); push!(sample_values, vv)
+                push!(labels, math_label("\\langle $(name)\\rangle_{\\mathrm{v}}")); push!(sample_values, vv)
                 push!(exact_values, vert_ex); push!(sample_errors, ve)
             end
-            push!(labels, "⟨$(name)⟩ₕ"); push!(sample_values, hv)
+            push!(labels, math_label("\\langle $(name)\\rangle_{\\mathrm{h}}")); push!(sample_values, hv)
             push!(exact_values, horiz_ex); push!(sample_errors, he)
         end
 
@@ -618,17 +620,18 @@ function plot_expectation_values(result::CircuitOptimizationResult;
                 d1_exact = get(exact_diag_down, pauli, NaN)
                 d2_exact = get(exact_diag_up, pauli, NaN)
 
-                push!(labels, "⟨$(name)⟩↘"); push!(sample_values, d1v)
+                push!(labels, math_label("\\langle $(name)\\rangle_{\\searrow}")); push!(sample_values, d1v)
                 push!(exact_values, d1_exact); push!(sample_errors, d1e)
-                push!(labels, "⟨$(name)⟩↗"); push!(sample_values, d2v)
+                push!(labels, math_label("\\langle $(name)\\rangle_{\\nearrow}")); push!(sample_values, d2v)
                 push!(exact_values, d2_exact); push!(sample_errors, d2e)
             end
         end
 
         plot_title = title
         if !isnothing(row) && !isnothing(nqubits)
-            j2_str = J2 != 0.0 ? ", J2=$J2" : ""
-            plot_title = "Heisenberg Correlations: row=$row, J1=$J1$(j2_str), nqubits=$nqubits"
+            j2_str = J2 != 0.0 ? ",\\;J_2=$J2" : ""
+            plot_title = math_label(
+                "\\mathrm{Heisenberg\\ correlations:}\\;\\mathrm{row}=$row,\\;J_1=$J1$(j2_str),\\;n_{\\mathrm{qubits}}=$nqubits")
         end
 
     else
@@ -688,37 +691,39 @@ function plot_expectation_values(result::CircuitOptimizationResult;
 
         plot_title = title
         if !isnothing(g) && !isnothing(row) && !isnothing(nqubits)
-            plot_title = "Expectation Values: row=$row, g=$g, nqubits=$nqubits"
+            plot_title = math_label(
+                "\\mathrm{Expectation\\ values:}\\;\\mathrm{row}=$row,\\;g=$g,\\;n_{\\mathrm{qubits}}=$nqubits")
         elseif !isnothing(g) && !isnothing(row)
-            plot_title = "Expectation Values: row=$row, g=$g"
+            plot_title = math_label(
+                "\\mathrm{Expectation\\ values:}\\;\\mathrm{row}=$row,\\;g=$g")
         end
 
         if !isnothing(energy_sample)
-            push!(labels, "E")
+            push!(labels, math_label(raw"E"))
             push!(sample_values, energy_sample)
             push!(exact_values, isnothing(energy_exact) ? NaN : energy_exact)
             push!(sample_errors, isnothing(energy_stderr) ? 0.0 : energy_stderr)
         end
         if !isnothing(X_sample) || !isnothing(X_exact)
-            push!(labels, "⟨X⟩")
+            push!(labels, X_EXPECTATION_LABEL)
             push!(sample_values, isnothing(X_sample) ? NaN : X_sample)
             push!(exact_values, isnothing(X_exact) ? NaN : X_exact)
             push!(sample_errors, isnothing(X_stderr) ? 0.0 : X_stderr)
         end
         if !isnothing(Z_sample) || !isnothing(Z_exact)
-            push!(labels, "⟨Z⟩")
+            push!(labels, Z_EXPECTATION_LABEL)
             push!(sample_values, isnothing(Z_sample) ? NaN : Z_sample)
             push!(exact_values, isnothing(Z_exact) ? NaN : Z_exact)
             push!(sample_errors, isnothing(Z_stderr) ? 0.0 : Z_stderr)
         end
         if !isnothing(ZZ_vert_sample) || !isnothing(ZZ_vert_exact)
-            push!(labels, "⟨ZZ⟩ᵥ")
+            push!(labels, math_label(raw"\langle ZZ\rangle_{\mathrm{v}}"))
             push!(sample_values, isnothing(ZZ_vert_sample) ? NaN : ZZ_vert_sample)
             push!(exact_values, isnothing(ZZ_vert_exact) ? NaN : ZZ_vert_exact)
             push!(sample_errors, isnothing(ZZ_vert_stderr) ? 0.0 : ZZ_vert_stderr)
         end
         if !isnothing(ZZ_horiz_sample) || !isnothing(ZZ_horiz_exact)
-            push!(labels, "⟨ZZ⟩ₕ")
+            push!(labels, math_label(raw"\langle ZZ\rangle_{\mathrm{h}}"))
             push!(sample_values, isnothing(ZZ_horiz_sample) ? NaN : ZZ_horiz_sample)
             push!(exact_values, isnothing(ZZ_horiz_exact) ? NaN : ZZ_horiz_exact)
             push!(sample_errors, isnothing(ZZ_horiz_stderr) ? 0.0 : ZZ_horiz_stderr)

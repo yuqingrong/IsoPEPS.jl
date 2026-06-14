@@ -91,40 +91,52 @@ function plot_eigenvalue_spectrum(eigenvalues_raw::AbstractVector{<:Complex};
 
     ax1 = Axis(fig[1, 1],
                xlabel="Eigenvalue index (sorted)",
-               ylabel="Eigenvalue magnitude |λ|",
+               ylabel=math_label(raw"|\lambda|"),
                title=isempty(title) ? "Eigenvalue Spectrum" : title)
 
     colors = [λ > 0.99 ? :red : (λ > 0.9 ? :orange : :steelblue) for λ in sorted_eigs]
     barplot!(ax1, 1:n, sorted_eigs, color=colors, strokewidth=0.5, strokecolor=:black)
-    hlines!(ax1, [1.0], color=:black, linestyle=:dash, linewidth=1.5, label="λ=1")
-    hlines!(ax1, [0.99], color=:red, linestyle=:dot, linewidth=1, alpha=0.5, label="λ=0.99")
-    scatter!(ax1, [1], [λ₁], markersize=15, color=:green, marker=:star5, label="λ₁=$(round(λ₁, digits=4))")
-    scatter!(ax1, [2], [λ₂], markersize=12, color=:purple, marker=:diamond, label="λ₂=$(round(λ₂, digits=4))")
+    hlines!(ax1, [1.0], color=:black, linestyle=:dash, linewidth=1.5,
+            label=math_label(raw"\lambda=1"))
+    hlines!(ax1, [0.99], color=:red, linestyle=:dot, linewidth=1, alpha=0.5,
+            label=math_label(raw"\lambda=0.99"))
+    scatter!(ax1, [1], [λ₁], markersize=15, color=:green, marker=:star5,
+             label=math_label("\\lambda_1=$(round(λ₁, digits=4))"))
+    scatter!(ax1, [2], [λ₂], markersize=12, color=:purple, marker=:diamond,
+             label=math_label("\\lambda_2=$(round(λ₂, digits=4))"))
     axislegend(ax1, position=:rb)
 
     ax2 = Axis(fig[1, 2],
-               xlabel="Re(λ)",
-               ylabel="Im(λ)",
+               xlabel=math_label(raw"\mathrm{Re}(\lambda)"),
+               ylabel=math_label(raw"\mathrm{Im}(\lambda)"),
                title="Eigenvalues in Complex Plane",
                aspect=DataAspect())
 
     θ = range(0, 2π, length=100)
     lines!(ax2, cos.(θ), sin.(θ), color=:black, linestyle=:dash, linewidth=1.5, label="Unit circle")
-    lines!(ax2, 0.99 .* cos.(θ), 0.99 .* sin.(θ), color=:red, linestyle=:dot, linewidth=1, alpha=0.5, label="|λ|=0.99")
+    lines!(ax2, 0.99 .* cos.(θ), 0.99 .* sin.(θ), color=:red,
+           linestyle=:dot, linewidth=1, alpha=0.5,
+           label=math_label(raw"|\lambda|=0.99"))
 
     re_parts = real.(sorted_raw)
     im_parts = imag.(sorted_raw)
     colors_scatter = [abs(λ) > 0.99 ? :red : (abs(λ) > 0.9 ? :orange : :steelblue) for λ in sorted_raw]
     scatter!(ax2, re_parts, im_parts, color=colors_scatter, markersize=8, strokewidth=0.5, strokecolor=:black)
-    scatter!(ax2, [real(sorted_raw[1])], [imag(sorted_raw[1])], markersize=15, color=:green, marker=:star5, label="λ₁")
-    scatter!(ax2, [real(sorted_raw[2])], [imag(sorted_raw[2])], markersize=12, color=:purple, marker=:diamond, label="λ₂")
+    scatter!(ax2, [real(sorted_raw[1])], [imag(sorted_raw[1])],
+             markersize=15, color=:green, marker=:star5,
+             label=math_label(raw"\lambda_1"))
+    scatter!(ax2, [real(sorted_raw[2])], [imag(sorted_raw[2])],
+             markersize=12, color=:purple, marker=:diamond,
+             label=math_label(raw"\lambda_2"))
     axislegend(ax2, position=:lt)
 
     if show_gap
         status_color = gap > 0.1 ? :green : (gap > 0.01 ? :orange : :red)
         status_text = gap > 0.1 ? "✓ Good" : (gap > 0.01 ? "⚠ Poor" : "✗ Bad")
         Label(fig[0, 1:2],
-              "Spectral Gap: $(round(gap, digits=6))  |  ξ = $(round(ξ, digits=2))  |  $status_text",
+              rich("Spectral gap: $(round(gap, digits=6))  |  ",
+                   rich("ξ", font=:italic),
+                   " = $(round(ξ, digits=2))  |  $status_text"),
               fontsize=16, font=:bold, color=status_color, halign=:center)
     end
 
@@ -286,7 +298,7 @@ function plot_correlation_function(filename::String;
 
         # ── Panel (a): full correlator ────────────────────────────────────
         ax1 = Axis(fig[1, 1];
-                   ylabel = "|⟨ZᵢZᵢ₊ᵣ⟩|",
+                   ylabel = math_label(raw"|\langle Z_i Z_{i+r}\rangle|"),
                    yscale = log10,
                    xticklabelsvisible = false)
 
@@ -306,8 +318,8 @@ function plot_correlation_function(filename::String;
 
         # ── Panel (b): connected correlator + fit ─────────────────────────
         ax2 = Axis(fig[2, 1];
-                   xlabel = "r",
-                   ylabel = "|⟨ZᵢZᵢ₊ᵣ⟩_c|",
+                   xlabel = math_label(raw"r"),
+                   ylabel = math_label(raw"|\langle Z_i Z_{i+r}\rangle_{\mathrm{c}}|"),
                    yscale = log10)
 
         scatterlines!(ax2, separations, exact_connected_abs;
@@ -325,7 +337,8 @@ function plot_correlation_function(filename::String;
             fitted = max.(abs(A_fitted) .* exp.(-r_fit ./ ξ_fitted), min_val)
             lines!(ax2, r_fit, fitted;
                    color=:seagreen, linestyle=:dash,
-                   label="∝ e^{−r/$(round(ξ_fitted, digits=2))}")
+                   label=math_label(
+                       "\\propto e^{-r/$(round(ξ_fitted, digits=2))}"))
         end
 
         text!(ax2, 0.03, 0.97; text="(b)", space=:relative,

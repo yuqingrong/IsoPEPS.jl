@@ -78,8 +78,8 @@ function plot_readout_energy(
 
         energy_ax = Axis(
             fig[1, 1];
-            xlabel="Readout error rate p (%)",
-            ylabel="Energy density e(p)",
+            xlabel=math_label(raw"\mathrm{Readout\ error\ rate}\ p\ (\%)"),
+            ylabel=math_label(raw"\mathrm{Energy\ density}\ e(p)"),
         )
         errorbars!(
             energy_ax, p, energy, stderr;
@@ -143,8 +143,8 @@ function plot_readout_energy_bias(
 
         bias_ax = Axis(
             fig[1, 1];
-            xlabel="Readout error rate p (%)",
-            ylabel="|e(p) - e(0)|",
+            xlabel=math_label(raw"\mathrm{Readout\ error\ rate}\ p\ (\%)"),
+            ylabel=math_label(raw"|e(p)-e(0)|"),
             limits=(nothing, (0.0, nothing)),
         )
         errorbars!(

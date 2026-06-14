@@ -20,6 +20,26 @@ function write_test_tfim_circuit(path; g=2.0, row=3, p=3, nqubits=3, energy=0.0)
 end
 
 
+@testset "Quantum journal visualization typography" begin
+    theme = paper_theme()
+    @test theme.font[] == :regular
+    @test occursin(
+        "NewComputerModern",
+        sprint(show, Makie.to_font(theme.fonts, :regular)))
+    @test occursin(
+        "Italic",
+        sprint(show, Makie.to_font(theme.fonts, :italic)))
+
+    fig = plot_training_history(1:3, [0.0, -0.1, -0.2]; ylims=nothing)
+    ax = fig.content[1]
+    @test ax.ylabel[] == IsoPEPS.ENERGY_PER_SITE_LABEL
+    @test ax.titlefont[] == :regular
+    @test string(ax.ylabel[]) == raw"E/N_{\mathrm{site}}"
+    @test string(IsoPEPS.FIELD_LABEL) == "g"
+    @test string(IsoPEPS.J2_OVER_J1_LABEL) == "J_2/J_1"
+end
+
+
 @testset "save and load results" begin
     # Test CircuitOptimizationResult
     result_circuit = CircuitOptimizationResult(
@@ -525,7 +545,8 @@ end
     @test "0.53" in phase_texts
     g = legend.entrygroups[][1]
     @test [e.label[] for e in g[2]] == [
-        "M²(π,π)", "M²(0,π)",
+        IsoPEPS.math_label(raw"M^2(\pi,\pi)"),
+        IsoPEPS.math_label(raw"M^2(0,\pi)"),
     ]
     @test count(plot -> plot isa Errorbars, ax.scene.plots) == 2
     line_series = filter(plot -> hasproperty(plot, :linestyle) && hasproperty(plot, :marker),
@@ -737,7 +758,7 @@ end
                     !ax.xticklabelsvisible[] && !ax.yticklabelsvisible[], axes)
     panel_labels = filter(content -> content isa Label, fig.content)
     @test [label.text[] for label in panel_labels] ==
-          ["J2=0.0", "J2=0.5", "J2=1.0"]
+          [IsoPEPS.math_label("J_2=$value") for value in (0.0, 0.5, 1.0)]
     @test [only(label.layoutobservables.gridcontent[].span.cols)
            for label in panel_labels] == [1, 2, 3]
     @test all(label -> only(label.layoutobservables.gridcontent[].span.rows) == 1,

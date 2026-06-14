@@ -300,15 +300,16 @@ function plot_dimer_structure_factor(filename::String;
     # --- Plot ---
     fig = Figure(size=(700, 600))
     ax = Axis(fig[1, 1],
-              xlabel="qₓ",
-              ylabel="qᵧ",
-              title="Dimer Structure Factor S_D(q) [$dimer_orientation]",
+              xlabel=QX_LABEL,
+              ylabel=QY_LABEL,
+              title=math_label(
+                  "\\mathrm{Dimer\\ structure\\ factor}\\;S_{\\mathrm{D}}(q)\\;[\\mathrm{$dimer_orientation}]"),
               aspect=DataAspect(),
               xticks=([0, π, 2π], ["0", "π", "2π"]),
               yticks=([0, π, 2π], ["0", "π", "2π"]))
 
     hm = heatmap!(ax, qvals, qvals, SD, colormap=:viridis)
-    Colorbar(fig[1, 2], hm, label="S_D(q)")
+    Colorbar(fig[1, 2], hm, label=math_label(raw"S_{\mathrm{D}}(q)"))
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))
@@ -418,15 +419,16 @@ function plot_spin_structure_factor(filename::String;
     # --- Plot ---
     fig = Figure(size=(700, 600))
     ax = Axis(fig[1, 1],
-              xlabel="qₓ",
-              ylabel="qᵧ",
-              title="S_SS(q)  J₂=$J2, D=$D",
+              xlabel=QX_LABEL,
+              ylabel=QY_LABEL,
+              title=math_label(
+                  "S_{\\mathrm{SS}}(q),\\;J_2=$J2,\\;D=$D"),
               aspect=DataAspect(),
               xticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]),
               yticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]))
 
     hm = heatmap!(ax, qvals, qvals, SSS, colormap=:viridis)
-    Colorbar(fig[1, 2], hm, label="S_SS(q)")
+    Colorbar(fig[1, 2], hm, label=math_label(raw"S_{\mathrm{SS}}(q)"))
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))
@@ -661,11 +663,11 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
     for (j, J2) in enumerate(J2_values)
         ax = Axis(fig[1, j],
                   aspect=DataAspect(),
-                  title="J₂ = $J2",
+                  title=math_label("J_2=$J2"),
                   xticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]),
                   yticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]))
         if j == 1
-            ax.ylabel = "qᵧ"
+            ax.ylabel = QY_LABEL
         else
             ax.yticklabelsvisible = false
         end
@@ -673,28 +675,31 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
         hm_spin = heatmap!(ax, qvals, qvals, spin_matrices[j],
                            colormap=:viridis, colorrange=(spin_min, spin_max))
     end
-    Colorbar(fig[1, n + 1], hm_spin, label="S(q)")
+    Colorbar(fig[1, n + 1], hm_spin, label=math_label(raw"S(q)"))
 
     # Bottom row: dimer structure factor Sᴅ(q)
     for (j, J2) in enumerate(J2_values)
         ax = Axis(fig[2, j],
-                  xlabel="qₓ",
+                  xlabel=QX_LABEL,
                   aspect=DataAspect(),
                   xticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]),
                   yticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]))
         if j == 1
-            ax.ylabel = "qᵧ"
+            ax.ylabel = QY_LABEL
         else
             ax.yticklabelsvisible = false
         end
         hm_dimer = heatmap!(ax, qvals, qvals, dimer_matrices[j],
                             colormap=:viridis, colorrange=(dimer_min, dimer_max))
     end
-    Colorbar(fig[2, n + 1], hm_dimer, label="Sᴅ(q)")
+    Colorbar(fig[2, n + 1], hm_dimer,
+             label=math_label(raw"S_{\mathrm{D}}(q)"))
 
     # Row labels on the left
-    Label(fig[1, 0], "S(q)", rotation=π/2, fontsize=16, tellheight=false)
-    Label(fig[2, 0], "Sᴅ(q)", rotation=π/2, fontsize=16, tellheight=false)
+    Label(fig[1, 0], math_label(raw"S(q)"),
+          rotation=π/2, fontsize=16, tellheight=false)
+    Label(fig[2, 0], math_label(raw"S_{\mathrm{D}}(q)"),
+          rotation=π/2, fontsize=16, tellheight=false)
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))
@@ -966,7 +971,7 @@ function plot_bond_energy_pattern(filename::String;
         scatter!(ax, xs, ys; color=:gray30, markersize=5, strokewidth=0)
 
         Colorbar(fig[1, 2]; colormap=:RdBu, limits=(-cmax, cmax),
-                 label="⟨𝐒ᵢ · 𝐒ⱼ⟩",
+                 label=math_label(raw"\langle \mathbf{S}_i\cdot\mathbf{S}_j\rangle"),
                  labelsize=PAPER_AXIS_LABELSIZE,
                  ticklabelsize=PAPER_TICKLABELSIZE,
                  width=12)
@@ -1153,7 +1158,7 @@ function plot_bond_energy_pattern(results_dir::String,
         fig = Figure(size=figure_size)
 
         for (panel, value) in enumerate(J2)
-            Label(fig[1, panel], "J2=$value";
+            Label(fig[1, panel], math_label("J_2=$value");
                   fontsize=PAPER_TICKLABELSIZE,
                   font=PAPER_FONT,
                   halign=:center,
@@ -1170,7 +1175,7 @@ function plot_bond_energy_pattern(results_dir::String,
                  colormap=:RdBu,
                  limits=colorrange,
                  vertical=true,
-                 label="⟨𝐒ᵢ · 𝐒ⱼ⟩",
+                 label=math_label(raw"\langle \mathbf{S}_i\cdot\mathbf{S}_j\rangle"),
                  labelsize=PAPER_AXIS_LABELSIZE,
                  ticklabelsize=PAPER_TICKLABELSIZE,
                  width=12)

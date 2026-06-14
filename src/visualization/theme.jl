@@ -6,23 +6,37 @@
 
 const PAPER_FIGSIZE = (246, 170)         # PRL/PRX single column (3.375 in × 2.36 in)
 const PAPER_FIGSIZE_WIDE = (510, 200)    # PRX/Nature double column (7.08 in × 2.78 in)
-const PAPER_FONT = "Helvetica"
+const PAPER_FONT = :regular
 const PAPER_FONTSIZE = 10
 const PAPER_AXIS_LABELSIZE = 10
 const PAPER_TICKLABELSIZE = 9
 const PAPER_TITLESIZE = 11
 const PAPER_LEGEND_LABELSIZE = 8
-const ENERGY_PER_SITE_LABEL = Makie.LaTeXString(raw"E/N_{\mathrm{site}}")
+
+math_label(text::AbstractString) = Makie.LaTeXString(text)
+
+const ENERGY_PER_SITE_LABEL = math_label(raw"E/N_{\mathrm{site}}")
+const FIELD_LABEL = math_label(raw"g")
+const J2_OVER_J1_LABEL = math_label(raw"J_2/J_1")
+const CORRELATION_LENGTH_LABEL = math_label(raw"\xi")
+const M2_LABEL = math_label(raw"M^2(\mathbf{q})")
+const QX_LABEL = math_label(raw"q_x")
+const QY_LABEL = math_label(raw"q_y")
+const X_EXPECTATION_LABEL = math_label(raw"\langle X\rangle")
+const Z_EXPECTATION_LABEL = math_label(raw"\langle Z\rangle")
 
 """
     paper_theme()
 
-Science/PRX-style Makie theme: Helvetica sans-serif, compact margins, framed
-legends, light grid. Apply with `set_theme!(paper_theme())` or
+Quantum-journal-style Makie theme: Computer Modern serif text, compact margins,
+and light grids. Mathematical labels should use `math_label` so physical
+quantities are italic while descriptive subscripts remain upright. Apply with
+`set_theme!(paper_theme())` or
 `with_theme(paper_theme()) do ... end`.
 """
 function paper_theme()
     Theme(
+        fonts = Makie.theme_latexfonts().fonts,
         fontsize = PAPER_FONTSIZE,
         font = PAPER_FONT,
         figure_padding = 6,
@@ -31,7 +45,7 @@ function paper_theme()
         Axis = (
             xlabelsize = PAPER_AXIS_LABELSIZE, ylabelsize = PAPER_AXIS_LABELSIZE,
             xticklabelsize = PAPER_TICKLABELSIZE, yticklabelsize = PAPER_TICKLABELSIZE,
-            titlesize = PAPER_TITLESIZE,
+            titlesize = PAPER_TITLESIZE, titlefont = :regular,
             xgridvisible = true, ygridvisible = true,
             xgridcolor = (:gray, 0.25), ygridcolor = (:gray, 0.25),
             xgridwidth = 0.5, ygridwidth = 0.5,

@@ -559,7 +559,7 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
         end
     end
 
-    xlabel_str = is_heisenberg ? "J₂ / J₁" : "g"
+    xlabel_str = is_heisenberg ? J2_OVER_J1_LABEL : FIELD_LABEL
 
     _figsize = isnothing(figsize) ? PAPER_FIGSIZE : figsize
 
@@ -620,7 +620,8 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
 
         ax2 = Axis(fig[1, 1];
                    xlabel      = xlabel_str,
-                   ylabel      = "(E_IsoPEPS − E_DMRG) / |E_DMRG|",
+                   ylabel      = math_label(
+                       raw"\frac{E_{\mathrm{IsoPEPS}}-E_{\mathrm{DMRG}}}{|E_{\mathrm{DMRG}}|}"),
                    xgridvisible = true,
                    ygridvisible = true)
 
@@ -754,15 +755,15 @@ function plot_magnetization_vs_g(data_dir::String, g_values::Vector{Float64};
         fig = Figure(size=_figsize)
 
         ax = Axis(fig[1, 1];
-                  xlabel = "g",
+                  xlabel = FIELD_LABEL,
                   ylabel = "Magnetisation per site")
 
         scatterlines!(ax, g_found, mZ_vals;
                       color=:steelblue, marker=:circle,
-                      label="|⟨Z⟩|")
+                      label=math_label(raw"|\langle Z\rangle|"))
         scatterlines!(ax, g_found, mX_vals;
                       color=:firebrick, marker=:diamond, linestyle=:dash,
-                      label="|⟨X⟩|")
+                      label=math_label(raw"|\langle X\rangle|"))
 
         add_paper_legend!(ax; position=:rt)
 
@@ -877,16 +878,16 @@ function plot_connected_corr_vs_g(data_dir::String, g_values::Vector{Float64};
         fig = Figure(size=_figsize)
 
         ax = Axis(fig[1, 1];
-                  xlabel = "g",
-                  ylabel = "C(r)",
+                  xlabel = FIELD_LABEL,
+                  ylabel = math_label(raw"C(r)"),
                   yscale = log10)
 
         scatterlines!(ax, g_found, C1_vals;
                       color=:steelblue, marker=:circle,
-                      label="C(1) nearest")
+                      label=math_label(raw"C(1)\ \mathrm{nearest}"))
         scatterlines!(ax, g_found, C2_vals;
                       color=:firebrick, marker=:diamond, linestyle=:dash,
-                      label="C(2) next-nearest")
+                      label=math_label(raw"C(2)\ \mathrm{next-nearest}"))
 
         add_paper_legend!(ax; position=:lt)
 
@@ -1008,8 +1009,8 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
         fig = Figure(size=PAPER_FIGSIZE)
 
         ax = Axis(fig[1, 1],
-                  xlabel="g",
-                  ylabel="Correlation Length ξ")
+                  xlabel=FIELD_LABEL,
+                  ylabel=CORRELATION_LENGTH_LABEL)
 
         # Extract and plot correlation lengths from transfer matrix
         g_sorted = sort(collect(keys(correlation_data)))
@@ -1248,9 +1249,10 @@ function plot_correlation_vs_J2(data_dir::String, J2_values::Vector{Float64};
         fig = Figure(size=PAPER_FIGSIZE)
 
         ax = Axis(fig[1, 1],
-                  xlabel="J₂ / J₁",
-                  ylabel="Correlation Length ξ",
-                  title="Correlation Length vs J₂ (J₁=$J1, row=$row, D=$(nqubits-1))")
+                  xlabel=J2_OVER_J1_LABEL,
+                  ylabel=CORRELATION_LENGTH_LABEL,
+                  title=math_label(
+                      "\\mathrm{Correlation\\ length\\ vs.}\\;J_2\\;(J_1=$J1,\\;\\mathrm{row}=$row,\\;D=$(nqubits-1))"))
 
         # Plot correlation lengths from transfer matrix
         J2_sorted = sort(collect(keys(correlation_data)))
@@ -1440,16 +1442,20 @@ function plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
     # --- Plot ---
     fig = Figure(size=PAPER_FIGSIZE_WIDE)
     ax = Axis(fig[1, 1],
-              xlabel="J₂ / J₁",
-              ylabel="M²(q)",
-              title="Magnetic Order [$method_str]: row=$row, nqubits=$nqubits, p=$p")
+              xlabel=J2_OVER_J1_LABEL,
+              ylabel=M2_LABEL,
+              title=math_label(
+                  "\\mathrm{Magnetic\\ order}\\;[\\mathrm{$method_str}]:\\;\\mathrm{row}=$row,\\;n_{\\mathrm{qubits}}=$nqubits,\\;p=$p"))
 
     scatterlines!(ax, J2_found, M2_neel,
-                  label="M²(π,π) Néel", color=:steelblue, marker=:circle)
+                  label=math_label(raw"M^2(\pi,\pi)\ \mathrm{N\acute{e}el}"),
+                  color=:steelblue, marker=:circle)
     scatterlines!(ax, J2_found, M2_stripe,
-                  label="M²(π,0) Stripe", color=:firebrick, marker=:diamond)
+                  label=math_label(raw"M^2(\pi,0)\ \mathrm{stripe}"),
+                  color=:firebrick, marker=:diamond)
     scatterlines!(ax, J2_found, M2_stripe_0pi,
-                  label="M²(0,π) Stripe", color=:seagreen, marker=:rect)
+                  label=math_label(raw"M^2(0,\pi)\ \mathrm{stripe}"),
+                  color=:seagreen, marker=:rect)
 
     # Overlay DMRG reference if provided
     if dmrg_file !== nothing && isfile(dmrg_file)
@@ -1458,21 +1464,24 @@ function plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
             dmrg_J2 = Float64.(dmrg_data[:J2_values])
             dmrg_neel = Float64.(dmrg_data[:M2_neel])
             scatterlines!(ax, dmrg_J2, dmrg_neel,
-                          label="DMRG M²(π,π)", color=:steelblue, linestyle=:dash,
+                          label=math_label(raw"\mathrm{DMRG}\ M^2(\pi,\pi)"),
+                          color=:steelblue, linestyle=:dash,
                           marker=:utriangle)
         end
         if haskey(dmrg_data, :J2_values) && haskey(dmrg_data, :M2_stripe)
             dmrg_J2 = Float64.(dmrg_data[:J2_values])
             dmrg_stripe = Float64.(dmrg_data[:M2_stripe])
             scatterlines!(ax, dmrg_J2, dmrg_stripe,
-                          label="DMRG M²(π,0)", color=:firebrick, linestyle=:dash,
+                          label=math_label(raw"\mathrm{DMRG}\ M^2(\pi,0)"),
+                          color=:firebrick, linestyle=:dash,
                           marker=:utriangle)
         end
         if haskey(dmrg_data, :J2_values) && haskey(dmrg_data, :M2_stripe_0pi)
             dmrg_J2 = Float64.(dmrg_data[:J2_values])
             dmrg_stripe_0pi = Float64.(dmrg_data[:M2_stripe_0pi])
             scatterlines!(ax, dmrg_J2, dmrg_stripe_0pi,
-                          label="DMRG M²(0,π)", color=:seagreen, linestyle=:dash,
+                          label=math_label(raw"\mathrm{DMRG}\ M^2(0,\pi)"),
+                          color=:seagreen, linestyle=:dash,
                           marker=:utriangle)
         end
     elseif dmrg_file !== nothing
@@ -1896,9 +1905,9 @@ function plot_M2_comparison(; exact_file::String="",
                               save_path=nothing)
     # M²(π,π) = Néel, M²(0,π) uses key M2_0pi / M2_stripe_0pi
     q_info = [
-        (label="M²(π,π)", std_key="M2_neel",      stderr_key="M2_neel_stderr",
+        (label=math_label(raw"M^2(\pi,\pi)"), std_key="M2_neel",      stderr_key="M2_neel_stderr",
          dmrg_key="M2_neel_$dmrg_Lx_key", marker=:circle),
-        (label="M²(0,π)", std_key="M2_stripe_0pi", stderr_key="M2_stripe_0pi_stderr",
+        (label=math_label(raw"M^2(0,\pi)"), std_key="M2_stripe_0pi", stderr_key="M2_stripe_0pi_stderr",
          dmrg_key="M2_0pi_$dmrg_Lx_key", marker=:diamond),
     ]
 
@@ -1945,9 +1954,12 @@ function plot_M2_comparison(; exact_file::String="",
                  phase_band_height + 2
     fig = Figure(size=(PAPER_FIGSIZE[1], fig_height))
     phase_ax = Axis(fig[1, 1])
-    ax = Axis(fig[2, 1], xlabel=has_stderr_panel ? "" : "J₂ / J₁", ylabel="M²(q)")
+    ax = Axis(fig[2, 1],
+              xlabel=has_stderr_panel ? "" : J2_OVER_J1_LABEL,
+              ylabel=M2_LABEL)
     stderr_ax = has_stderr_panel ?
-        Axis(fig[3, 1], xlabel="J₂ / J₁", ylabel="Sampling SE", yscale=log10) :
+        Axis(fig[3, 1], xlabel=J2_OVER_J1_LABEL,
+             ylabel="Sampling SE", yscale=log10) :
         nothing
     rowsize!(fig.layout, 1, Fixed(phase_band_height))
     rowgap!(fig.layout, 1)

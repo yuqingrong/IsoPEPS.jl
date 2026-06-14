@@ -280,11 +280,11 @@ function plot_local_xz_dynamics_vs_g(data_dir::String, g_values::Vector{Float64}
     fig = Figure(size=PAPER_FIGSIZE_WIDE)
     ax_x = Axis(fig[1, 1];
                 xlabel="Channel iteration",
-                ylabel="⟨X⟩",
+                ylabel=X_EXPECTATION_LABEL,
                 limits=(xlims, (-1.05, 1.05)))
     ax_z = Axis(fig[2, 1];
                 xlabel="Channel iteration",
-                ylabel="⟨Z⟩",
+                ylabel=Z_EXPECTATION_LABEL,
                 limits=(xlims, (-1.05, 1.05)))
 
     eval_indices = collect(1:shots)
@@ -337,10 +337,13 @@ function plot_local_xz_dynamics_vs_g(data_dir::String, g_values::Vector{Float64}
         se_z   = vec(std(z_curves, dims=1)) ./ sqrt(M)
 
         band!(ax_x, eval_indices, mean_x .- se_x, mean_x .+ se_x; color=(color, 0.2))
-        source_label = parameter_source === :random ? " random" : ""
-        lines!(ax_x, eval_indices, mean_x; color=color, label="g=$g$source_label")
+        series_label = parameter_source === :random ?
+            math_label("g=$g\\;\\mathrm{random}") :
+            math_label("g=$g")
+        lines!(ax_x, eval_indices, mean_x; color=color,
+               label=series_label)
         band!(ax_z, eval_indices, mean_z .- se_z, mean_z .+ se_z; color=(color, 0.2))
-        lines!(ax_z, eval_indices, mean_z; color=color, label="g=$g")
+        lines!(ax_z, eval_indices, mean_z; color=color, label=math_label("g=$g"))
     end
 
     Legend(fig[:, 2], ax_x;

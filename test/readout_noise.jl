@@ -56,10 +56,13 @@ end
 
         energy_ax = only(filter(content -> content isa Axis, energy_fig.content))
         bias_ax = only(filter(content -> content isa Axis, bias_fig.content))
-        @test energy_ax.xlabel[] == "Readout error rate p (%)"
-        @test energy_ax.ylabel[] == "Energy density e(p)"
-        @test bias_ax.xlabel[] == "Readout error rate p (%)"
-        @test bias_ax.ylabel[] == "|e(p) - e(0)|"
+        @test energy_ax.xlabel[] ==
+              IsoPEPS.math_label(raw"\mathrm{Readout\ error\ rate}\ p\ (\%)")
+        @test energy_ax.ylabel[] ==
+              IsoPEPS.math_label(raw"\mathrm{Energy\ density}\ e(p)")
+        @test bias_ax.xlabel[] ==
+              IsoPEPS.math_label(raw"\mathrm{Readout\ error\ rate}\ p\ (\%)")
+        @test bias_ax.ylabel[] == IsoPEPS.math_label(raw"|e(p)-e(0)|")
         @test count(plot -> plot isa Errorbars, energy_ax.scene.plots) == 1
         @test count(plot -> plot isa Errorbars, bias_ax.scene.plots) == 1
         energy_markers = filter(

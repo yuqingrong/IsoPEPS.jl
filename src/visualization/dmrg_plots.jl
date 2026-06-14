@@ -72,13 +72,14 @@ function plot_dmrg_spin_structure_factor(result;
     end
 
     fig = Figure(size=(700, 600))
-    ax = Axis(fig[1, 1], xlabel="qₓ", ylabel="qᵧ",
-              title="DMRG S_SS(q)  J₂=$J2, D=$D",
+    ax = Axis(fig[1, 1], xlabel=QX_LABEL, ylabel=QY_LABEL,
+              title=math_label(
+                  "\\mathrm{DMRG}\\;S_{\\mathrm{SS}}(q),\\;J_2=$J2,\\;D=$D"),
               aspect=DataAspect(),
               xticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]),
               yticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]))
     hm = heatmap!(ax, qvals, qvals, SSS, colormap=:viridis)
-    Colorbar(fig[1, 2], hm, label="S_SS(q)")
+    Colorbar(fig[1, 2], hm, label=math_label(raw"S_{\mathrm{SS}}(q)"))
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))
@@ -156,13 +157,14 @@ function plot_dmrg_dimer_structure_factor(result;
     println()
 
     fig = Figure(size=(700, 600))
-    ax = Axis(fig[1, 1], xlabel="qₓ", ylabel="qᵧ",
-              title="DMRG Dimer Structure Factor S_D(q) [$dimer_orientation]",
+    ax = Axis(fig[1, 1], xlabel=QX_LABEL, ylabel=QY_LABEL,
+              title=math_label(
+                  "\\mathrm{DMRG\\ dimer\\ structure\\ factor}\\;S_{\\mathrm{D}}(q)\\;[\\mathrm{$dimer_orientation}]"),
               aspect=DataAspect(),
               xticks=([0, π, 2π], ["0", "π", "2π"]),
               yticks=([0, π, 2π], ["0", "π", "2π"]))
     hm = heatmap!(ax, qvals, qvals, SD, colormap=:viridis)
-    Colorbar(fig[1, 2], hm, label="S_D(q)")
+    Colorbar(fig[1, 2], hm, label=math_label(raw"S_{\mathrm{D}}(q)"))
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))
@@ -236,7 +238,9 @@ function plot_dmrg_bond_energy_pattern(result;
     println("  Color scale: ±$cmax")
 
     plot_title = isempty(title) ?
-        "DMRG Bond Energy ⟨Sᵢ·Sⱼ⟩ (Lx=$Lx, Ly=$Ly)" : title
+        math_label(
+            "\\mathrm{DMRG\\ bond\\ energy}\\;\\langle \\mathbf{S}_i\\!\\cdot\\!\\mathbf{S}_j\\rangle\\;(L_x=$Lx,\\;L_y=$Ly)") :
+        title
 
     fig = Figure(size=(max(800, (col_hi - col_lo + 2) * 60), max(400, Ly * 100 + 100)))
     ax = Axis(fig[1, 1], xlabel="Column", ylabel="Row",
@@ -282,7 +286,7 @@ function plot_dmrg_bond_energy_pattern(result;
     end
 
     Colorbar(fig[1, 2], colormap=:RdBu, limits=(-cmax, cmax),
-             label="⟨Sᵢ · Sⱼ⟩")
+             label=math_label(raw"\langle \mathbf{S}_i\cdot\mathbf{S}_j\rangle"))
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))

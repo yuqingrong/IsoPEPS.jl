@@ -280,8 +280,8 @@ function plot_energy_vs_inv_samples(filename::String,
         fig = Figure(size=_figsize)
 
         ax = Axis(fig[1, 1];
-                  xlabel = "1 / N (samples)",
-                  ylabel = "E / site",
+                  xlabel = math_label(raw"1/N_{\mathrm{samples}}"),
+                  ylabel = ENERGY_PER_SITE_LABEL,
                   xscale = log10)
 
         for (k, n) in enumerate(sorted_sizes)
@@ -341,8 +341,8 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
         fig = Figure(size=_figsize)
 
         ax = Axis(fig[1, 1];
-                  xlabel   = L"N_{\mathrm{shot}}",
-                  ylabel   = "Var(E)",
+                  xlabel   = math_label(raw"N_{\mathrm{shot}}"),
+                  ylabel   = math_label(raw"\mathrm{Var}(E)"),
                   xscale   = log10,
                   yscale   = log10)
 
