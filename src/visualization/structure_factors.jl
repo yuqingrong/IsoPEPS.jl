@@ -710,6 +710,10 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
     return (fig, spin_matrices, dimer_matrices)
 end
 
+const _BOND_ENERGY_LABEL =
+    math_label(raw"\langle \mathbf{S}_{\mathit{i}}\cdot\mathbf{S}_{\mathit{j}}\rangle")
+const _BOND_ENERGY_LABELSIZE = PAPER_AXIS_LABELSIZE + 2
+
 """
     plot_bond_energy_pattern(filename; max_cols=5, use_exact=true,
                              conv_step=1000, samples=nothing,
@@ -914,7 +918,7 @@ function plot_bond_energy_pattern(filename::String;
 
     # Figure size: scale one lattice unit to ~35 pt, add colorbar column and margins
     _unit    = 35
-    _cb_w    = 55
+    _cb_w    = 80
     _default_w = max_cols * _unit + _cb_w + 20
     _default_h = (_row + 1) * _unit + 20
     _figsize = isnothing(figsize) ? (_default_w, _default_h) : figsize
@@ -971,8 +975,8 @@ function plot_bond_energy_pattern(filename::String;
         scatter!(ax, xs, ys; color=:gray30, markersize=5, strokewidth=0)
 
         Colorbar(fig[1, 2]; colormap=:RdBu, limits=(-cmax, cmax),
-                 label=math_label(raw"\langle \mathbf{S}_i\cdot\mathbf{S}_j\rangle"),
-                 labelsize=PAPER_AXIS_LABELSIZE,
+                 label=_BOND_ENERGY_LABEL,
+                 labelsize=_BOND_ENERGY_LABELSIZE,
                  ticklabelsize=PAPER_TICKLABELSIZE,
                  width=12)
 
@@ -1150,7 +1154,7 @@ function plot_bond_energy_pattern(results_dir::String,
 
     unit = 35
     panel_width = max_cols * unit + 10
-    default_width = length(J2) * panel_width + 70
+    default_width = length(J2) * panel_width + 95
     default_height = row * unit + 55
     figure_size = isnothing(figsize) ? (default_width, default_height) : figsize
 
@@ -1175,8 +1179,8 @@ function plot_bond_energy_pattern(results_dir::String,
                  colormap=:RdBu,
                  limits=colorrange,
                  vertical=true,
-                 label=math_label(raw"\langle \mathbf{S}_i\cdot\mathbf{S}_j\rangle"),
-                 labelsize=PAPER_AXIS_LABELSIZE,
+                 label=_BOND_ENERGY_LABEL,
+                 labelsize=_BOND_ENERGY_LABELSIZE,
                  ticklabelsize=PAPER_TICKLABELSIZE,
                  width=12)
         rowsize!(fig.layout, 1, Fixed(18))

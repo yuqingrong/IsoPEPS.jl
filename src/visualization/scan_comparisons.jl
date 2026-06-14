@@ -891,15 +891,15 @@ function plot_connected_corr_vs_g(data_dir::String, g_values::Vector{Float64};
 
         ax = Axis(fig[1, 1];
                   xlabel = FIELD_LABEL,
-                  ylabel = math_label(raw"C(r)"),
+                  ylabel = math_label(raw"\mathit{C}(\mathit{r})"),
                   yscale = log10)
 
         scatterlines!(ax, g_found, C1_vals;
                       color=:steelblue, marker=:circle,
-                      label=math_label(raw"C(1)\ \mathrm{nearest}"))
+                      label=math_label(raw"\mathit{C}(1)\ \mathrm{nearest}"))
         scatterlines!(ax, g_found, C2_vals;
                       color=:firebrick, marker=:diamond, linestyle=:dash,
-                      label=math_label(raw"C(2)\ \mathrm{next-nearest}"))
+                      label=math_label(raw"\mathit{C}(2)\ \mathrm{next-nearest}"))
 
         add_paper_legend!(ax; position=:lt)
 
@@ -1917,9 +1917,9 @@ function plot_M2_comparison(; exact_file::String="",
                               save_path=nothing)
     # M²(π,π) = Néel, M²(0,π) uses key M2_0pi / M2_stripe_0pi
     q_info = [
-        (label=math_label(raw"M^2(\pi,\pi)"), std_key="M2_neel",      stderr_key="M2_neel_stderr",
+        (label_tex=raw"\mathit{M}^2(\pi,\pi)", std_key="M2_neel",      stderr_key="M2_neel_stderr",
          dmrg_key="M2_neel_$dmrg_Lx_key", marker=:circle),
-        (label=math_label(raw"M^2(0,\pi)"), std_key="M2_stripe_0pi", stderr_key="M2_stripe_0pi_stderr",
+        (label_tex=raw"\mathit{M}^2(0,\pi)", std_key="M2_stripe_0pi", stderr_key="M2_stripe_0pi_stderr",
          dmrg_key="M2_0pi_$dmrg_Lx_key", marker=:diamond),
     ]
 
@@ -1964,7 +1964,8 @@ function plot_M2_comparison(; exact_file::String="",
     phase_band_height = 32
     fig_height = (has_stderr_panel ? round(Int, 1.35 * PAPER_FIGSIZE[2]) : PAPER_FIGSIZE[2]) +
                  phase_band_height + 2
-    fig = Figure(size=(PAPER_FIGSIZE[1], fig_height))
+    fig = Figure(size=(PAPER_FIGSIZE[1], fig_height),
+                 figure_padding=(6, 12, 6, 6))
     phase_ax = Axis(fig[1, 1])
     ax = Axis(fig[2, 1],
               xlabel=has_stderr_panel ? "" : J2_OVER_J1_LABEL,
@@ -2106,7 +2107,7 @@ function plot_M2_comparison(; exact_file::String="",
 
     # Combined legend: one entry per (q-point, method) pair so color + style are visible together
     all_elems  = []
-    all_labels = String[]
+    all_labels = typeof(M2_LABEL)[]
 
     for (iq, qi) in enumerate(q_info)
         color = q_colors[iq]
@@ -2118,7 +2119,8 @@ function plot_M2_comparison(; exact_file::String="",
                               markersize=style.markersize,
                               strokecolor=color, strokewidth=style.strokewidth),
             ])
-            label = isempty(style.label) ? qi.label : "$(qi.label) $(style.label)"
+            method_tex = isempty(style.label) ? "" : raw"\ \mathrm{" * style.label * "}"
+            label = math_label(qi.label_tex * method_tex)
             push!(all_labels, label)
         end
     end

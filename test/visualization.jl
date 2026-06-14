@@ -36,9 +36,15 @@ end
     @test ax.titlefont[] == :regular
     @test ax.xticklabelfont[] == :regular
     @test ax.yticklabelfont[] == :regular
-    @test string(ax.ylabel[]) == raw"\mathit{E/N_{\mathrm{site}}}"
-    @test string(IsoPEPS.FIELD_LABEL) == raw"\mathit{g}"
-    @test string(IsoPEPS.J2_OVER_J1_LABEL) == raw"\mathit{J_2/J_1}"
+    @test string(ax.ylabel[]) == raw"E/N_{\mathrm{site}}"
+    @test string(IsoPEPS.FIELD_LABEL) == raw"g"
+    @test string(IsoPEPS.J2_OVER_J1_LABEL) == raw"J_2/J_1"
+    @test string(IsoPEPS.M2_LABEL) == raw"\mathit{M}^2(\mathbf{q})"
+    @test string(IsoPEPS.math_label(raw"M^2(0,\pi)")) == raw"M^2(0,\pi)"
+    @test string(IsoPEPS.math_label(raw"\mathit{C}(1)\ \mathrm{nearest}")) ==
+          raw"\mathit{C}(1)\ \mathrm{nearest}"
+    @test string(IsoPEPS.math_label(raw"\mathit{C}(2)\ \mathrm{next-nearest}")) ==
+          raw"\mathit{C}(2)\ \mathrm{next-nearest}"
 end
 
 
@@ -540,6 +546,9 @@ end
     fig = plot_M2_comparison(exact_file=exact_file, sampling_file=sampling_file,
                              dmrg_file=dmrg_file)
     @test fig isa Figure
+    figure_padding = fig.layout.alignmode[].padding
+    @test (figure_padding.left, figure_padding.right,
+           figure_padding.bottom, figure_padding.top) == (6, 12, 6, 6)
     axes = filter(content -> content isa Axis, fig.content)
     @test length(axes) == 2
     phase_ax = axes[1]
@@ -559,10 +568,12 @@ end
     @test "0.46" in phase_texts
     @test "0.53" in phase_texts
     g = legend.entrygroups[][1]
-    @test [e.label[] for e in g[2]] == [
-        IsoPEPS.math_label(raw"M^2(\pi,\pi)"),
-        IsoPEPS.math_label(raw"M^2(0,\pi)"),
+    legend_labels = [e.label[] for e in g[2]]
+    @test legend_labels == [
+        IsoPEPS.math_label(raw"\mathit{M}^2(\pi,\pi)"),
+        IsoPEPS.math_label(raw"\mathit{M}^2(0,\pi)"),
     ]
+    @test all(label -> label isa typeof(IsoPEPS.math_label("")), legend_labels)
     @test count(plot -> plot isa Errorbars, ax.scene.plots) == 2
     line_series = filter(plot -> hasproperty(plot, :linestyle) && hasproperty(plot, :marker),
                          ax.scene.plots)
@@ -742,6 +753,9 @@ end
     @test size(bond_data[:horizontal]) == (2, 3)
     @test all(==(0.75), bond_data[:vertical])
     @test all(==(0.75), bond_data[:horizontal])
+    colorbar = only(filter(content -> content isa Colorbar, fig.content))
+    @test colorbar.label[] == IsoPEPS._BOND_ENERGY_LABEL
+    @test colorbar.labelsize[] == IsoPEPS._BOND_ENERGY_LABELSIZE
 end
 
 @testset "plot_bond_energy_pattern lays out J2 panels horizontally" begin
@@ -783,6 +797,10 @@ end
     colorbar = only(filter(content -> content isa Colorbar, fig.content))
     @test colorbar.vertical[] == true
     @test colorbar.limits[] == (-0.5, 0.5)
+    @test colorbar.label[] == IsoPEPS._BOND_ENERGY_LABEL
+    @test string(colorbar.label[]) ==
+          raw"\langle \mathbf{S}_{\mathit{i}}\cdot\mathbf{S}_{\mathit{j}}\rangle"
+    @test colorbar.labelsize[] == IsoPEPS._BOND_ENERGY_LABELSIZE
     @test colorbar.layoutobservables.gridcontent[].span.cols == 4:4
     @test colorbar.layoutobservables.gridcontent[].span.rows == 1:2
 end
