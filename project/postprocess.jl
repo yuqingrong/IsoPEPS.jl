@@ -32,7 +32,12 @@ function analyze_result(filename::String; pepskit_results_file::Union{String,Not
     share_params = get(input_args, :share_params, true)
     structure = get(input_args, :structure, nothing)
     active_nqubits = get(input_args, :active_nqubits, nqubits)
-    unit_cell = Symbol(get(input_args, :unit_cell, :single))
+    unit_cell_value = get(input_args, :unit_cell, nothing)
+    unit_cell = if isnothing(unit_cell_value)
+        occursin("_2x2", basename(filename)) ? :two_by_two : :single
+    else
+        Symbol(unit_cell_value)
+    end
     conv_step = Int(get(input_args, :conv_step, 100))
     samples = get(input_args, :samples, nothing)
     model = get(input_args, :model, "tfim")
@@ -52,8 +57,17 @@ function analyze_result(filename::String; pepskit_results_file::Union{String,Not
     fig = plot_training_history(result;
         g=g,
         row=row,
+        p=p,
         nqubits=nqubits,
+        model=model,
+        J=J,
+        J1=J1,
         J2=J2,
+        share_params=share_params,
+        structure=structure,
+        active_nqubits=active_nqubits,
+        unit_cell=unit_cell,
+        compute_exact=use_exact,
         pepskit_results_file=pepskit_results_file,
         dmrg_bulk_file=dmrg_bulk_file
     )
@@ -103,9 +117,9 @@ end
 # Uncomment the block below (remove #= and =#) to run analysis examples
 
 # Analyze a single result
-J=1.0;g = 2.0; row=3 ; nqubits=3; p=3; virtual_qubits=1;D=2
-data_dir = joinpath(@__DIR__, "results_tfim_abc")
-datafile = joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json")
+J=1.0;g = 2.0; row=4 ; nqubits=3; p=3; virtual_qubits=1;D=2
+data_dir = joinpath(@__DIR__, "results/heisenberg")
+datafile = joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J)_J2=0.5_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json")
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile, dmrg_bulk_file="project/results/dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json")
 

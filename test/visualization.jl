@@ -98,6 +98,10 @@ end
     ax = fig.content[1]
     @test ax.xlabelsize[] == IsoPEPS.PAPER_AXIS_LABELSIZE
     @test ax.ylabelsize[] == IsoPEPS.PAPER_AXIS_LABELSIZE
+    @test ax.ylabel[] == IsoPEPS.ENERGY_PER_SITE_LABEL
+    @test ax.limits[] == (nothing, (-0.5, 0.1))
+    @test !ax.xgridvisible[]
+    @test !ax.ygridvisible[]
     
     # With reference
     fig2 = plot_training_history(steps, energies; reference=-1.0)
@@ -115,6 +119,59 @@ end
     )
     fig3 = plot_training_history(result)
     @test fig3 isa Figure
+end
+
+@testset "plot_training_history computes exact contraction reference" begin
+    row = 2
+    p = 1
+    nqubits = 1
+    J = 1.0
+    g = 2.0
+    params = zeros(gate_parameter_count(p, nqubits))
+    result = CircuitOptimizationResult(
+        [0.2, 0.1], Vector{Float64}[], Matrix{ComplexF64}[], params, 0.1,
+        Float64[], Float64[], Float64[], true
+    )
+
+    exact_energy = IsoPEPS._training_exact_energy(
+        result; row=row, p=p, nqubits=nqubits, J=J, g=g)
+    gates = build_unitary_gate(params, p, row, nqubits)
+    energy_per_column = first(compute_exact_energy(TFIM(J, g), TransferOperator(gates, row, nqubits)))
+    @test exact_energy ≈ energy_per_column / row
+
+    fig = plot_training_history(
+        result; row=row, p=p, nqubits=nqubits, J=J, g=g, ylims=nothing)
+    @test fig isa Figure
+    ax = fig.content[1]
+    @test length(ax.scene.plots) == 2
+end
+
+@testset "plot_training_history infers legacy 2x2 Heisenberg results" begin
+    row = 4
+    p = 1
+    nqubits = 1
+    J1 = 1.0
+    J2 = 0.5
+    params = zeros(gate_parameter_count(
+        p, nqubits; unit_cell=:two_by_two, row=row))
+    result = CircuitOptimizationResult(
+        [0.0], Vector{Float64}[], Matrix{ComplexF64}[], params, 0.0,
+        Float64[], Float64[], Float64[], true
+    )
+
+    inferred = IsoPEPS._training_exact_energy(
+        result;
+        row=row,
+        p=p,
+        nqubits=nqubits,
+        model="heisenberg_j1j2",
+        J1=J1,
+        J2=J2,
+        share_params=true)
+    gates_odd, gates_even = build_unitary_gate_2x2(params, p, row, nqubits)
+    expected = compute_exact_heisenberg_energy_2x2(
+        gates_odd, gates_even, row, 0, J1, J2) / row
+    @test inferred ≈ expected
 end
 
 @testset "plot_training_history ignores ambient axis label sizes" begin
@@ -220,6 +277,7 @@ end
 
     @test fig_energy isa Figure
     @test fig_error isa Figure
+    @test fig_energy.content[1].ylabel[] == IsoPEPS.ENERGY_PER_SITE_LABEL
     @test haskey(data.series, "IsoPEPS")
     @test haskey(data.series, "IsoPEPS χ=5")
     @test haskey(data.series, "DMRG D=32")
@@ -319,6 +377,7 @@ end
         M=1, shots=2, conv_step=0,
         parameter_source=:random, random_seed=1)
     @test fig_energy isa Figure
+    @test fig_energy.content[1].ylabel[] == IsoPEPS.ENERGY_PER_SITE_LABEL
 
     fig_xz = plot_local_xz_dynamics_vs_g(data_dir, [g];
         J=1.0, row=row, p=p, nqubits=nqubits,
@@ -649,10 +708,10 @@ end
     @test all(==(0.75), bond_data[:horizontal])
 end
 
-@testset "plot_bond_energy_pattern stacks J2 panels" begin
+@testset "plot_bond_energy_pattern lays out J2 panels horizontally" begin
     data_dir = mktempdir()
     chain = ones(8)
-    for J2 in (0.0, 0.5)
+    for J2 in (0.0, 0.5, 1.0)
         save_results(joinpath(data_dir, "samples_heisenberg_J2=$J2.json");
                      row=2,
                      conv_step=0,
@@ -663,23 +722,33 @@ end
                      Z_samples=[chain])
     end
 
-    fig, patterns = plot_bond_energy_pattern(data_dir, [0.0, 0.5];
-                                             max_cols=4)
+    fig, patterns = plot_bond_energy_pattern(data_dir, [0.0, 0.5, 1.0])
 
     @test fig isa Figure
-    @test sort!(collect(keys(patterns))) == [0.0, 0.5]
+    @test sort!(collect(keys(patterns))) == [0.0, 0.5, 1.0]
+    @test size(patterns[0.0][:vertical]) == (2, 5)
     @test all(==(0.75), patterns[0.0][:vertical])
     axes = filter(content -> content isa Axis, fig.content)
-    @test length(axes) == 2
+    @test length(axes) == 3
+    @test [only(ax.layoutobservables.gridcontent[].span.cols) for ax in axes] ==
+          [1, 2, 3]
+    @test all(ax -> only(ax.layoutobservables.gridcontent[].span.rows) == 2, axes)
     @test all(ax -> !ax.leftspinevisible[] && !ax.bottomspinevisible[] &&
                     !ax.xticklabelsvisible[] && !ax.yticklabelsvisible[], axes)
     panel_labels = filter(content -> content isa Label, fig.content)
-    @test [label.text[] for label in panel_labels] == ["J₂ = 0.0", "J₂ = 0.5"]
+    @test [label.text[] for label in panel_labels] ==
+          ["J2=0.0", "J2=0.5", "J2=1.0"]
+    @test [only(label.layoutobservables.gridcontent[].span.cols)
+           for label in panel_labels] == [1, 2, 3]
+    @test all(label -> only(label.layoutobservables.gridcontent[].span.rows) == 1,
+              panel_labels)
     @test all(label -> label.fontsize[] == IsoPEPS.PAPER_TICKLABELSIZE, panel_labels)
 
     colorbar = only(filter(content -> content isa Colorbar, fig.content))
-    @test colorbar.vertical[] == false
+    @test colorbar.vertical[] == true
     @test colorbar.limits[] == (-0.5, 0.5)
+    @test colorbar.layoutobservables.gridcontent[].span.cols == 4:4
+    @test colorbar.layoutobservables.gridcontent[].span.rows == 1:2
 end
 
 @testset "Sampled expectations match transfer matrix fixed point" begin

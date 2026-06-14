@@ -706,7 +706,7 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
 end
 
 """
-    plot_bond_energy_pattern(filename; max_cols=10, use_exact=true,
+    plot_bond_energy_pattern(filename; max_cols=5, use_exact=true,
                              conv_step=1000, samples=nothing,
                              samples_file=nothing, save_path=nothing)
 
@@ -729,7 +729,7 @@ cylinder lattice. Strong/weak bond alternation directly reveals VBS order.
   `:horizontal => Matrix{Float64}(row, max_cols-1)`
 """
 function plot_bond_energy_pattern(filename::String;
-                                  max_cols::Int=10,
+                                  max_cols::Int=5,
                                   use_exact::Bool=true,
                                   conv_step::Int=1000,
                                   samples::Union{Nothing,Int}=nothing,
@@ -1091,11 +1091,12 @@ end
 """
     plot_bond_energy_pattern(results_dir, J2_values; use_exact=false,
                              samples=nothing, samples_files=nothing,
-                             max_cols=10, save_path=nothing)
+                             max_cols=5, save_path=nothing)
 
 Plot saved sampling-based bond-energy patterns for several `J2` values in
-vertically stacked panels. All panels use the fixed color scale `[-0.5, 0.5]`
-and share one horizontal colorbar at the bottom.
+horizontally arranged panels. Each panel is labelled with its `J2` value at
+the top. All panels use the fixed color scale `[-0.5, 0.5]` and share one
+vertical colorbar on the right.
 
 By default, sample files are inferred as
 `samples_heisenberg_J2=<value>.json` inside `results_dir`. Pass
@@ -1103,7 +1104,7 @@ By default, sample files are inferred as
 """
 function plot_bond_energy_pattern(results_dir::String,
                                   J2_values::AbstractVector{<:Real};
-                                  max_cols::Int=10,
+                                  max_cols::Int=5,
                                   use_exact::Bool=false,
                                   samples::Union{Nothing,Int}=nothing,
                                   samples_files::Union{Nothing,AbstractDict}=nothing,
@@ -1143,43 +1144,40 @@ function plot_bond_energy_pattern(results_dir::String,
     colorrange = (-0.5, 0.5)
 
     unit = 35
-    default_width = max_cols * unit + 80
-    default_height = length(J2) * (row * unit + 20) + 65
+    panel_width = max_cols * unit + 10
+    default_width = length(J2) * panel_width + 70
+    default_height = row * unit + 55
     figure_size = isnothing(figsize) ? (default_width, default_height) : figsize
 
     fig = with_theme(paper_theme()) do
         fig = Figure(size=figure_size)
 
         for (panel, value) in enumerate(J2)
-            ax = Axis(fig[panel, 1]; aspect=DataAspect())
+            Label(fig[1, panel], "J2=$value";
+                  fontsize=PAPER_TICKLABELSIZE,
+                  font=PAPER_FONT,
+                  halign=:center,
+                  valign=:bottom,
+                  padding=(0, 0, 0, 0))
+            ax = Axis(fig[2, panel]; aspect=DataAspect())
             _draw_bond_energy_panel!(ax, patterns[value]; colorrange=colorrange)
             hidedecorations!(ax)
             hidespines!(ax)
-            Label(fig[panel, 1], "J₂ = $value";
-                  fontsize=PAPER_TICKLABELSIZE,
-                  font=PAPER_FONT,
-                  halign=:left,
-                  valign=:center,
-                  justification=:right,
-                  width=70,
-                  padding=(0, 0, 0, 0),
-                  tellwidth=false,
-                  tellheight=false)
-            rowsize!(fig.layout, panel, Fixed(row * unit + 10))
+            colsize!(fig.layout, panel, Fixed(panel_width))
         end
 
-        Colorbar(fig[length(J2) + 1, 1];
+        Colorbar(fig[1:2, length(J2) + 1];
                  colormap=:RdBu,
                  limits=colorrange,
-                 vertical=false,
+                 vertical=true,
                  label="⟨𝐒ᵢ · 𝐒ⱼ⟩",
                  labelsize=PAPER_AXIS_LABELSIZE,
                  ticklabelsize=PAPER_TICKLABELSIZE,
-                 height=12,
-                 width=Relative(0.82),
-                 halign=:center)
-        rowsize!(fig.layout, length(J2) + 1, Fixed(45))
-        rowgap!(fig.layout, 4)
+                 width=12)
+        rowsize!(fig.layout, 1, Fixed(18))
+        rowsize!(fig.layout, 2, Fixed(row * unit + 10))
+        rowgap!(fig.layout, 2)
+        colgap!(fig.layout, 4)
 
         if !isnothing(save_path)
             mkpath(dirname(save_path))

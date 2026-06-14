@@ -4,10 +4,10 @@
 
 function plot_training_history(steps::AbstractVector, values::AbstractVector;
                                 reference::Union{Real,Nothing}=nothing,
-                                ylabel::String="E/site",
+                                ylabel=ENERGY_PER_SITE_LABEL,
                                 title::String="",
                                 logscale::Bool=false,
-                                ylims::Union{Tuple{Real,Real},Nothing}=(-0.7, 0.2),
+                                ylims::Union{Tuple{Real,Real},Nothing}=(-0.5, 0.1),
                                 save_path::Union{String,Nothing}=nothing,
                                 g::Union{Real,Nothing}=nothing,
                                 row::Union{Int,Nothing}=nothing,
@@ -82,6 +82,8 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
                   title  = plot_title,
                   yscale = logscale ? log10 : identity,
                   yticks = -1.0:0.1:0.1,
+                  xgridvisible = false,
+                  ygridvisible = false,
                   limits = (nothing, isnothing(ylims) ? nothing : (Float64(ylims[1]), Float64(ylims[2]))))
 
         lines!(ax, collect(steps), collect(values), label="IsoPEPS (sampling)")
@@ -97,14 +99,9 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
         end
 
         if !isnothing(exact_energy)
-            hlines!(ax, [exact_energy], linestyle=:dash, color=:royalblue,
+            hlines!(ax, [exact_energy], linestyle=:dash, color="#ff9900",
                     label="Exact contraction")
         end
-
-        hlines!(ax, [-0.495530], linestyle=:dash, color=:forestgreen,
-                linewidth=2, label="DMRG (10×10)")
-        hlines!(ax, [-0.49755], linestyle=:dot, color=:purple,
-                linewidth=2, label="VMC (10×10)")
 
         add_paper_legend!(ax; position=:rt)
 
@@ -119,9 +116,142 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
     return fig
 end
 
-function plot_training_history(result::Union{CircuitOptimizationResult, ExactOptimizationResult, ManifoldOptimizationResult}; kwargs...)
+function _training_exact_energy(result::CircuitOptimizationResult;
+                                row::Int,
+                                p::Int,
+                                nqubits::Int,
+                                model::Union{String,AbstractModel}="tfim",
+                                J::Real=1.0,
+                                g::Union{Real,Nothing}=nothing,
+                                J1::Real=1.0,
+                                J2::Real=0.0,
+                                share_params::Bool=true,
+                                structure::Union{Symbol,String,Nothing}=nothing,
+                                active_nqubits::Union{Int,Nothing}=nqubits,
+                                unit_cell::Union{Symbol,String,Nothing}=nothing)
+    isempty(result.final_params) && return nothing
+
+    model_obj = if model isa AbstractModel
+        model
+    else
+        if model == "tfim" && isnothing(g)
+            @warn "Cannot compute exact training energy for TFIM without g"
+            return nothing
+        end
+        _construct_model(model, Dict{Symbol,Any}(
+            :J => Float64(J),
+            :g => isnothing(g) ? 1.0 : Float64(g),
+            :J1 => Float64(J1),
+            :J2 => Float64(J2),
+        ))
+    end
+
+    active = something(active_nqubits, nqubits)
+    unit_cell_sym = if isnothing(unit_cell) && model_obj isa HeisenbergJ1J2
+        expected_single = gate_parameter_count(
+            p, nqubits;
+            unit_cell=:single,
+            row=row,
+            share_params=share_params,
+            structure=structure,
+            active_nqubits=active)
+        expected_2x2 = gate_parameter_count(
+            p, nqubits; unit_cell=:two_by_two, row=row, active_nqubits=active)
+        if length(result.final_params) == expected_2x2 &&
+           length(result.final_params) != expected_single
+            :two_by_two
+        else
+            :single
+        end
+    elseif isnothing(unit_cell)
+        default_unit_cell(model_obj)
+    else
+        Symbol(unit_cell)
+    end
+    op = if unit_cell_sym === :two_by_two
+        gates_odd, gates_even = build_unitary_gate_2x2(
+            result.final_params, p, row, nqubits; active_nqubits=active)
+        TransferOperator(gates_odd, gates_even, row, nqubits)
+    else
+        gates = build_unitary_gate(
+            result.final_params, p, row, nqubits;
+            share_params=share_params,
+            structure=structure,
+            active_nqubits=active)
+        TransferOperator(gates, row, nqubits)
+    end
+
+    energy_per_column = if model_obj isa TFIM
+        first(compute_exact_energy(model_obj, op))
+    elseif model_obj isa HeisenbergJ1J2
+        compute_exact_heisenberg_energy(op, model_obj.J1, model_obj.J2)
+    else
+        throw(ArgumentError("Exact training-energy plotting is not implemented for $(typeof(model_obj))"))
+    end
+    return real(energy_per_column) / row
+end
+
+function plot_training_history(result::CircuitOptimizationResult;
+                               row::Union{Int,Nothing}=nothing,
+                               p::Union{Int,Nothing}=nothing,
+                               nqubits::Union{Int,Nothing}=nothing,
+                               model::Union{String,AbstractModel}="tfim",
+                               J::Real=1.0,
+                               g::Union{Real,Nothing}=nothing,
+                               J1::Real=1.0,
+                               J2::Real=0.0,
+                               share_params::Bool=true,
+                               structure::Union{Symbol,String,Nothing}=nothing,
+                               active_nqubits::Union{Int,Nothing}=nqubits,
+                               unit_cell::Union{Symbol,String,Nothing}=nothing,
+                               compute_exact::Bool=true,
+                               exact_energy::Union{Real,Nothing}=nothing,
+                               kwargs...)
+    computed_exact = exact_energy
+    if isnothing(computed_exact) && compute_exact &&
+       !isnothing(row) && !isnothing(p) && !isnothing(nqubits)
+        computed_exact = _training_exact_energy(
+            result;
+            row=row,
+            p=p,
+            nqubits=nqubits,
+            model=model,
+            J=J,
+            g=g,
+            J1=J1,
+            J2=J2,
+            share_params=share_params,
+            structure=structure,
+            active_nqubits=active_nqubits,
+            unit_cell=unit_cell,
+        )
+    end
+
     n = length(result.energy_history)
-    plot_training_history(1:n, result.energy_history; ylabel="E/site", kwargs...)
+    plot_training_history(
+        1:n, result.energy_history;
+        ylabel=ENERGY_PER_SITE_LABEL,
+        g=g,
+        row=row,
+        nqubits=nqubits,
+        exact_energy=computed_exact,
+        kwargs...)
+end
+
+function plot_training_history(result::Union{ExactOptimizationResult, ManifoldOptimizationResult};
+                               p::Union{Int,Nothing}=nothing,
+                               model::Union{String,AbstractModel}="tfim",
+                               J::Real=1.0,
+                               J1::Real=1.0,
+                               share_params::Bool=true,
+                               structure::Union{Symbol,String,Nothing}=nothing,
+                               active_nqubits::Union{Int,Nothing}=nothing,
+                               unit_cell::Union{Symbol,String,Nothing}=nothing,
+                               compute_exact::Bool=true,
+                               kwargs...)
+    n = length(result.energy_history)
+    plot_training_history(
+        1:n, result.energy_history; ylabel=ENERGY_PER_SITE_LABEL, kwargs...)
 end
 
 # ============================================================================

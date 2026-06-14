@@ -571,7 +571,7 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
 
         ax1 = Axis(fig[1, 1];
                    xlabel      = xlabel_str,
-                   ylabel      = "E / site",
+                   ylabel      = ENERGY_PER_SITE_LABEL,
                    xgridvisible = true,
                    ygridvisible = true)
 

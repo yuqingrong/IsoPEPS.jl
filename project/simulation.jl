@@ -99,6 +99,7 @@ Run circuit optimization for multiple parameter values and save results to JSON 
 - `structure`: Single-column structure (`:aaa`, `:abb`, or `:abc`). When set,
   this overrides `share_params`.
 - `parallel_sampling`: Run independent sampling chains with `Threads.@threads`
+- `warm_start`: Initialize from compatible saved results when available
 - `resume_checkpoint`: Restart from compatible checkpoint parameters when available
 - `model_params...`: Fixed model parameters (e.g., `J=1.0` for TFIM, `J1=1.0` for Heisenberg)
 
@@ -122,6 +123,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
                     active_nqubits::Int=nqubits,
                     unit_cell::Symbol=:single,
                     structure::Union{Symbol,String,Nothing}=nothing,
+                    warm_start::Bool=true,
                     resume_checkpoint::Bool=true,
                     post_select_exact::Bool=false,
                     post_select_n::Int=15,
@@ -144,22 +146,26 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
     for i in 1:n
         val = scan_values[i]
 
-        # Try to warm-start from the closest existing result file in output_dir
-        # 1. First try same nqubits
-        warm_params, warm_val = _find_warm_start_params(output_dir, model, scan_param, val, row, p, nqubits;
-                                                         unit_cell=unit_cell,
-                                                         share_params=share_params,
-                                                         structure=structure,
-                                                         fixed_params...)
+        warm_params, warm_val = nothing, nothing
         warm_from_nqubits = nothing
-        if nqubits > 3
+
+        if warm_start
+            # Try to warm-start from the closest existing result file in output_dir.
+            # 1. First try same nqubits.
+            warm_params, warm_val = _find_warm_start_params(output_dir, model, scan_param, val, row, p, nqubits;
+                                                             unit_cell=unit_cell,
+                                                             share_params=share_params,
+                                                             structure=structure,
+                                                             fixed_params...)
+        end
+        if warm_start && nqubits > 3
             # For enlarged-D scans, start from an embedded lower-D state rather
             # than an existing full-D result so the new virtual legs begin at 0.
             warm_params = nothing
             warm_val = nothing
         end
-        # 2. If no same-nqubits result, try smaller nqubits and embed
-        if warm_params === nothing
+        # 2. If no same-nqubits result, try smaller nqubits and embed.
+        if warm_start && warm_params === nothing
             for nq in (nqubits-2):-2:3
                 # Try same row first, then row+2 (for systems that grew in both dimensions)
                 found = false
@@ -245,6 +251,7 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
             :active_nqubits => active_nqubits,
             :unit_cell => unit_cell,
             :structure => gate_structure,
+            :warm_start => warm_start,
             :resume_checkpoint => resume_checkpoint,
             :parallel_sampling => parallel_sampling,
             :share_params => share_params, :seed => seed,
@@ -277,7 +284,9 @@ end
      samples=1000,
      n_runs=4,
      abstol=1e-5,
-     unit_cell=:two_by_two
+     unit_cell=:two_by_two,
+     warm_start=false,
+     resume_checkpoint=false
  )
 
 simulation(;

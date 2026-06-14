@@ -44,6 +44,13 @@ function postprocess(filename::String;
     J2 = Float64(get(input_args, :J2, 0.0))
     share_params = get(input_args, :share_params, true)
     structure = get(input_args, :structure, nothing)
+    active_nqubits = get(input_args, :active_nqubits, nqubits)
+    unit_cell_value = get(input_args, :unit_cell, nothing)
+    unit_cell = if isnothing(unit_cell_value)
+        occursin("_2x2", basename(filename)) ? :two_by_two : :single
+    else
+        Symbol(unit_cell_value)
+    end
 
     # Determine figures directory
     if isnothing(figures_dir)
@@ -58,7 +65,12 @@ function postprocess(filename::String;
     end
 
     # --- Training history ---
-    fig_hist = plot_training_history(result; g=g, row=row, nqubits=nqubits)
+    fig_hist = plot_training_history(result;
+        g=g, row=row, p=p, nqubits=nqubits,
+        model=model_str, J=J, J1=J1, J2=J2,
+        share_params=share_params, structure=structure,
+        active_nqubits=active_nqubits, unit_cell=unit_cell,
+        compute_exact=use_exact)
     hist_path = joinpath(figures_dir, "$(base_name)_training_history.pdf")
     save(hist_path, fig_hist)
     println("Saved: $hist_path")
@@ -69,6 +81,8 @@ function postprocess(filename::String;
         g=g, J=J, row=row, p=p, nqubits=nqubits,
         share_params=share_params,
         structure=structure,
+        active_nqubits=active_nqubits,
+        unit_cell=unit_cell,
         use_exact=use_exact, model=model_str, J1=J1, J2=J2,
         datafile=skip_resample ? nothing : filename)
     exp_path = joinpath(figures_dir, "$(base_name)_expectation_values.pdf")

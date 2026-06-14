@@ -65,7 +65,7 @@ function plot_energy_dynamics_vs_g(data_dir::String, scan_values::Vector{Float64
     fig = Figure(size=PAPER_FIGSIZE)
     ax = Axis(fig[1, 1];
               xlabel  = "Channel iteration",
-              ylabel  = "E / site",
+              ylabel  = ENERGY_PER_SITE_LABEL,
               limits  = (nothing, effective_ylims))
 
     fixed_str   = join(["$(k)=$(v)" for (k, v) in sort(collect(fixed_params), by=first)], "_")

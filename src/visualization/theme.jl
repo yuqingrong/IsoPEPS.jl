@@ -12,6 +12,7 @@ const PAPER_AXIS_LABELSIZE = 10
 const PAPER_TICKLABELSIZE = 9
 const PAPER_TITLESIZE = 11
 const PAPER_LEGEND_LABELSIZE = 8
+const ENERGY_PER_SITE_LABEL = Makie.LaTeXString(raw"E/N_{\mathrm{site}}")
 
 """
     paper_theme()

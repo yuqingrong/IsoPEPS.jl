@@ -341,7 +341,7 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
         fig = Figure(size=_figsize)
 
         ax = Axis(fig[1, 1];
-                  xlabel   = "N (samples per trajectory)",
+                  xlabel   = L"N_{\mathrm{shot}}",
                   ylabel   = "Var(E)",
                   xscale   = log10,
                   yscale   = log10)
