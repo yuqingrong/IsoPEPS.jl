@@ -713,6 +713,7 @@ end
 const _BOND_ENERGY_LABEL =
     math_label(raw"\langle \mathbf{S}_{\mathit{i}}\cdot\mathbf{S}_{\mathit{j}}\rangle")
 const _BOND_ENERGY_LABELSIZE = PAPER_AXIS_LABELSIZE + 2
+const _BOND_ENERGY_PANEL_LABELSIZE = PAPER_TITLESIZE + 1
 
 """
     plot_bond_energy_pattern(filename; max_cols=5, use_exact=true,
@@ -1162,8 +1163,8 @@ function plot_bond_energy_pattern(results_dir::String,
         fig = Figure(size=figure_size)
 
         for (panel, value) in enumerate(J2)
-            Label(fig[1, panel], math_label("J_2=$value");
-                  fontsize=PAPER_TICKLABELSIZE,
+            Label(fig[1, panel], math_label("\\mathit{J}_2=$value");
+                  fontsize=_BOND_ENERGY_PANEL_LABELSIZE,
                   font=PAPER_FONT,
                   halign=:center,
                   valign=:bottom,
@@ -1183,7 +1184,7 @@ function plot_bond_energy_pattern(results_dir::String,
                  labelsize=_BOND_ENERGY_LABELSIZE,
                  ticklabelsize=PAPER_TICKLABELSIZE,
                  width=12)
-        rowsize!(fig.layout, 1, Fixed(18))
+        rowsize!(fig.layout, 1, Fixed(22))
         rowsize!(fig.layout, 2, Fixed(row * unit + 10))
         rowgap!(fig.layout, 2)
         colgap!(fig.layout, 4)

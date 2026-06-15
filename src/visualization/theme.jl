@@ -15,15 +15,18 @@ const PAPER_LEGEND_LABELSIZE = 8
 
 math_label(text::AbstractString) = Makie.LaTeXString(String(text))
 
-const ENERGY_PER_SITE_LABEL = math_label(raw"E/N_{\mathrm{site}}")
-const FIELD_LABEL = math_label(raw"g")
-const J2_OVER_J1_LABEL = math_label(raw"J_2/J_1")
+const ENERGY_PER_SITE_LABEL =
+    math_label(raw"\mathit{E}/\mathit{N}_{\mathrm{site}}")
+const FIELD_LABEL = math_label(raw"\mathit{g}")
+const J2_OVER_J1_LABEL =
+    math_label(raw"\mathit{J}_2/\mathit{J}_1")
 const CORRELATION_LENGTH_LABEL = math_label(raw"\xi")
 const M2_LABEL = math_label(raw"\mathit{M}^2(\mathbf{q})")
 const QX_LABEL = math_label(raw"q_x")
 const QY_LABEL = math_label(raw"q_y")
-const X_EXPECTATION_LABEL = math_label(raw"\langle X\rangle")
-const Z_EXPECTATION_LABEL = math_label(raw"\langle Z\rangle")
+const X_EXPECTATION_LABEL = math_label(raw"\langle \mathit{X}\rangle")
+const Z_EXPECTATION_LABEL = math_label(raw"\langle \mathit{Z}\rangle")
+const MAGNETISATION_LABEL = "Magnetisation"
 
 """
     paper_theme()

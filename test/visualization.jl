@@ -36,10 +36,17 @@ end
     @test ax.titlefont[] == :regular
     @test ax.xticklabelfont[] == :regular
     @test ax.yticklabelfont[] == :regular
-    @test string(ax.ylabel[]) == raw"E/N_{\mathrm{site}}"
-    @test string(IsoPEPS.FIELD_LABEL) == raw"g"
-    @test string(IsoPEPS.J2_OVER_J1_LABEL) == raw"J_2/J_1"
+    @test string(ax.ylabel[]) ==
+          raw"\mathit{E}/\mathit{N}_{\mathrm{site}}"
+    @test string(IsoPEPS.FIELD_LABEL) == raw"\mathit{g}"
+    @test string(IsoPEPS.J2_OVER_J1_LABEL) ==
+          raw"\mathit{J}_2/\mathit{J}_1"
     @test string(IsoPEPS.M2_LABEL) == raw"\mathit{M}^2(\mathbf{q})"
+    @test string(IsoPEPS.X_EXPECTATION_LABEL) ==
+          raw"\langle \mathit{X}\rangle"
+    @test string(IsoPEPS.Z_EXPECTATION_LABEL) ==
+          raw"\langle \mathit{Z}\rangle"
+    @test IsoPEPS.MAGNETISATION_LABEL == "Magnetisation"
     @test string(IsoPEPS.math_label(raw"M^2(0,\pi)")) == raw"M^2(0,\pi)"
     @test string(IsoPEPS.math_label(raw"\mathit{C}(1)\ \mathrm{nearest}")) ==
           raw"\mathit{C}(1)\ \mathrm{nearest}"
@@ -305,7 +312,11 @@ end
 
     @test fig_energy isa Figure
     @test fig_error isa Figure
+    @test fig_energy.content[1].xlabel[] == IsoPEPS.FIELD_LABEL
     @test fig_energy.content[1].ylabel[] == IsoPEPS.ENERGY_PER_SITE_LABEL
+    @test fig_error.content[1].xlabel[] == IsoPEPS.FIELD_LABEL
+    @test string(fig_error.content[1].ylabel[]) ==
+          raw"\frac{\mathit{E}_{\mathrm{IsoPEPS}}-\mathit{E}_{\mathrm{DMRG}}}{|\mathit{E}_{\mathrm{DMRG}}|}"
     @test haskey(data.series, "IsoPEPS")
     @test haskey(data.series, "IsoPEPS χ=5")
     @test haskey(data.series, "DMRG D=32")
@@ -553,6 +564,7 @@ end
     @test length(axes) == 2
     phase_ax = axes[1]
     ax = axes[2]
+    @test ax.xlabel[] == IsoPEPS.J2_OVER_J1_LABEL
     legend = only(filter(content -> content isa Legend, fig.content))
     @test legend isa Legend
     gc = legend.layoutobservables.gridcontent[]
@@ -787,12 +799,13 @@ end
                     !ax.xticklabelsvisible[] && !ax.yticklabelsvisible[], axes)
     panel_labels = filter(content -> content isa Label, fig.content)
     @test [label.text[] for label in panel_labels] ==
-          [IsoPEPS.math_label("J_2=$value") for value in (0.0, 0.5, 1.0)]
+          [IsoPEPS.math_label("\\mathit{J}_2=$value") for value in (0.0, 0.5, 1.0)]
     @test [only(label.layoutobservables.gridcontent[].span.cols)
            for label in panel_labels] == [1, 2, 3]
     @test all(label -> only(label.layoutobservables.gridcontent[].span.rows) == 1,
               panel_labels)
-    @test all(label -> label.fontsize[] == IsoPEPS.PAPER_TICKLABELSIZE, panel_labels)
+    @test all(label -> label.fontsize[] == IsoPEPS._BOND_ENERGY_PANEL_LABELSIZE,
+              panel_labels)
 
     colorbar = only(filter(content -> content isa Colorbar, fig.content))
     @test colorbar.vertical[] == true

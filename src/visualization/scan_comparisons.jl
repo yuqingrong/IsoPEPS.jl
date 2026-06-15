@@ -633,7 +633,7 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
         ax2 = Axis(fig[1, 1];
                    xlabel      = xlabel_str,
                    ylabel      = math_label(
-                       raw"\frac{E_{\mathrm{IsoPEPS}}-E_{\mathrm{DMRG}}}{|E_{\mathrm{DMRG}}|}"),
+                       raw"\frac{\mathit{E}_{\mathrm{IsoPEPS}}-\mathit{E}_{\mathrm{DMRG}}}{|\mathit{E}_{\mathrm{DMRG}}|}"),
                    xgridvisible = true,
                    ygridvisible = true)
 
@@ -768,14 +768,14 @@ function plot_magnetization_vs_g(data_dir::String, g_values::Vector{Float64};
 
         ax = Axis(fig[1, 1];
                   xlabel = FIELD_LABEL,
-                  ylabel = "Magnetisation per site")
+                  ylabel = MAGNETISATION_LABEL)
 
         scatterlines!(ax, g_found, mZ_vals;
                       color=:steelblue, marker=:circle,
-                      label=math_label(raw"|\langle Z\rangle|"))
+                      label=math_label(raw"|\langle \mathit{Z}\rangle|"))
         scatterlines!(ax, g_found, mX_vals;
                       color=:firebrick, marker=:diamond, linestyle=:dash,
-                      label=math_label(raw"|\langle X\rangle|"))
+                      label=math_label(raw"|\langle \mathit{X}\rangle|"))
 
         add_paper_legend!(ax; position=:rt)
 
