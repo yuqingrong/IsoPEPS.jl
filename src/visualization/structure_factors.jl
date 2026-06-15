@@ -663,7 +663,7 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
     for (j, J2) in enumerate(J2_values)
         ax = Axis(fig[1, j],
                   aspect=DataAspect(),
-                  title=math_label("J_2=$J2"),
+                  title=math_label("\\mathit{J}_2=$J2"),
                   xticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]),
                   yticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]))
         if j == 1
@@ -675,7 +675,8 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
         hm_spin = heatmap!(ax, qvals, qvals, spin_matrices[j],
                            colormap=:viridis, colorrange=(spin_min, spin_max))
     end
-    Colorbar(fig[1, n + 1], hm_spin, label=math_label(raw"S(q)"))
+    Colorbar(fig[1, n + 1], hm_spin,
+             label=math_label(raw"\mathit{S}(\mathbf{q})"))
 
     # Bottom row: dimer structure factor Sᴅ(q)
     for (j, J2) in enumerate(J2_values)
@@ -693,13 +694,7 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
                             colormap=:viridis, colorrange=(dimer_min, dimer_max))
     end
     Colorbar(fig[2, n + 1], hm_dimer,
-             label=math_label(raw"S_{\mathrm{D}}(q)"))
-
-    # Row labels on the left
-    Label(fig[1, 0], math_label(raw"S(q)"),
-          rotation=π/2, fontsize=16, tellheight=false)
-    Label(fig[2, 0], math_label(raw"S_{\mathrm{D}}(q)"),
-          rotation=π/2, fontsize=16, tellheight=false)
+             label=math_label(raw"\mathit{S}_{\mathrm{D}}(\mathbf{q})"))
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))
@@ -713,7 +708,7 @@ end
 const _BOND_ENERGY_LABEL =
     math_label(raw"\langle \mathbf{S}_{\mathit{i}}\cdot\mathbf{S}_{\mathit{j}}\rangle")
 const _BOND_ENERGY_LABELSIZE = PAPER_AXIS_LABELSIZE + 2
-const _BOND_ENERGY_PANEL_LABELSIZE = PAPER_TITLESIZE + 1
+const _BOND_ENERGY_PANEL_LABELSIZE = 14
 
 """
     plot_bond_energy_pattern(filename; max_cols=5, use_exact=true,
@@ -1156,7 +1151,7 @@ function plot_bond_energy_pattern(results_dir::String,
     unit = 35
     panel_width = max_cols * unit + 10
     default_width = length(J2) * panel_width + 95
-    default_height = row * unit + 55
+    default_height = row * unit + 61
     figure_size = isnothing(figsize) ? (default_width, default_height) : figsize
 
     fig = with_theme(paper_theme()) do
@@ -1184,7 +1179,7 @@ function plot_bond_energy_pattern(results_dir::String,
                  labelsize=_BOND_ENERGY_LABELSIZE,
                  ticklabelsize=PAPER_TICKLABELSIZE,
                  width=12)
-        rowsize!(fig.layout, 1, Fixed(22))
+        rowsize!(fig.layout, 1, Fixed(26))
         rowsize!(fig.layout, 2, Fixed(row * unit + 10))
         rowgap!(fig.layout, 2)
         colgap!(fig.layout, 4)

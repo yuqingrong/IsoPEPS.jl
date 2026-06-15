@@ -154,6 +154,9 @@ function plot_energy_dynamics_vs_g(data_dir::String, scan_values::Vector{Float64
         end
     end
 
+    vlines!(ax, [10];
+            color=:black, linestyle=:dash, label="thermalization")
+
     # Outside legend: tight row spacing so all entries fit within PAPER_FIGSIZE_WIDE height
     Legend(fig[1, 2], ax;
            merge        = true,

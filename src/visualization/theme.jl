@@ -22,8 +22,8 @@ const J2_OVER_J1_LABEL =
     math_label(raw"\mathit{J}_2/\mathit{J}_1")
 const CORRELATION_LENGTH_LABEL = math_label(raw"\xi")
 const M2_LABEL = math_label(raw"\mathit{M}^2(\mathbf{q})")
-const QX_LABEL = math_label(raw"q_x")
-const QY_LABEL = math_label(raw"q_y")
+const QX_LABEL = rich("q", subscript("x"); font=:italic)
+const QY_LABEL = rich("q", subscript("y"); font=:italic)
 const X_EXPECTATION_LABEL = math_label(raw"\langle \mathit{X}\rangle")
 const Z_EXPECTATION_LABEL = math_label(raw"\langle \mathit{Z}\rangle")
 const MAGNETISATION_LABEL = "Magnetisation"

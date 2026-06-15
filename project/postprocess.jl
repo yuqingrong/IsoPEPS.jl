@@ -183,9 +183,9 @@ fig_energy, fig_error, data = plot_energy_error_vs_g(
       energy_source=:computed,
       dmrg_file=[
           "dmrg_bulk_heisenberg_j1j2_Ly4_D32_J2scan.json",
-          "project/results/reference/dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json",
+          "dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json",
       ],
-      save_path="project/results/figures/heisenberg_energy_vs_J2.pdf",
+      save_path="project/results/heisenberg/heisenberg_energy_vs_J2.pdf",
       markersize=6,
 )
        

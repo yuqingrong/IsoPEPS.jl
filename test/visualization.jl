@@ -42,6 +42,12 @@ end
     @test string(IsoPEPS.J2_OVER_J1_LABEL) ==
           raw"\mathit{J}_2/\mathit{J}_1"
     @test string(IsoPEPS.M2_LABEL) == raw"\mathit{M}^2(\mathbf{q})"
+    @test IsoPEPS.QX_LABEL isa Makie.RichText
+    @test IsoPEPS.QY_LABEL isa Makie.RichText
+    @test IsoPEPS.QX_LABEL.attributes[:font] == :italic
+    @test IsoPEPS.QY_LABEL.attributes[:font] == :italic
+    @test IsoPEPS.QX_LABEL.children[2].variant == :sub
+    @test IsoPEPS.QY_LABEL.children[2].variant == :sub
     @test string(IsoPEPS.X_EXPECTATION_LABEL) ==
           raw"\langle \mathit{X}\rangle"
     @test string(IsoPEPS.Z_EXPECTATION_LABEL) ==
@@ -740,6 +746,40 @@ end
     @test scatter.marker[] == Makie.to_spritemarker(:diamond)
     @test all(==(7), scatter.markersize[])
     @test scatter.strokewidth[] == 0
+end
+
+@testset "plot_combined_structure_factors formats mathematical labels" begin
+    data_file = tempname() * ".json"
+    spin_matrices = [fill(0.1, 3, 3), fill(0.2, 3, 3)]
+    dimer_matrices = [fill(0.3, 3, 3), fill(0.4, 3, 3)]
+    save_results(data_file;
+                 J2_values=[0.0, 0.5],
+                 nq=3,
+                 use_exact=false,
+                 spin_matrices=[collect(eachcol(m)) for m in spin_matrices],
+                 dimer_matrices=[collect(eachcol(m)) for m in dimer_matrices])
+
+    fig, _, _ = plot_combined_structure_factors(
+        "unused", Float64[]; data_file=data_file)
+
+    @test isempty(filter(content -> content isa Label, fig.content))
+    axes = filter(content -> content isa Axis, fig.content)
+    @test length(axes) == 4
+    top_axes = filter(ax -> only(ax.layoutobservables.gridcontent[].span.rows) == 1,
+                      axes)
+    bottom_axes = filter(ax -> only(ax.layoutobservables.gridcontent[].span.rows) == 2,
+                         axes)
+    @test [ax.title[] for ax in top_axes] ==
+          [IsoPEPS.math_label("\\mathit{J}_2=$value") for value in (0.0, 0.5)]
+    @test first(top_axes).ylabel[] == IsoPEPS.QY_LABEL
+    @test first(bottom_axes).xlabel[] == IsoPEPS.QX_LABEL
+    @test first(bottom_axes).ylabel[] == IsoPEPS.QY_LABEL
+
+    colorbars = filter(content -> content isa Colorbar, fig.content)
+    @test [colorbar.label[] for colorbar in colorbars] == [
+        IsoPEPS.math_label(raw"\mathit{S}(\mathbf{q})"),
+        IsoPEPS.math_label(raw"\mathit{S}_{\mathrm{D}}(\mathbf{q})"),
+    ]
 end
 
 @testset "plot_bond_energy_pattern loads saved samples" begin
