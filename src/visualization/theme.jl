@@ -78,18 +78,18 @@ function compact_reference_label(kind::Symbol, value::Real)
     end
 end
 
-function m2_phase_annotations(ymax::Real;
-                              ranges=((0.0, 0.4), (0.4, 0.6), (0.6, 1.0)))
-    centers = ((ranges[1][1] + ranges[1][2]) / 2,
-               (ranges[2][1] + ranges[2][2]) / 2,
-               (ranges[3][1] + ranges[3][2]) / 2)
+function m2_phase_annotations(::Real)
+    representative_points = (0.2, 0.55, 0.8)
     [
-        (x=centers[1], y=0.72, range=ranges[1], bar_y=0.28,
-         tick_low=0.12, tick_high=0.42, label="Neel order", align=(:center, :center)),
-        (x=centers[2], y=0.72, range=ranges[2], bar_y=0.28,
-         tick_low=0.12, tick_high=0.42, label="VBS", align=(:center, :center)),
-        (x=centers[3], y=0.72, range=ranges[3], bar_y=0.28,
-         tick_low=0.12, tick_high=0.42, label="Stripe order", align=(:center, :center)),
+        (x=representative_points[1], label_x=representative_points[1],
+         y=0.62, marker_y=0.20,
+         label="Néel", color=:black, align=(:center, :center)),
+        (x=representative_points[2], label_x=representative_points[2],
+         y=0.62, marker_y=0.20,
+         label="VBS", color=:blue, align=(:center, :center)),
+        (x=representative_points[3], label_x=representative_points[3],
+         y=0.62, marker_y=0.20,
+         label="Stripe", color=:black, align=(:center, :center)),
     ]
 end
 

@@ -1623,6 +1623,30 @@ function _sampling_m2_stats(X_samples::AbstractVector{<:Real},
     return m2, stderr
 end
 
+function _dimer_order_squared(op::TransferOperator, q::Tuple{Real,Real};
+                              max_separation::Int=20)
+    N_eff = op.row * (2 * max_separation + 1)
+    S_D = dimer_structure_factor(op, q; dimer_orientation=:vertical,
+                                 max_separation=max_separation)
+    return S_D / N_eff
+end
+
+function _dimer_order_squared(X_samples::Vector{Float64},
+                              Z_samples::Vector{Float64},
+                              Y_samples::Vector{Float64},
+                              row::Int, q::Tuple{Real,Real};
+                              max_separation::Int=20)
+    ncols = _n_cols(X_samples, row)
+    max_sep = min(max_separation, ncols - 1)
+    N_eff = row * (2 * max_sep + 1)
+    S_D = dimer_structure_factor(X_samples, Z_samples, Y_samples, row, q;
+                                 dimer_orientation=:vertical,
+                                 max_separation=max_sep,
+                                 mean_subtraction=:global,
+                                 distance_window=:bartlett)
+    return S_D / N_eff
+end
+
 # ============================================================================
 # save_M2_vs_J2 — compute and save M² data to JSON
 # ============================================================================
@@ -1630,7 +1654,8 @@ end
 """
     save_M2_vs_J2(data_dir, J2_values; method=:exact, output_file, ...)
 
-Compute M²(q) for each J2 value and save results to a JSON file.
+Compute magnetic M²(q) and vertical-dimer M_D²(0,π) for each J2 value and save
+results to a JSON file.
 
 # Arguments
 - `data_dir`: Directory containing circuit result JSON files
@@ -1666,6 +1691,7 @@ function save_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
     M2_neel = Float64[]
     M2_stripe = Float64[]
     M2_stripe_0pi = Float64[]
+    MD2_0pi = Float64[]
     M2_neel_stderr = Float64[]
     M2_stripe_stderr = Float64[]
     M2_stripe_0pi_stderr = Float64[]
@@ -1690,7 +1716,7 @@ function save_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
 
         println("\nJ2=$val  →  $(basename(filename))")
 
-        local m2_neel, m2_stripe, m2_stripe_0pi
+        local m2_neel, m2_stripe, m2_stripe_0pi, md2_0pi
 
         if method == :exact
             result, input_args = load_result(filename)
@@ -1715,6 +1741,8 @@ function save_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
             m2_neel       = magnetic_order_squared(op, q0; max_separation=max_separation)
             m2_stripe     = magnetic_order_squared(op, q1; max_separation=max_separation)
             m2_stripe_0pi = magnetic_order_squared(op, q2; max_separation=max_separation)
+            md2_0pi       = _dimer_order_squared(op, q2;
+                                                 max_separation=max_separation)
         else
             sf = isnothing(samples_files) ? nothing : get(samples_files, val, nothing)
             if !isnothing(sf)
@@ -1754,20 +1782,23 @@ function save_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
                                                                       max_separation=max_separation,
                                                                       n_bootstrap=n_bootstrap,
                                                                       block_cols=block_cols)
+            md2_0pi = _dimer_order_squared(X_vec, Z_vec, Y_vec, row, q2;
+                                           max_separation=max_separation)
         end
 
         push!(J2_found, val)
         push!(M2_neel, m2_neel)
         push!(M2_stripe, m2_stripe)
         push!(M2_stripe_0pi, m2_stripe_0pi)
+        push!(MD2_0pi, md2_0pi)
 
         if method == :sampling
             push!(M2_neel_stderr, m2_neel_stderr)
             push!(M2_stripe_stderr, m2_stripe_stderr)
             push!(M2_stripe_0pi_stderr, m2_stripe_0pi_stderr)
-            println("  M²(π,π) = $(round(m2_neel, digits=6)) ± $(round(m2_neel_stderr, digits=6)),  M²(π,0) = $(round(m2_stripe, digits=6)) ± $(round(m2_stripe_stderr, digits=6)),  M²(0,π) = $(round(m2_stripe_0pi, digits=6)) ± $(round(m2_stripe_0pi_stderr, digits=6))")
+            println("  M²(π,π) = $(round(m2_neel, digits=6)) ± $(round(m2_neel_stderr, digits=6)),  M²(π,0) = $(round(m2_stripe, digits=6)) ± $(round(m2_stripe_stderr, digits=6)),  M²(0,π) = $(round(m2_stripe_0pi, digits=6)) ± $(round(m2_stripe_0pi_stderr, digits=6)),  M_D²(0,π) = $(round(md2_0pi, digits=6))")
         else
-            println("  M²(π,π) = $(round(m2_neel, digits=6)),  M²(π,0) = $(round(m2_stripe, digits=6)),  M²(0,π) = $(round(m2_stripe_0pi, digits=6))")
+            println("  M²(π,π) = $(round(m2_neel, digits=6)),  M²(π,0) = $(round(m2_stripe, digits=6)),  M²(0,π) = $(round(m2_stripe_0pi, digits=6)),  M_D²(0,π) = $(round(md2_0pi, digits=6))")
         end
     end
 
@@ -1778,7 +1809,8 @@ function save_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
     result_data = (J2_values=J2_found,
                    M2_neel=M2_neel,
                    M2_stripe=M2_stripe,
-                   M2_stripe_0pi=M2_stripe_0pi)
+                   M2_stripe_0pi=M2_stripe_0pi,
+                   MD2_0pi=MD2_0pi)
     save_data = merge(result_data,
                       (method=String(method), row=row, nqubits=nqubits, p=p,
                        max_separation=max_separation))
@@ -1822,56 +1854,6 @@ function _load_m2_stderr(data, key::String, expected_length::Int)
     return values
 end
 
-function _linear_threshold_crossing(xs::Vector{Float64}, ys::Vector{Float64},
-                                    threshold::Float64; direction::Symbol)
-    for i in 1:(length(xs) - 1)
-        x1, x2 = xs[i], xs[i + 1]
-        y1, y2 = ys[i], ys[i + 1]
-        crosses = direction === :falling ?
-                  (y1 >= threshold && y2 <= threshold) :
-                  (y1 <= threshold && y2 >= threshold)
-        crosses || continue
-        y1 == y2 && return x1
-        t = clamp((threshold - y1) / (y2 - y1), 0.0, 1.0)
-        return x1 + t * (x2 - x1)
-    end
-    return nothing
-end
-
-function _m2_phase_ranges_from_values(J2_values, M2_neel, M2_stripe_0pi;
-                                      threshold_fraction::Float64=0.25)
-    J2 = Float64.(J2_values)
-    neel = Float64.(M2_neel)
-    stripe = Float64.(M2_stripe_0pi)
-    if length(J2) != length(neel) || length(J2) != length(stripe) || length(J2) < 2
-        return nothing
-    end
-    if any(value -> !isfinite(value), J2) ||
-       any(value -> !isfinite(value) || value < 0, neel) ||
-       any(value -> !isfinite(value) || value < 0, stripe)
-        return nothing
-    end
-
-    order = sortperm(J2)
-    xs = J2[order]
-    neel_sorted = neel[order]
-    stripe_sorted = stripe[order]
-    xmin, xmax = first(xs), last(xs)
-    xmin < xmax || return nothing
-
-    neel_threshold = threshold_fraction * maximum(neel_sorted)
-    stripe_threshold = threshold_fraction * maximum(stripe_sorted)
-    neel_end = _linear_threshold_crossing(xs, neel_sorted, neel_threshold;
-                                          direction=:falling)
-    stripe_start = _linear_threshold_crossing(xs, stripe_sorted, stripe_threshold;
-                                             direction=:rising)
-    if isnothing(neel_end) || isnothing(stripe_start) || neel_end >= stripe_start
-        return nothing
-    end
-
-    return ((xmin, neel_end), (neel_end, stripe_start), (stripe_start, xmax))
-end
-
 """
     plot_M2_comparison(; exact_file="", sampling_file="", dmrg_file="",
                         save_path=nothing, dmrg_Lx_key="Lx2",
@@ -1879,9 +1861,9 @@ end
                         show_errorbars=true,
                         show_exact=false, show_dmrg=false)
 
-Plot M²(π,π) (Néel) and M²(0,π) together vs J₂/J₁. By default, only the
-sampling series are shown; set `show_exact=true` or `show_dmrg=true` to overlay
-reference curves.
+Plot M²(π,π) (Néel), M²(0,π), and any available M_D²(0,π) data together vs
+J₂/J₁. By default, only the sampling series are shown; set `show_exact=true`
+or `show_dmrg=true` to overlay reference curves.
 
 Each file is a JSON produced by `save_M2_vs_J2` (for exact/sampling) or
 `dmrg_reference.jl` (for DMRG). Pass empty string to skip a method.
@@ -1912,19 +1894,21 @@ function plot_M2_comparison(; exact_file::String="",
                               show_errorbars::Bool=true,
                               show_exact::Bool=false,
                               show_dmrg::Bool=false,
-                              markersize::Real=3.4,
+                              markersize::Real=4.0,
                               dmrg_markersize::Real=3.6,
                               save_path=nothing)
-    # M²(π,π) = Néel, M²(0,π) uses key M2_0pi / M2_stripe_0pi
+    # M_D² has no sampling standard error in the current data format.
     q_info = [
         (label_tex=raw"\mathit{M}^2(\pi,\pi)", std_key="M2_neel",      stderr_key="M2_neel_stderr",
          dmrg_key="M2_neel_$dmrg_Lx_key", marker=:circle),
         (label_tex=raw"\mathit{M}^2(0,\pi)", std_key="M2_stripe_0pi", stderr_key="M2_stripe_0pi_stderr",
          dmrg_key="M2_0pi_$dmrg_Lx_key", marker=:diamond),
+        (label_tex=raw"\mathit{M}_{\mathrm{D}}^2(0,\pi)", std_key="MD2_0pi", stderr_key=nothing,
+         dmrg_key=nothing, marker=:rect),
     ]
 
-    # Colors and markers distinguish the two q-points.
-    q_colors = [:blue, :orange]
+    # Colors and markers distinguish the magnetic and dimer order parameters.
+    q_colors = [:blue, :orange, :seagreen]
     method_styles = [
         (key="exact",    label="TN",    linestyle=:solid,
          markersize=Float64(markersize), strokewidth=0.0),
@@ -1954,6 +1938,7 @@ function plot_M2_comparison(; exact_file::String="",
     if sampling_data !== nothing
         for qi in q_info
             haskey(sampling_data, qi.std_key) || continue
+            isnothing(qi.stderr_key) && continue
             stderr = _load_m2_stderr(sampling_data, qi.stderr_key,
                                      length(sampling_data[qi.std_key]))
             isnothing(stderr) || (sampling_stderr[qi.stderr_key] = stderr)
@@ -1961,27 +1946,21 @@ function plot_M2_comparison(; exact_file::String="",
     end
 
     has_stderr_panel = show_sampling_stderr_panel && !isempty(sampling_stderr)
-    phase_band_height = 32
-    fig_height = (has_stderr_panel ? round(Int, 1.35 * PAPER_FIGSIZE[2]) : PAPER_FIGSIZE[2]) +
-                 phase_band_height + 2
+    fig_height = has_stderr_panel ? round(Int, 1.35 * PAPER_FIGSIZE[2]) : PAPER_FIGSIZE[2]
     fig = Figure(size=(PAPER_FIGSIZE[1], fig_height),
                  figure_padding=(6, 12, 6, 6))
-    phase_ax = Axis(fig[1, 1])
-    ax = Axis(fig[2, 1],
+    ax = Axis(fig[1, 1],
               xlabel=has_stderr_panel ? "" : J2_OVER_J1_LABEL,
-              ylabel=M2_LABEL)
+              ylabel=math_label(
+                  raw"\mathit{M}^2(\mathbf{q}),\ \mathit{M}_{\mathrm{D}}^2(\mathbf{q})"),
+              xgridvisible=false, ygridvisible=false)
     stderr_ax = has_stderr_panel ?
-        Axis(fig[3, 1], xlabel=J2_OVER_J1_LABEL,
-             ylabel="Sampling SE", yscale=log10) :
+        Axis(fig[2, 1], xlabel=J2_OVER_J1_LABEL,
+             ylabel="Sampling SE", yscale=log10,
+             xgridvisible=false, ygridvisible=false) :
         nothing
-    rowsize!(fig.layout, 1, Fixed(phase_band_height))
-    rowgap!(fig.layout, 1)
-    hidedecorations!(phase_ax)
-    hidespines!(phase_ax)
-    ylims!(phase_ax, 0, 1)
-    linkxaxes!(phase_ax, ax)
     if has_stderr_panel
-        rowsize!(fig.layout, 3, Relative(0.28))
+        rowsize!(fig.layout, 2, Relative(0.28))
         rowgap!(fig.layout, 4)
         linkxaxes!(ax, stderr_ax)
     end
@@ -1991,6 +1970,7 @@ function plot_M2_comparison(; exact_file::String="",
 
     # Track which method styles have been labelled so each appears once
     method_labelled = Dict{String,Bool}()
+    plotted_series = Set{Tuple{String,String}}()
 
     for (iq, qi) in enumerate(q_info)
         color = q_colors[iq]
@@ -2006,6 +1986,7 @@ function plot_M2_comparison(; exact_file::String="",
                           linestyle=style.linestyle,
                           marker_attrs((; style..., marker=qi.marker), color)...)
             method_labelled["exact"] = true
+            push!(plotted_series, ("exact", qi.std_key))
         end
 
         if sampling_data !== nothing && haskey(sampling_data, qi.std_key)
@@ -2013,7 +1994,8 @@ function plot_M2_comparison(; exact_file::String="",
             M2 = Float64.(sampling_data[qi.std_key])
             append!(all_J2_values, J2)
             max_M2_value = max(max_M2_value, maximum(M2))
-            stderr = get(sampling_stderr, qi.stderr_key, nothing)
+            stderr = isnothing(qi.stderr_key) ? nothing :
+                     get(sampling_stderr, qi.stderr_key, nothing)
             if !isnothing(stderr)
                 if show_errorbars
                     max_M2_value = max(max_M2_value, maximum(m + e for (m, e) in zip(M2, stderr)))
@@ -2030,10 +2012,11 @@ function plot_M2_comparison(; exact_file::String="",
                           linestyle=style.linestyle,
                           marker_attrs((; style..., marker=qi.marker), color)...)
             method_labelled["sampling"] = true
+            push!(plotted_series, ("sampling", qi.std_key))
         end
 
         if dmrg_data !== nothing
-            dmrg_key = haskey(dmrg_data, qi.dmrg_key) ? qi.dmrg_key :
+            dmrg_key = !isnothing(qi.dmrg_key) && haskey(dmrg_data, qi.dmrg_key) ? qi.dmrg_key :
                        haskey(dmrg_data, qi.std_key) ? qi.std_key : nothing
             dmrg_j2_key = haskey(dmrg_data, "J2_values") ? "J2_values" :
                           haskey(dmrg_data, "scan_values") ? "scan_values" : nothing
@@ -2048,61 +2031,46 @@ function plot_M2_comparison(; exact_file::String="",
                               linestyle=style.linestyle,
                               marker_attrs((; style..., marker=qi.marker), color)...)
                 method_labelled["dmrg"] = true
+                push!(plotted_series, ("dmrg", qi.std_key))
             end
         end
     end
 
-    ymax = max(0.25, 1.12 * max_M2_value)
+    ymax = max(0.28, 1.22 * max_M2_value)
     ylims!(ax, 0, ymax)
 
-    phase_ranges = nothing
-    if sampling_data !== nothing &&
-       haskey(sampling_data, "J2_values") &&
-       haskey(sampling_data, "M2_neel") &&
-       haskey(sampling_data, "M2_stripe_0pi")
-        phase_ranges = _m2_phase_ranges_from_values(sampling_data["J2_values"],
-                                                     sampling_data["M2_neel"],
-                                                     sampling_data["M2_stripe_0pi"])
-    end
-    phase_annotations = isnothing(phase_ranges) ? m2_phase_annotations(ymax) :
-                        m2_phase_annotations(ymax; ranges=phase_ranges)
-    phase_xmins = [ann.range[1] for ann in phase_annotations]
-    phase_xmaxs = [ann.range[2] for ann in phase_annotations]
-    xmin = isempty(all_J2_values) ? minimum(phase_xmins) : min(minimum(all_J2_values), minimum(phase_xmins))
-    xmax = isempty(all_J2_values) ? maximum(phase_xmaxs) : max(maximum(all_J2_values), maximum(phase_xmaxs))
+    xmin = isempty(all_J2_values) ? 0.0 : min(0.0, minimum(all_J2_values))
+    xmax = isempty(all_J2_values) ? 1.0 : max(1.0, maximum(all_J2_values))
     xlims!(ax, xmin, xmax)
-    xlims!(phase_ax, xmin, xmax)
 
-    phase_tick_low = 0.20
-    phase_tick_high = 0.36
+    phase_annotations = m2_phase_annotations(ymax)
+    label_y = 0.24
+    x_span = xmax - xmin
+    char_w_data = 0.018 * x_span
+    pad_x = 0.020 * x_span
+    pill_h = 0.075 * ymax
+    pill_fill = (:gray, 0.12)
+    pill_stroke = (:gray, 0.35)
+    label_color = :gray25
+
     for ann in phase_annotations
-        xlo, xhi = ann.range
-        lines!(phase_ax, [xlo, xhi], [ann.bar_y, ann.bar_y];
-               color=:firebrick, linewidth=0.9)
-        lines!(phase_ax, [xlo, xlo], [phase_tick_low, phase_tick_high];
-               color=:firebrick, linewidth=0.9)
-        lines!(phase_ax, [xhi, xhi], [phase_tick_low, phase_tick_high];
-               color=:firebrick, linewidth=0.9)
-        text!(phase_ax, ann.x, ann.y;
+        pill_w = length(ann.label) * char_w_data + 2 * pad_x
+        cx = ann.label_x
+        cy = label_y
+        poly!(ax,
+              [Point2f(cx - pill_w/2, cy - pill_h/2),
+               Point2f(cx + pill_w/2, cy - pill_h/2),
+               Point2f(cx + pill_w/2, cy + pill_h/2),
+               Point2f(cx - pill_w/2, cy + pill_h/2)];
+              color=pill_fill,
+              strokecolor=pill_stroke,
+              strokewidth=0.4)
+        text!(ax, cx, cy;
               text=ann.label,
-              align=ann.align,
+              align=(:center, :center),
               fontsize=PAPER_LEGEND_LABELSIZE,
-              color=:firebrick,
-              strokecolor=:firebrick,
-              strokewidth=0)
-    end
-
-    for i in 1:(length(phase_annotations) - 1)
-        left_edge = phase_annotations[i].range[2]
-        right_edge = phase_annotations[i + 1].range[1]
-        transition = (left_edge + right_edge) / 2
-        text!(phase_ax, transition, phase_tick_low - 0.02;
-              text="$(round(transition, digits=2))",
-              align=(:center, :top),
-              fontsize=PAPER_LEGEND_LABELSIZE - 3,
-              color=:firebrick,
-              strokecolor=:firebrick,
-              strokewidth=0)
+              color=label_color,
+              font=:italic)
     end
 
     # Combined legend: one entry per (q-point, method) pair so color + style are visible together
@@ -2112,7 +2080,7 @@ function plot_M2_comparison(; exact_file::String="",
     for (iq, qi) in enumerate(q_info)
         color = q_colors[iq]
         for style in method_styles
-            get(method_labelled, style.key, false) || continue
+            (style.key, qi.std_key) in plotted_series || continue
             push!(all_elems, [
                 LineElement(color=color, linestyle=style.linestyle),
                 MarkerElement(color=color, marker=qi.marker,
@@ -2125,7 +2093,7 @@ function plot_M2_comparison(; exact_file::String="",
         end
     end
 
-    Legend(fig[2, 1], all_elems, all_labels;
+    Legend(fig[1, 1], all_elems, all_labels;
            tellwidth=false, tellheight=false,
            halign=:left, valign=:bottom,
            nbanks=1,

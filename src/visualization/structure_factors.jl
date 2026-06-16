@@ -239,7 +239,6 @@ function plot_dimer_structure_factor(filename::String;
                     dimer_vals[pos, c] += S[i1] * S[i2] / 4.0
                 end
             end
-            n_cols_d = ncols
         else  # :horizontal
             dimer_vals = zeros(_row, ncols - 1)
             for S in all_samples
@@ -249,50 +248,21 @@ function plot_dimer_structure_factor(filename::String;
                     dimer_vals[pos, c] += S[i1] * S[i2] / 4.0
                 end
             end
-            n_cols_d = ncols - 1
         end
 
-        max_sep = min(max_separation, n_cols_d - 1)
-        n_pos = _row
-        μ = vec(mean(dimer_vals, dims=2))
-
-        # Precompute correlation tables
+        # Precompute correlation tables once, then evaluate every q point with
+        # the VBS-preserving convention used by M_D².
         println("Precomputing correlation tables...")
-        # corr0[p1, p2] = mean over c of dimer_vals[p1,c]*dimer_vals[p2,c]
-        corr0 = zeros(n_pos, n_pos)
-        for p1 in 1:n_pos, p2 in 1:n_pos
-            corr0[p1, p2] = mean(dimer_vals[p1, c] * dimer_vals[p2, c] for c in 1:n_cols_d)
-        end
-        # corr_dc[Δc][p1, p2]
-        corr_dc = Vector{Matrix{Float64}}(undef, max_sep)
-        for Δc in 1:max_sep
-            m = zeros(n_pos, n_pos)
-            for p1 in 1:n_pos, p2 in 1:n_pos
-                m[p1, p2] = mean(dimer_vals[p1, c] * dimer_vals[p2, c + Δc] for c in 1:(n_cols_d - Δc))
-            end
-            corr_dc[Δc] = m
-        end
+        components =
+            _dimer_structure_factor_components(dimer_vals, max_separation)
 
         println("Fourier transforming over $nq × $nq q-grid...")
-        μ_avg = mean(μ)
-        μ_avg_sq = μ_avg^2
-        L_eff_s = Float64(max_sep + 1)
-        N_d = n_pos
         for (i, qx) in enumerate(qvals)
             for (j, qy) in enumerate(qvals)
-                val = 0.0
-                for p1 in 1:n_pos, p2 in 1:n_pos
-                    Δp = p2 - p1
-                    val += cos(qy * Δp) * (corr0[p1, p2] - μ_avg_sq)
-                end
-                for Δc in 1:max_sep
-                    w = 1.0 - Δc / L_eff_s
-                    for p1 in 1:n_pos, p2 in 1:n_pos
-                        Δp = p2 - p1
-                        val += 2.0 * w * cos(qx * Δc + qy * Δp) * (corr_dc[Δc][p1, p2] - μ_avg_sq)
-                    end
-                end
-                SD[i, j] = val / N_d
+                SD[i, j] = _evaluate_dimer_structure_factor(
+                    components, (qx, qy);
+                    mean_subtraction=:global,
+                    distance_window=:bartlett)
             end
         end
     end
@@ -541,6 +511,22 @@ function save_combined_structure_factor_data(output_file::String,
     return (spin_matrices, dimer_matrices)
 end
 
+# Defaults are 510 pt (combined) and 650 pt (bond); compensate so colorbars
+# look equal when figures are displayed at the same width.
+const _COMBINED_COLORBAR_WIDTH = 9.5
+const _COMBINED_COLORBAR_TICKLABELSIZE = PAPER_FONTSIZE
+const _BOND_COLORBAR_WIDTH = 12
+const _BOND_COLORBAR_TICKLABELSIZE = 13
+
+function _align_colorbar_to_axis!(colorbar, axis)
+    colorbar.tellheight[] = false
+    colorbar.valign[] = :center
+    on(axis.scene.viewport; update=true) do viewport
+        colorbar.height[] = Float64(Makie.widths(viewport)[2])
+    end
+    return colorbar
+end
+
 """
     plot_combined_structure_factors(data_dir, J2_values; kwargs...)
 
@@ -658,6 +644,8 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
     fig = Figure(size=_figsize)
 
     local hm_spin, hm_dimer
+    spin_axis = nothing
+    dimer_axis = nothing
 
     # Top row: spin structure factor S(q)
     for (j, J2) in enumerate(J2_values)
@@ -667,6 +655,7 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
                   xticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]),
                   yticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]))
         if j == 1
+            spin_axis = ax
             ax.ylabel = QY_LABEL
         else
             ax.yticklabelsvisible = false
@@ -675,8 +664,11 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
         hm_spin = heatmap!(ax, qvals, qvals, spin_matrices[j],
                            colormap=:viridis, colorrange=(spin_min, spin_max))
     end
-    Colorbar(fig[1, n + 1], hm_spin,
-             label=math_label(raw"\mathit{S}(\mathbf{q})"))
+    spin_colorbar = Colorbar(fig[1, n + 1], hm_spin,
+                             label=math_label(raw"\mathit{S}(\mathbf{q})"),
+                             ticklabelsize=_COMBINED_COLORBAR_TICKLABELSIZE,
+                             width=_COMBINED_COLORBAR_WIDTH)
+    _align_colorbar_to_axis!(spin_colorbar, spin_axis)
 
     # Bottom row: dimer structure factor Sᴅ(q)
     for (j, J2) in enumerate(J2_values)
@@ -686,6 +678,7 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
                   xticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]),
                   yticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]))
         if j == 1
+            dimer_axis = ax
             ax.ylabel = QY_LABEL
         else
             ax.yticklabelsvisible = false
@@ -693,8 +686,11 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
         hm_dimer = heatmap!(ax, qvals, qvals, dimer_matrices[j],
                             colormap=:viridis, colorrange=(dimer_min, dimer_max))
     end
-    Colorbar(fig[2, n + 1], hm_dimer,
-             label=math_label(raw"\mathit{S}_{\mathrm{D}}(\mathbf{q})"))
+    dimer_colorbar = Colorbar(fig[2, n + 1], hm_dimer,
+                              label=math_label(raw"\mathit{S}_{\mathrm{D}}(\mathbf{q})"),
+                              ticklabelsize=_COMBINED_COLORBAR_TICKLABELSIZE,
+                              width=_COMBINED_COLORBAR_WIDTH)
+    _align_colorbar_to_axis!(dimer_colorbar, dimer_axis)
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))
@@ -973,8 +969,8 @@ function plot_bond_energy_pattern(filename::String;
         Colorbar(fig[1, 2]; colormap=:RdBu, limits=(-cmax, cmax),
                  label=_BOND_ENERGY_LABEL,
                  labelsize=_BOND_ENERGY_LABELSIZE,
-                 ticklabelsize=PAPER_TICKLABELSIZE,
-                 width=12)
+                 ticklabelsize=_BOND_COLORBAR_TICKLABELSIZE,
+                 width=_BOND_COLORBAR_WIDTH)
 
         if !isnothing(save_path)
             mkpath(dirname(save_path))
@@ -1177,8 +1173,8 @@ function plot_bond_energy_pattern(results_dir::String,
                  vertical=true,
                  label=_BOND_ENERGY_LABEL,
                  labelsize=_BOND_ENERGY_LABELSIZE,
-                 ticklabelsize=PAPER_TICKLABELSIZE,
-                 width=12)
+                 ticklabelsize=_BOND_COLORBAR_TICKLABELSIZE,
+                 width=_BOND_COLORBAR_WIDTH)
         rowsize!(fig.layout, 1, Fixed(26))
         rowsize!(fig.layout, 2, Fixed(row * unit + 10))
         rowgap!(fig.layout, 2)

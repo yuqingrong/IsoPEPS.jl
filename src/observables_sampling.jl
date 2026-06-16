@@ -471,6 +471,70 @@ function _build_all_dimer_values(X_samples::Vector{Float64},
     return (dimer_vals_v, dimer_vals_h)
 end
 
+function _dimer_structure_factor_components(dimer_vals::Matrix{Float64},
+                                             max_separation::Int)
+    n_pos, n_cols_d = size(dimer_vals)
+    max_sep = min(max_separation, n_cols_d - 1)
+    μ = vec(mean(dimer_vals, dims=2))
+
+    corr0 = zeros(n_pos, n_pos)
+    for p1 in 1:n_pos, p2 in 1:n_pos
+        corr0[p1, p2] =
+            mean(dimer_vals[p1, c] * dimer_vals[p2, c] for c in 1:n_cols_d)
+    end
+
+    corr_dc = Vector{Matrix{Float64}}(undef, max_sep)
+    for Δc in 1:max_sep
+        corr = zeros(n_pos, n_pos)
+        for p1 in 1:n_pos, p2 in 1:n_pos
+            corr[p1, p2] = mean(
+                dimer_vals[p1, c] * dimer_vals[p2, c + Δc]
+                for c in 1:(n_cols_d - Δc))
+        end
+        corr_dc[Δc] = corr
+    end
+
+    return (; μ, corr0, corr_dc, max_sep, n_pos)
+end
+
+function _evaluate_dimer_structure_factor(components, q::Tuple{Real,Real};
+                                          mean_subtraction::Symbol=:position,
+                                          distance_window::Symbol=:none)
+    mean_subtraction in (:position, :global) ||
+        throw(ArgumentError("mean_subtraction must be :position or :global"))
+    distance_window in (:none, :bartlett) ||
+        throw(ArgumentError("distance_window must be :none or :bartlett"))
+
+    qx, qy = Float64(q[1]), Float64(q[2])
+    μ = components.μ
+    corr0 = components.corr0
+    corr_dc = components.corr_dc
+    max_sep = components.max_sep
+    n_pos = components.n_pos
+    μ_avg_sq = mean(μ)^2
+
+    disconnected(p1, p2) =
+        mean_subtraction === :global ? μ_avg_sq : μ[p1] * μ[p2]
+
+    SD = 0.0
+    for p1 in 1:n_pos, p2 in 1:n_pos
+        Δp = p2 - p1
+        SD += cos(qy * Δp) * (corr0[p1, p2] - disconnected(p1, p2))
+    end
+
+    L_eff = Float64(max_sep + 1)
+    for Δc in 1:max_sep
+        weight = distance_window === :bartlett ? 1.0 - Δc / L_eff : 1.0
+        for p1 in 1:n_pos, p2 in 1:n_pos
+            Δp = p2 - p1
+            SD += 2.0 * weight * cos(qx * Δc + qy * Δp) *
+                  (corr_dc[Δc][p1, p2] - disconnected(p1, p2))
+        end
+    end
+
+    return SD / n_pos
+end
+
 """
     dimer_dimer_correlation(X_samples, Z_samples, Y_samples, row, separations;
                             dimer_orientation::Symbol=:vertical, pos::Int=1,
@@ -584,7 +648,9 @@ end
 """
     dimer_structure_factor(X_samples, Z_samples, Y_samples, row, q;
                            dimer_orientation::Symbol=:vertical,
-                           max_separation::Int=20)
+                           max_separation::Int=20,
+                           mean_subtraction::Symbol=:position,
+                           distance_window::Symbol=:none)
 
 Dimer static structure factor on a cylinder:
 
@@ -602,6 +668,11 @@ For horizontal dimers, r_b = (c + 0.5, pos) so Δr = (Δc, Δpos).
 - `q`: Momentum vector (qx, qy)
 - `dimer_orientation`: `:vertical` or `:horizontal`
 - `max_separation`: Maximum column separation
+- `mean_subtraction`: `:position` subtracts row-resolved dimer means for a
+  strictly connected correlator; `:global` subtracts one global mean and
+  preserves pinned VBS bond alternation
+- `distance_window`: `:none` or `:bartlett` for triangular finite-window
+  weighting across column separations
 
 # Returns
 - Real-valued structure factor S_D(q)
@@ -611,66 +682,25 @@ function dimer_structure_factor(X_samples::Vector{Float64},
                                 Y_samples::Vector{Float64},
                                 row::Int, q::Tuple{Real,Real};
                                 dimer_orientation::Symbol=:vertical,
-                                max_separation::Int=20)
-    qx, qy = Float64(q[1]), Float64(q[2])
-    all_samples = (X_samples, Y_samples, Z_samples)
-    ncols = _n_cols(Z_samples, row)
-
-    # Build dimer values for ALL row positions: dimer_vals[pos, col]
-    if dimer_orientation == :vertical
-        # Vertical dimer at (pos, col) connects pos and pos%row+1
-        dimer_vals = zeros(row, ncols)
-        for S in all_samples
-            for c in 1:ncols, pos in 1:row
-                pos2 = pos % row + 1
-                i1 = row * (c - 1) + pos
-                i2 = row * (c - 1) + pos2
-                dimer_vals[pos, c] += S[i1] * S[i2] / 4.0
-            end
-        end
-        n_pos = row
-        n_cols_d = ncols
-    elseif dimer_orientation == :horizontal
-        # Horizontal dimer at (pos, col) connects (pos,col) and (pos,col+1)
-        dimer_vals = zeros(row, ncols - 1)
-        for S in all_samples
-            for c in 1:(ncols - 1), pos in 1:row
-                i1 = row * (c - 1) + pos
-                i2 = row * c + pos
-                dimer_vals[pos, c] += S[i1] * S[i2] / 4.0
-            end
-        end
-        n_pos = row
-        n_cols_d = ncols - 1
+                                max_separation::Int=20,
+                                mean_subtraction::Symbol=:position,
+                                distance_window::Symbol=:none)
+    dimer_vals_v, dimer_vals_h =
+        _build_all_dimer_values(X_samples, Z_samples, Y_samples, row)
+    dimer_vals = if dimer_orientation === :vertical
+        dimer_vals_v
+    elseif dimer_orientation === :horizontal
+        dimer_vals_h
     else
-        error("dimer_orientation must be :vertical or :horizontal, got $dimer_orientation")
+        throw(ArgumentError(
+            "dimer_orientation must be :vertical or :horizontal, got $dimer_orientation"))
     end
 
-    max_sep = min(max_separation, n_cols_d - 1)
-
-    # Fourier transform: S(q) = (1/N_d) Σ_{pos1,pos2,Δc} C(pos1,pos2,Δc) cos(qx Δc + qy Δpos)
-    # where C = ⟨D_{pos1,c} D_{pos2,c+Δc}⟩ - ⟨D_{pos1}⟩⟨D_{pos2}⟩
-    μ = vec(mean(dimer_vals, dims=2))  # mean dimer value per row position
-
-    SD = 0.0
-    # Δc = 0 terms
-    for p1 in 1:n_pos, p2 in 1:n_pos
-        Δp = p2 - p1
-        corr = mean(dimer_vals[p1, c] * dimer_vals[p2, c] for c in 1:n_cols_d)
-        SD += cos(qy * Δp) * (corr - μ[p1] * μ[p2])
-    end
-
-    # Δc > 0 terms
-    for Δc in 1:max_sep
-        for p1 in 1:n_pos, p2 in 1:n_pos
-            Δp = p2 - p1
-            corr = mean(dimer_vals[p1, c] * dimer_vals[p2, c + Δc] for c in 1:(n_cols_d - Δc))
-            SD += 2.0 * cos(qx * Δc + qy * Δp) * (corr - μ[p1] * μ[p2])
-        end
-    end
-
-    N_d = n_pos
-    return SD / N_d
+    components = _dimer_structure_factor_components(dimer_vals, max_separation)
+    return _evaluate_dimer_structure_factor(
+        components, q;
+        mean_subtraction=mean_subtraction,
+        distance_window=distance_window)
 end
 # =============================================================================
 # Section 5: ACF (unchanged)

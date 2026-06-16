@@ -341,8 +341,8 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
         fig = Figure(size=_figsize)
 
         ax = Axis(fig[1, 1];
-                  xlabel   = math_label(raw"N_{\mathrm{shot}}"),
-                  ylabel   = math_label(raw"\mathrm{Var}(E)"),
+                  xlabel   = math_label(raw"\mathit{N}_{\mathrm{shot}}"),
+                  ylabel   = math_label(raw"\mathrm{Var}(\mathit{E})"),
                   xscale   = log10,
                   yscale   = log10)
 
@@ -376,7 +376,7 @@ function plot_variance_vs_samples(sample_sizes::AbstractVector, variances::Abstr
             N_fit = range(minimum(ns), maximum(ns); length=200)
             lines!(ax, collect(N_fit), a ./ collect(N_fit);
                    linestyle=:dash, color=:firebrick,
-                   label="∝ 1/N  (a=$(round(a, sigdigits=3)))")
+                   label=math_label("\\propto 1/\\mathit{N}_{\\mathrm{shot}}\\;(\\mathit{a}=$(round(a, sigdigits=3)))"))
         end
 
         add_paper_legend!(ax; position=:rt)

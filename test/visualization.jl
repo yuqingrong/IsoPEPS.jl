@@ -503,12 +503,12 @@ end
 @testset "save_M2_vs_J2 stores sampling standard errors" begin
     data_dir = mktempdir()
     J2 = 0.0
-    row = 1
+    row = 4
     p = 1
     nqubits = 1
     params = zeros(gate_parameter_count(p, nqubits))
     result = CircuitOptimizationResult(
-        [0.0], Matrix{ComplexF64}[], params, 0.0,
+        [0.0], Vector{Float64}[], Matrix{ComplexF64}[], params, 0.0,
         Float64[], Float64[], Float64[], true
     )
     input_args = Dict{Symbol,Any}(
@@ -517,30 +517,56 @@ end
     )
     circuit_file = joinpath(data_dir,
         "circuit_heisenberg_j1j2_J1=1.0_J2=$(J2)_row=$(row)_p=$(p)_nqubits=$(nqubits).json")
+    samples_file = joinpath(data_dir, "samples_heisenberg_J2=$(J2).json")
     output_file = joinpath(data_dir, "M2_sampling.json")
     save_result(circuit_file, result, input_args)
+
+    columns = fill([1.0, 1.0, -1.0, -1.0], 6)
+    X_samples = reduce(vcat, columns)
+    Z_samples = copy(X_samples)
+    Y_samples = copy(X_samples)
+    save_results(samples_file;
+        conv_step=0,
+        X_samples=[X_samples],
+        Z_samples=[Z_samples],
+        Y_samples=[Y_samples])
 
     data = save_M2_vs_J2(data_dir, [J2];
         method=:sampling, output_file=output_file,
         row=row, p=p, nqubits=nqubits,
-        max_separation=2, conv_step=0, samples=12,
-        n_bootstrap=8, bootstrap_block_cols=2)
+        max_separation=20, conv_step=0, samples=length(X_samples),
+        n_bootstrap=8, bootstrap_block_cols=2,
+        samples_files=Dict(J2 => samples_file))
 
     @test length(data.M2_neel_stderr) == 1
     @test length(data.M2_stripe_stderr) == 1
     @test length(data.M2_stripe_0pi_stderr) == 1
+    @test length(data.MD2_0pi) == 1
     @test all(>=(0), data.M2_neel_stderr)
     @test all(>=(0), data.M2_stripe_stderr)
     @test all(>=(0), data.M2_stripe_0pi_stderr)
+    max_sep = length(X_samples) ÷ row - 1
+    expected_md2 = dimer_structure_factor(
+        X_samples, Z_samples, Y_samples, row, (0.0, Float64(π));
+        max_separation=max_sep,
+        mean_subtraction=:global,
+        distance_window=:bartlett) / (row * (2 * max_sep + 1))
+    strictly_connected_md2 = dimer_structure_factor(
+        X_samples, Z_samples, Y_samples, row, (0.0, Float64(π));
+        max_separation=max_sep) / (row * (2 * max_sep + 1))
+    @test only(data.MD2_0pi) ≈ expected_md2
+    @test expected_md2 > 0
+    @test strictly_connected_md2 ≈ 0 atol=1e-14
 
     saved = load_results(output_file)
-    @test saved["samples"] == 12
+    @test saved["MD2_0pi"] ≈ [expected_md2]
+    @test saved["samples"] == length(X_samples)
     @test saved["conv_step"] == 0
     @test saved["n_bootstrap"] == 8
     @test saved["bootstrap_block_cols"] == [2]
 end
 
-@testset "plot_M2_comparison sampling-only phase ranges and error bars" begin
+@testset "plot_M2_comparison qualitative phases and error bars" begin
     data_dir = mktempdir()
     exact_file = joinpath(data_dir, "M2_exact.json")
     sampling_file = joinpath(data_dir, "M2_sampling.json")
@@ -554,7 +580,8 @@ end
         M2_neel=[0.19, 0.03, 0.02],
         M2_neel_stderr=[0.01, 0.01, 0.005],
         M2_stripe_0pi=[0.02, 0.03, 0.17],
-        M2_stripe_0pi_stderr=[0.005, 0.01, 0.015])
+        M2_stripe_0pi_stderr=[0.005, 0.01, 0.015],
+        MD2_0pi=[0.01, 0.12, 0.03])
     save_results(dmrg_file;
         scan_values=[0.1, 0.5, 0.8],
         M2_neel_Lx2=[0.21, 0.11, 0.05],
@@ -567,14 +594,17 @@ end
     @test (figure_padding.left, figure_padding.right,
            figure_padding.bottom, figure_padding.top) == (6, 12, 6, 6)
     axes = filter(content -> content isa Axis, fig.content)
-    @test length(axes) == 2
-    phase_ax = axes[1]
-    ax = axes[2]
+    @test length(axes) == 1
+    ax = axes[1]
     @test ax.xlabel[] == IsoPEPS.J2_OVER_J1_LABEL
+    @test ax.ylabel[] == IsoPEPS.math_label(
+        raw"\mathit{M}^2(\mathbf{q}),\ \mathit{M}_{\mathrm{D}}^2(\mathbf{q})")
+    @test ax.xgridvisible[] == false
+    @test ax.ygridvisible[] == false
     legend = only(filter(content -> content isa Legend, fig.content))
     @test legend isa Legend
     gc = legend.layoutobservables.gridcontent[]
-    @test gc.span.rows == 2:2
+    @test gc.span.rows == 1:1
     @test gc.span.cols == 1:1
     @test legend.tellwidth[] == false
     @test legend.tellheight[] == false
@@ -582,14 +612,12 @@ end
     @test legend.halign[] == :left
     @test legend.valign[] == :bottom
     @test legend.margin[] == (1, 1, 1, 1)
-    phase_texts = [only(plot.text[]) for plot in phase_ax.scene.plots if hasproperty(plot, :text)]
-    @test "0.46" in phase_texts
-    @test "0.53" in phase_texts
     g = legend.entrygroups[][1]
     legend_labels = [e.label[] for e in g[2]]
     @test legend_labels == [
         IsoPEPS.math_label(raw"\mathit{M}^2(\pi,\pi)"),
         IsoPEPS.math_label(raw"\mathit{M}^2(0,\pi)"),
+        IsoPEPS.math_label(raw"\mathit{M}_{\mathrm{D}}^2(0,\pi)"),
     ]
     @test all(label -> label isa typeof(IsoPEPS.math_label("")), legend_labels)
     @test count(plot -> plot isa Errorbars, ax.scene.plots) == 2
@@ -601,50 +629,45 @@ end
     end
     @test any(plot -> plot.marker[] == :circle, styled_series)
     @test any(plot -> plot.marker[] == :diamond, styled_series)
+    @test any(plot -> plot.marker[] == :rect, styled_series)
     @test !any(plot -> plot.marker[] == :xcross, styled_series)
+    # phase text labels "Néel", "VBS", "Stripe" appear in the main axis
+    phase_texts = [only(plot.text[]) for plot in ax.scene.plots
+                   if hasproperty(plot, :text) && only(plot.text[]) in ["Néel", "VBS", "Stripe"]]
+    @test phase_texts == ["Néel", "VBS", "Stripe"]
+    phase_text_plots = filter(ax.scene.plots) do plot
+        hasproperty(plot, :text) && only(plot.text[]) in ["Néel", "VBS", "Stripe"]
+    end
+    @test all(p -> p.fontsize[] == IsoPEPS.PAPER_LEGEND_LABELSIZE, phase_text_plots)
+    @test all(p -> p.color[] == to_color(:gray25), phase_text_plots)
+    @test all(p -> p.font[] == :italic, phase_text_plots)
 
     larger_marker_fig = plot_M2_comparison(sampling_file=sampling_file;
                                            markersize=6)
     larger_marker_axes = filter(content -> content isa Axis,
                                 larger_marker_fig.content)
-    larger_marker_series = filter(larger_marker_axes[2].scene.plots) do plot
+    larger_marker_series = filter(larger_marker_axes[1].scene.plots) do plot
         hasproperty(plot, :marker) && hasproperty(plot, :markersize)
     end
-    @test all(plot -> plot.markersize[] == 6, larger_marker_series)
+    @test any(plot -> plot.markersize[] == 6, larger_marker_series)
 
     no_errorbar_fig = plot_M2_comparison(sampling_file=sampling_file;
                                          show_errorbars=false)
     no_errorbar_axes = filter(content -> content isa Axis, no_errorbar_fig.content)
-    @test count(plot -> plot isa Errorbars, no_errorbar_axes[2].scene.plots) == 0
+    @test count(plot -> plot isa Errorbars, no_errorbar_axes[1].scene.plots) == 0
 
     se_fig = plot_M2_comparison(exact_file=exact_file, sampling_file=sampling_file,
                                 dmrg_file=dmrg_file;
                                 show_sampling_stderr_panel=true)
     se_axes = filter(content -> content isa Axis, se_fig.content)
-    @test length(se_axes) == 3
-    @test se_axes[3].ylabel[] == "Sampling SE"
+    @test length(se_axes) == 2
+    @test se_axes[2].ylabel[] == "Sampling SE"
+    @test se_axes[2].xgridvisible[] == false
+    @test se_axes[2].ygridvisible[] == false
     annotations = IsoPEPS.m2_phase_annotations(0.24)
-    @test [a.label for a in annotations] == ["Neel order", "VBS", "Stripe order"]
-    @test [a.range for a in annotations] == [(0.0, 0.4), (0.4, 0.6), (0.6, 1.0)]
-    @test [(a.x, a.y) for a in annotations] == [(0.20, 0.72), (0.50, 0.72), (0.80, 0.72)]
-    data_ranges = IsoPEPS._m2_phase_ranges_from_values(
-        [0.0, 0.5, 0.6, 1.0],
-        [1.0, 0.2, 0.1, 0.1],
-        [0.1, 0.1, 0.2, 1.0])
-    @test data_ranges !== nothing
-    @test data_ranges[1][2] ≈ 0.46875
-    @test data_ranges[2][1] ≈ 0.46875
-    @test data_ranges[2][2] ≈ 0.625
-    @test data_ranges[3][1] ≈ 0.625
-    @test data_ranges[3][2] ≈ 1.0
-    texts = filter(phase_ax.scene.plots) do plot
-        hasproperty(plot, :text) && first(plot.text[]) in ["Neel order", "VBS", "Stripe order"]
-    end
-    @test length(texts) == 3
-    @test all(text_plot.fontsize[] == IsoPEPS.PAPER_LEGEND_LABELSIZE for text_plot in texts)
-    @test all(text_plot.color[] == to_color(:firebrick) for text_plot in texts)
-    @test all(text_plot.strokecolor[] == to_color(:firebrick) for text_plot in texts)
-    @test all(text_plot.strokewidth[] == 0 for text_plot in texts)
+    @test [a.label for a in annotations] == ["Néel", "VBS", "Stripe"]
+    @test [(a.x, a.y) for a in annotations] == [(0.20, 0.62), (0.55, 0.62), (0.80, 0.62)]
+    @test [a.label_x for a in annotations] == [0.20, 0.55, 0.80]
 
     legacy_sampling_file = joinpath(data_dir, "M2_sampling_legacy.json")
     save_results(legacy_sampling_file;
@@ -654,9 +677,15 @@ end
     legacy_fig = plot_M2_comparison(sampling_file=legacy_sampling_file)
     @test legacy_fig isa Figure
     legacy_axes = filter(content -> content isa Axis, legacy_fig.content)
-    @test length(legacy_axes) == 2
-    legacy_ax = legacy_axes[2]
+    @test length(legacy_axes) == 1
+    legacy_ax = legacy_axes[1]
     @test count(plot -> plot isa Errorbars, legacy_ax.scene.plots) == 0
+    legacy_legend = only(filter(content -> content isa Legend, legacy_fig.content))
+    legacy_labels = [entry.label[] for entry in legacy_legend.entrygroups[][1][2]]
+    @test legacy_labels == [
+        IsoPEPS.math_label(raw"\mathit{M}^2(\pi,\pi)"),
+        IsoPEPS.math_label(raw"\mathit{M}^2(0,\pi)"),
+    ]
 
     @test isnothing(IsoPEPS._load_m2_stderr(
         Dict("bad_stderr" => [0.1, 0.2]), "bad_stderr", 3))
@@ -780,6 +809,18 @@ end
         IsoPEPS.math_label(raw"\mathit{S}(\mathbf{q})"),
         IsoPEPS.math_label(raw"\mathit{S}_{\mathrm{D}}(\mathbf{q})"),
     ]
+    @test all(colorbar -> colorbar.ticklabelsize[] ==
+                         IsoPEPS._COMBINED_COLORBAR_TICKLABELSIZE,
+              colorbars)
+    @test all(colorbar -> colorbar.width[] ==
+                         IsoPEPS._COMBINED_COLORBAR_WIDTH,
+              colorbars)
+    @test all(colorbar -> colorbar.tellheight[] == false, colorbars)
+    @test all(colorbar -> colorbar.valign[] == :center, colorbars)
+    Makie.resize_to_layout!(fig)
+    for (axis, colorbar) in zip((first(top_axes), first(bottom_axes)), colorbars)
+        @test colorbar.height[] ≈ Makie.widths(axis.scene.viewport[])[2]
+    end
 end
 
 @testset "plot_bond_energy_pattern loads saved samples" begin
@@ -808,6 +849,8 @@ end
     colorbar = only(filter(content -> content isa Colorbar, fig.content))
     @test colorbar.label[] == IsoPEPS._BOND_ENERGY_LABEL
     @test colorbar.labelsize[] == IsoPEPS._BOND_ENERGY_LABELSIZE
+    @test colorbar.ticklabelsize[] == IsoPEPS._BOND_COLORBAR_TICKLABELSIZE
+    @test colorbar.width[] == IsoPEPS._BOND_COLORBAR_WIDTH
 end
 
 @testset "plot_bond_energy_pattern lays out J2 panels horizontally" begin
@@ -854,6 +897,8 @@ end
     @test string(colorbar.label[]) ==
           raw"\langle \mathbf{S}_{\mathit{i}}\cdot\mathbf{S}_{\mathit{j}}\rangle"
     @test colorbar.labelsize[] == IsoPEPS._BOND_ENERGY_LABELSIZE
+    @test colorbar.ticklabelsize[] == IsoPEPS._BOND_COLORBAR_TICKLABELSIZE
+    @test colorbar.width[] == IsoPEPS._BOND_COLORBAR_WIDTH
     @test colorbar.layoutobservables.gridcontent[].span.cols == 4:4
     @test colorbar.layoutobservables.gridcontent[].span.rows == 1:2
 end
