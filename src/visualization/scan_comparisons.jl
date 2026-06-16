@@ -584,8 +584,8 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
         ax1 = Axis(fig[1, 1];
                    xlabel      = xlabel_str,
                    ylabel      = ENERGY_PER_SITE_LABEL,
-                   xgridvisible = true,
-                   ygridvisible = true)
+                   xgridvisible = false,
+                   ygridvisible = false)
 
         for (idx, series) in enumerate(circuits)
             scatterlines!(ax1, series.scan_values, series.energies;
@@ -634,8 +634,8 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
                    xlabel      = xlabel_str,
                    ylabel      = math_label(
                        raw"\frac{\mathit{E}_{\mathrm{IsoPEPS}}-\mathit{E}_{\mathrm{DMRG}}}{|\mathit{E}_{\mathrm{DMRG}}|}"),
-                   xgridvisible = true,
-                   ygridvisible = true)
+                   xgridvisible = false,
+                   ygridvisible = false)
 
         has_error = false
 

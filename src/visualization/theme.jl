@@ -31,10 +31,10 @@ const MAGNETISATION_LABEL = "Magnetisation"
 """
     paper_theme()
 
-Quantum-journal-style Makie theme: Computer Modern serif text, compact margins,
-and light grids. Mathematical labels should use `math_label` so physical
-quantities are italic while explicit `\\mathrm{...}` descriptions and numeric
-tick labels remain upright. Apply with `set_theme!(paper_theme())` or
+Quantum-journal-style Makie theme: Computer Modern serif text and compact
+margins. Mathematical labels should use `math_label` so physical quantities
+are italic while explicit `\\mathrm{...}` descriptions and numeric tick
+labels remain upright. Apply with `set_theme!(paper_theme())` or
 `with_theme(paper_theme()) do ... end`.
 """
 function paper_theme()
@@ -49,9 +49,7 @@ function paper_theme()
             xlabelsize = PAPER_AXIS_LABELSIZE, ylabelsize = PAPER_AXIS_LABELSIZE,
             xticklabelsize = PAPER_TICKLABELSIZE, yticklabelsize = PAPER_TICKLABELSIZE,
             titlesize = PAPER_TITLESIZE, titlefont = :regular,
-            xgridvisible = true, ygridvisible = true,
-            xgridcolor = (:gray, 0.25), ygridcolor = (:gray, 0.25),
-            xgridwidth = 0.5, ygridwidth = 0.5,
+            xgridvisible = false, ygridvisible = false,
             spinewidth = 0.8,
             xtickwidth = 0.8, ytickwidth = 0.8,
         ),
