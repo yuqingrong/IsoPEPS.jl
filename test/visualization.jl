@@ -8,7 +8,7 @@ using CairoMakie: Axis, Colorbar, Errorbars, Figure, Label, Legend, Makie, Scatt
 function write_test_tfim_circuit(path; g=2.0, row=3, p=3, nqubits=3, energy=0.0)
     params = zeros(gate_parameter_count(p, nqubits))
     result = CircuitOptimizationResult(
-        [energy], Matrix{ComplexF64}[], params, energy,
+        [energy], Vector{Float64}[], Matrix{ComplexF64}[], params, energy,
         Float64[], Float64[], Float64[], true
     )
     input_args = Dict{Symbol,Any}(
@@ -46,8 +46,8 @@ end
     @test IsoPEPS.QY_LABEL isa Makie.RichText
     @test IsoPEPS.QX_LABEL.attributes[:font] == :italic
     @test IsoPEPS.QY_LABEL.attributes[:font] == :italic
-    @test IsoPEPS.QX_LABEL.children[2].variant == :sub
-    @test IsoPEPS.QY_LABEL.children[2].variant == :sub
+    @test IsoPEPS.QX_LABEL.children[2].type == :sub
+    @test IsoPEPS.QY_LABEL.children[2].type == :sub
     @test string(IsoPEPS.X_EXPECTATION_LABEL) ==
           raw"\langle \mathit{X}\rangle"
     @test string(IsoPEPS.Z_EXPECTATION_LABEL) ==
@@ -65,6 +65,7 @@ end
     # Test CircuitOptimizationResult
     result_circuit = CircuitOptimizationResult(
         [1.0, 0.5, 0.3],
+        Vector{Float64}[],
         [zeros(ComplexF64, 8, 8)],
         [0.1, 0.2],
         0.3,
@@ -134,7 +135,7 @@ end
     steps = 1:10
     energies = rand(10)
     
-    fig = plot_training_history(steps, energies; ylabel="Energy")
+    fig = plot_training_history(steps, energies)
     @test fig isa Figure
     ax = fig.content[1]
     @test ax.xlabelsize[] == IsoPEPS.PAPER_AXIS_LABELSIZE
@@ -156,7 +157,7 @@ end
     
     # With result
     result = CircuitOptimizationResult(
-        energies, [], [], 0.5, [], [], Float64[], true
+        energies, Vector{Float64}[], [], Float64[], 0.5, Float64[], Float64[], Float64[], true
     )
     fig3 = plot_training_history(result)
     @test fig3 isa Figure
@@ -414,7 +415,7 @@ end
     nqubits = 5
     params = zeros(gate_parameter_count(p, nqubits))
     result = CircuitOptimizationResult(
-        [0.0], Matrix{ComplexF64}[], params, 0.0,
+        [0.0], Vector{Float64}[], Matrix{ComplexF64}[], params, 0.0,
         Float64[], Float64[], Float64[], true
     )
     input_args = Dict{Symbol,Any}(
