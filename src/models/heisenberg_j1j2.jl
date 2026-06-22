@@ -33,5 +33,7 @@ function compute_exact_energy_from_gates(m::HeisenbergJ1J2, gates, row, virtual_
         energy = compute_exact_heisenberg_energy(gates, row, virtual_qubits, m.J1, m.J2;
                                                   optimizer=optimizer)
     end
-    return energy, 0.0, 0.0, 0.0
+    # Per-site convention (matches sampling and the TFIM exact path).
+    # compute_exact_heisenberg_energy[_2x2] returns energy per column = row × per-site.
+    return energy / row, 0.0, 0.0, 0.0
 end

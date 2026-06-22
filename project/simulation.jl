@@ -267,50 +267,29 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
     end
 end
 
-#=
-# ── Example: Heisenberg J1-J2 ──
- simulation(;
-     model="heisenberg_j1j2",
-     scan_param=:J2,
-     scan_values=[0.5],
-     J1=1.0,
-     row=4, p=3, nqubits=5,
-     maxiter=1000,
-     seed=123,
-     verbose=true,
-     output_dir=joinpath(@__DIR__, "results_heisenberg"),
-     share_params=true,
-     conv_step=100,
-     samples=1000,
-     n_runs=4,
-     abstol=1e-5,
-     unit_cell=:two_by_two,
-     warm_start=false,
-     resume_checkpoint=false
- )
 
+# ── Example: Heisenberg J1-J2 ──
 simulation(;
-    model="tfim",
-    scan_param=:g,
-    scan_values=[4.0],
-    J=1.0,
-    row=3,
-    p=3,
-    nqubits=3,
-    maxiter=500,
+    model="heisenberg_j1j2",
+    scan_param=:J2,
+    scan_values=[0.0],
+    J1=1.0,
+    row=4, p=3, nqubits=3,
+    maxiter=2000,
     seed=123,
     verbose=true,
-    output_dir=joinpath(@__DIR__, "results_tfim_aaa"),
-    share_params=true,      # legacy fallback; kept for compatibility
-    structure=:aaa,         # A-B-B
-    conv_step=300,
-    samples=3000,
+    output_dir=joinpath(@__DIR__, "results_test"),
+    conv_step=100,
+    samples=4000,
     n_runs=10,
-    abstol=1e-5,
-    unit_cell=:single
+    abstol=0.01,
+    unit_cell=:two_by_two,
+    warm_start=false,
+    resume_checkpoint=false,
+    post_select_exact=true,
+    post_select_n=10,
 )
-=#
-
+#=
 simulation(;
     model="tfim",
     scan_param=:g,
@@ -330,3 +309,4 @@ simulation(;
     post_select_exact=true,
     post_select_n=10,
 )
+=#

@@ -123,20 +123,11 @@ datafile = joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J)_J2=0.5_row=$(row)
 referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
 result, args = analyze_result(datafile; pepskit_results_file=referfile, dmrg_bulk_file="project/results/dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json")
 
-save_finite_cylinder_samples(
-    "project/results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.0_row=4_p=3_nqubits=3_2x2.json",
-    "project/results/heisenberg/samples_heisenberg_J2=0.0.json";
-    Lx=10000,
-    n_chains=100,
-    conv_step=100
-)
-
 # M^2(q)
-J2_values = [0.0,0.1,0.2,0.3,0.4,0.5,0.51,0.52,0.53,0.54,0.55,0.56,0.57,0.58,0.59,0.6,0.7,0.8,0.9,1.0]
-save_M2_vs_J2(      "project/results/heisenberg",
+save_M2_vs_J2(      "project/results",
                     J2_values;
                     method=:sampling,  # sampling or exact
-                    output_file="project/results/heisenberg/M2_sampling.json",
+                    output_file="project/results/M2_sampling.json",
                     row=4,
                     nqubits=3,
                     p=3,
@@ -144,31 +135,23 @@ save_M2_vs_J2(      "project/results/heisenberg",
                     conv_step=100,
                     samples=1000000,
                     n_bootstrap=200,
-                    samples_files=Dict(
-                        0.0 => "project/results/heisenberg/samples_heisenberg_J2=0.0.json",
-                        0.5 => "project/results/heisenberg/samples_heisenberg_J2=0.5.json",
-                        0.6 => "project/results/heisenberg/samples_heisenberg_J2=0.6.json",
-                        1.0 => "project/results/heisenberg/samples_heisenberg_J2=1.0.json",
-                    ),
                 ) 
 plot_M2_comparison(
-                sampling_file="project/results/heisenberg/M2_sampling.json",
+                sampling_file="project/results/M2_sampling.json",
                 save_path="project/results/figures/M2_comparison.pdf",
                 markersize=4,
                 show_errorbars=false)   
 
 # structure factor
-save_combined_structure_factor_data("sf.json", "project/results/heisenberg", [0.0, 0.5, 0.6, 1.0];
-      nq=51, use_exact=false, samples=1000000,
-      max_separation_spin=10, max_separation_dimer=20,
+save_combined_structure_factor_data("sf.json", "project/results/heisenberg", [0.0, 0.5, 1.0];
+      use_exact=false, max_separation_spin=10, max_separation_dimer=10,
       samples_files=Dict(
           0.0 => "project/results/heisenberg/samples_heisenberg_J2=0.0.json",
           0.5 => "project/results/heisenberg/samples_heisenberg_J2=0.5.json",
-          0.6 => "project/results/heisenberg/samples_heisenberg_J2=0.6.json",
           1.0 => "project/results/heisenberg/samples_heisenberg_J2=1.0.json",
       ))
  fig, _, _ = plot_combined_structure_factors(
-    "project/results", [0.0, 0.5, 0.6, 1.0];
+    "project/results", [0.0, 0.5, 1.0];
     data_file="sf.json",
     save_path="project/results/figures/structure_factors_combined.pdf"
 )

@@ -292,9 +292,7 @@ function _compute_circuit_energy_from_result(filename::String, result, input_arg
                 unit_cell=unit_cell))
         end
 
-        # Exact Heisenberg contraction returns energy per column; references and
-        # sampled energies use energy per site.
-        return real(energy) / row
+        return real(energy)
     else
         gates = build_unitary_gate(result.final_params, p, row, nqubits;
                                    share_params=share_params,
