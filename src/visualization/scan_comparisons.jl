@@ -955,10 +955,11 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
     skipped_g = Float64[]
 
     for (idx, g) in enumerate(g_values)
-        candidates = [
-            joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json"),
-
-        ]
+        candidates = String[]
+        for suffix in ("_1x1", "_1x1_100*1000", "_1x1_6w", "")
+            push!(candidates,
+                  joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)$(suffix).json"))
+        end
         filename = ""
         for candidate in candidates
             if isfile(candidate)
