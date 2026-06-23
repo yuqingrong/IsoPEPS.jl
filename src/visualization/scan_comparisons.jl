@@ -724,7 +724,7 @@ function plot_magnetization_vs_g(data_dir::String, g_values::Vector{Float64};
 
     for g in sorted_g
         candidates = [
-            joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json"),
+            joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json"),
             joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
             joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
         ]
@@ -956,7 +956,7 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
 
     for (idx, g) in enumerate(g_values)
         candidates = [
-            joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1_6w.json"),
+            joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json"),
 
         ]
         filename = ""
