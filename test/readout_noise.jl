@@ -3,7 +3,7 @@ using IsoPEPS
 using JSON3
 using Random
 using Statistics
-using CairoMakie: Axis, Errorbars, Figure
+using CairoMakie: Axis, Errorbars, Figure, Legend
 
 @testset "apply_readout_noise" begin
     samples = [1.0, -1.0, 1.0, -1.0]
@@ -63,6 +63,13 @@ end
         @test bias_ax.xlabel[] ==
               IsoPEPS.math_label(raw"\mathrm{Readout\ error\ rate}\ p\ (\%)")
         @test bias_ax.ylabel[] == IsoPEPS.math_label(raw"|e(p)-e(0)|")
+        energy_legend = only(filter(content -> content isa Legend, energy_fig.content))
+        bias_legend = only(filter(content -> content isa Legend, bias_fig.content))
+        for legend in (energy_legend, bias_legend)
+            @test isnothing(legend.layoutobservables.gridcontent[])
+            @test legend.halign[] == :left
+            @test legend.valign[] == :top
+        end
         @test count(plot -> plot isa Errorbars, energy_ax.scene.plots) == 1
         @test count(plot -> plot isa Errorbars, bias_ax.scene.plots) == 1
         energy_markers = filter(

@@ -53,6 +53,10 @@ end
     @test string(IsoPEPS.Z_EXPECTATION_LABEL) ==
           raw"\langle \mathit{Z}\rangle"
     @test IsoPEPS.MAGNETISATION_LABEL == "Magnetisation"
+    @test theme.Legend.rowgap[] == IsoPEPS.PAPER_LEGEND_ROWGAP
+    @test theme.Legend.colgap[] == IsoPEPS.PAPER_LEGEND_COLGAP
+    @test theme.Legend.patchsize[] == IsoPEPS.PAPER_LEGEND_PATCHSIZE
+    @test theme.Legend.patchlabelgap[] == IsoPEPS.PAPER_LEGEND_PATCHLABELGAP
     @test string(IsoPEPS.math_label(raw"M^2(0,\pi)")) == raw"M^2(0,\pi)"
     @test string(IsoPEPS.math_label(raw"\mathit{C}(1)\ \mathrm{nearest}")) ==
           raw"\mathit{C}(1)\ \mathrm{nearest}"
@@ -151,6 +155,10 @@ end
     legend = fig2.content[2]
     @test legend isa Legend
     @test legend.labelsize[] == 8
+    @test legend.rowgap[] == IsoPEPS.PAPER_LEGEND_ROWGAP
+    @test legend.colgap[] == IsoPEPS.PAPER_LEGEND_COLGAP
+    @test legend.patchsize[] == IsoPEPS.PAPER_LEGEND_PATCHSIZE
+    @test legend.patchlabelgap[] == IsoPEPS.PAPER_LEGEND_PATCHLABELGAP
     @test isnothing(legend.layoutobservables.gridcontent[])
     @test IsoPEPS.compact_reference_label(:pepskit, -0.5738123) == "PEPSKit (-0.5738)"
     @test IsoPEPS.compact_reference_label(:dmrg, -0.5738123) == "DMRG (-0.5738)"
@@ -230,6 +238,81 @@ end
     end
 end
 
+@testset "plot_magnetization_vs_g exact contraction" begin
+    data_dir = mktempdir()
+    g = 2.0
+    row = 2
+    p = 1
+    nqubits = 1
+    structure = :abc
+    active_nqubits = 1
+    params = collect(range(0.1, 0.4; length=gate_parameter_count(
+        p, nqubits; structure=structure, row=row,
+        active_nqubits=active_nqubits)))
+    result = CircuitOptimizationResult(
+        [0.0], Vector{Float64}[], Matrix{ComplexF64}[], params, 0.0,
+        Float64[], Float64[], Float64[], true)
+    input_args = Dict{Symbol,Any}(
+        :model => "tfim", :J => 1.0, :g => g, :row => row, :p => p,
+        :nqubits => nqubits, :share_params => false,
+        :structure => String(structure), :active_nqubits => active_nqubits,
+        :scan_param => "g")
+    filename = joinpath(
+        data_dir,
+        "circuit_tfim_J=1.0_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json")
+    save_result(filename, result, input_args)
+
+    fig, data = plot_magnetization_vs_g(
+        data_dir, [g]; J=1.0, row=row, p=p, nqubits=nqubits,
+        use_exact=true)
+
+    gates = build_unitary_gate(
+        params, p, row, nqubits;
+        share_params=false, structure=structure,
+        active_nqubits=active_nqubits)
+    virtual_qubits = (nqubits - 1) ÷ 2
+    expected_mZ = abs(real(compute_Z_expectation(
+        nothing, gates, row, virtual_qubits)))
+    expected_mX = abs(real(compute_X_expectation(
+        nothing, gates, row, virtual_qubits)))
+
+    @test fig isa Figure
+    @test collect(keys(data)) == [g]
+    @test data[g].mZ ≈ expected_mZ
+    @test data[g].mX ≈ expected_mX
+    legend = only(filter(content -> content isa Legend, fig.content))
+    @test isnothing(legend.layoutobservables.gridcontent[])
+    @test legend.halign[] == :right
+    @test legend.valign[] == :top
+    @test legend.nbanks[] == 2
+    @test legend.labelsize[] == IsoPEPS.PAPER_LARGE_LEGEND_LABELSIZE
+    ax = only(filter(content -> content isa Axis, fig.content))
+    @test ax.finallimits[].widths[2] > max(expected_mZ, expected_mX)
+    @test ax.xlabelsize[] == IsoPEPS.PAPER_LARGE_AXIS_LABELSIZE
+    @test ax.ylabelsize[] == IsoPEPS.PAPER_LARGE_AXIS_LABELSIZE
+    @test ax.xticklabelsize[] == IsoPEPS.PAPER_LARGE_TICKLABELSIZE
+    @test ax.yticklabelsize[] == IsoPEPS.PAPER_LARGE_TICKLABELSIZE
+end
+
+@testset "plot_connected_corr_vs_g uses larger text" begin
+    data_dir = mktempdir()
+    write_test_tfim_circuit(
+        joinpath(data_dir,
+                 "circuit_tfim_J=1.0_g=2.0_row=3_p=3_nqubits=3_1x1.json"))
+
+    fig, _ = plot_connected_corr_vs_g(
+        data_dir, [2.0]; J=1.0, row=3, p=3, nqubits=3,
+        use_exact=true)
+
+    ax = only(filter(content -> content isa Axis, fig.content))
+    legend = only(filter(content -> content isa Legend, fig.content))
+    @test ax.xlabelsize[] == IsoPEPS.PAPER_LARGE_AXIS_LABELSIZE
+    @test ax.ylabelsize[] == IsoPEPS.PAPER_LARGE_AXIS_LABELSIZE
+    @test ax.xticklabelsize[] == IsoPEPS.PAPER_LARGE_TICKLABELSIZE
+    @test ax.yticklabelsize[] == IsoPEPS.PAPER_LARGE_TICKLABELSIZE
+    @test legend.labelsize[] == IsoPEPS.PAPER_LARGE_LEGEND_LABELSIZE
+end
+
 @testset "plot_correlation_vs_g legend stays stacked top-left" begin
     data_dir = mktempdir()
     write_test_tfim_circuit(
@@ -243,11 +326,24 @@ end
                                    max_separation=1,
                                    dmrg_file=dmrg_file,
                                    pepskit_file=pepskit_file,
-                                   g_c=3.04)
+                                   g_c=3.04438)
     @test fig isa Figure
     legend = fig.content[2]
     @test legend isa Legend
     @test legend.nbanks[] == 1
+    @test legend.labelsize[] == IsoPEPS.PAPER_LARGE_LEGEND_LABELSIZE
+    ax = only(filter(content -> content isa Axis, fig.content))
+    @test ax.xlabelsize[] == IsoPEPS.PAPER_LARGE_AXIS_LABELSIZE
+    @test ax.ylabelsize[] == IsoPEPS.PAPER_LARGE_AXIS_LABELSIZE
+    @test ax.xticklabelsize[] == IsoPEPS.PAPER_LARGE_TICKLABELSIZE
+    @test ax.yticklabelsize[] == IsoPEPS.PAPER_LARGE_TICKLABELSIZE
+    critical_lines = filter(plot -> plot isa Makie.VLines, ax.scene.plots)
+    @test length(critical_lines) == 1
+    @test critical_lines[1][1][] == [3.04438]
+    @test to_color(critical_lines[1].color[]) == to_color(:gray40)
+    @test critical_lines[1].linestyle[] == :dash
+    @test critical_lines[1].linewidth[] == 1.0
+    @test length(legend.entrygroups[][1][2]) == 3
 end
 
 @testset "plot_correlation_vs_g loads 6w circuit results" begin
@@ -313,6 +409,7 @@ end
     fig_energy, fig_error, data = plot_energy_error_vs_g(data_dir, scan_values;
         energy_source=:saved,
         dmrg_file=[dmrg_d32, dmrg_d2],
+        g_c=3.04438,
         circuit_series=[
             (label="IsoPEPS χ=5", nqubits=5, suffixes=["_1x1_6w"], energy_source=:saved),
         ])
@@ -323,7 +420,8 @@ end
     @test fig_energy.content[1].ylabel[] == IsoPEPS.ENERGY_PER_SITE_LABEL
     @test fig_error.content[1].xlabel[] == IsoPEPS.FIELD_LABEL
     @test string(fig_error.content[1].ylabel[]) ==
-          raw"\frac{\mathit{E}_{\mathrm{IsoPEPS}}-\mathit{E}_{\mathrm{DMRG}}}{|\mathit{E}_{\mathrm{DMRG}}|}"
+          raw"\frac{|\mathit{E}_{\mathrm{isoPEPS}}-\mathit{E}_{\mathrm{DMRG}}|}{|\mathit{E}_{\mathrm{DMRG}}|}"
+    @test isempty(filter(content -> content isa Legend, fig_error.content))
     @test haskey(data.series, "IsoPEPS")
     @test haskey(data.series, "IsoPEPS χ=5")
     @test haskey(data.series, "DMRG D=32")
@@ -333,6 +431,30 @@ end
     @test haskey(data.errors_by_reference, "IsoPEPS − DMRG D=2")
     @test data.errors_by_reference["IsoPEPS χ=5 − DMRG D=32"].errors ≈ [0.15/2.05, 0.25/3.05]
     @test data.energies_dmrg == [-2.05, -3.05]
+    @test IsoPEPS._series_errors(
+        (scan_values=[1.0], energies=[-2.1]),
+        (scan_values=[1.0], energies=[-2.0])).errors ≈ [0.05]
+
+    energy_axis = only(filter(content -> content isa Axis, fig_energy.content))
+    energy_series = filter(plot -> hasproperty(plot, :marker) &&
+                                  hasproperty(plot, :markercolor) &&
+                                  hasproperty(plot, :markersize) &&
+                                  hasproperty(plot, :label),
+                           energy_axis.scene.plots)
+    isopeps_plot = only(filter(plot -> plot.label[] == "IsoPEPS", energy_series))
+    dmrg_plots = filter(plot -> startswith(String(plot.label[]), "DMRG"), energy_series)
+    @test length(dmrg_plots) == 2
+    @test all(plot -> plot.marker[] == :rect, dmrg_plots)
+    @test all(plot -> plot.markercolor[] == :transparent, dmrg_plots)
+    @test all(plot -> plot.strokecolor[] == plot.color[], dmrg_plots)
+    @test all(plot -> plot.strokewidth[] > 0, dmrg_plots)
+    @test all(plot -> plot.markersize[] > isopeps_plot.markersize[], dmrg_plots)
+
+    error_axis = only(filter(content -> content isa Axis, fig_error.content))
+    critical_lines = filter(plot -> plot isa Makie.VLines, error_axis.scene.plots)
+    @test length(critical_lines) == 1
+    @test critical_lines[1][1][] == [3.04438]
+    @test critical_lines[1].linestyle[] == :dash
 end
 
 @testset "plot_energy_error_vs_g formats DMRG bond-dimension labels" begin
@@ -405,6 +527,41 @@ end
 
     @test energy ≈ energy_per_column / row
     @test energy != energy_per_column
+end
+
+@testset "plot_energy_error_vs_g places Heisenberg legends bottom-left" begin
+    data_dir = mktempdir()
+    J2 = 0.5
+    row = 2
+    p = 1
+    nqubits = 1
+    params = zeros(gate_parameter_count(
+        p, nqubits; unit_cell=:two_by_two, row=row))
+    result = CircuitOptimizationResult(
+        [-0.4], Vector{Float64}[], Matrix{ComplexF64}[], params, -0.4,
+        Float64[], Float64[], Float64[], true)
+    input_args = Dict{Symbol,Any}(
+        :model => "heisenberg_j1j2", :J1 => 1.0, :J2 => J2,
+        :row => row, :p => p, :nqubits => nqubits,
+        :unit_cell => "two_by_two")
+    save_result(
+        joinpath(data_dir,
+                 "circuit_heisenberg_j1j2_J1=1.0_J2=$(J2)_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json"),
+        result, input_args)
+    dmrg_file = joinpath(data_dir, "dmrg_heisenberg.json")
+    save_results(dmrg_file; scan_values=[J2], e_bulk_values=[-0.5])
+
+    fig_energy, fig_error, _ = plot_energy_error_vs_g(
+        data_dir, [J2]; model="heisenberg_j1j2", J1=1.0,
+        row=row, p=p, nqubits=nqubits, energy_source=:saved,
+        dmrg_file=dmrg_file)
+
+    for fig in (fig_energy, fig_error)
+        legend = only(filter(content -> content isa Legend, fig.content))
+        @test isnothing(legend.layoutobservables.gridcontent[])
+        @test legend.halign[] == 0.12
+        @test legend.valign[] == 0.04
+    end
 end
 
 @testset "random-parameter dynamics plots smoke test" begin
@@ -586,7 +743,8 @@ end
     save_results(dmrg_file;
         scan_values=[0.1, 0.5, 0.8],
         M2_neel_Lx2=[0.21, 0.11, 0.05],
-        M2_0pi_Lx2=[0.025, 0.075, 0.18])
+        M2_stripe_Lx2=[0.025, 0.075, 0.18],
+        D2_vertical_0pi_Lx2=[0.015, 0.11, 0.025])
 
     fig = plot_M2_comparison(exact_file=exact_file, sampling_file=sampling_file,
                              dmrg_file=dmrg_file)
@@ -602,24 +760,26 @@ end
         raw"\mathit{M}^2(\mathbf{q}),\ \mathit{M}_{\mathrm{D}}^2(\mathbf{q})")
     @test ax.xgridvisible[] == false
     @test ax.ygridvisible[] == false
-    legend = only(filter(content -> content isa Legend, fig.content))
-    @test legend isa Legend
-    gc = legend.layoutobservables.gridcontent[]
-    @test gc.span.rows == 1:1
-    @test gc.span.cols == 1:1
-    @test legend.tellwidth[] == false
-    @test legend.tellheight[] == false
-    @test legend.nbanks[] == 1
-    @test legend.halign[] == :left
-    @test legend.valign[] == :bottom
-    @test legend.margin[] == (1, 1, 1, 1)
-    g = legend.entrygroups[][1]
+    legends = filter(content -> content isa Legend, fig.content)
+    @test length(legends) == 1
+    observable_legend = only(legends)
+    @test isnothing(observable_legend.layoutobservables.gridcontent[])
+    @test observable_legend.nbanks[] == 1
+    @test observable_legend.halign[] == 0.02
+    @test observable_legend.valign[] == 0.08
+    @test observable_legend.margin[] == (1, 1, 1, 1)
+    @test ax.finallimits[].origin[2] < 0
+    g = observable_legend.entrygroups[][1]
     legend_labels = [e.label[] for e in g[2]]
     @test legend_labels == [
         IsoPEPS.math_label(raw"\mathit{M}^2(\pi,\pi)"),
         IsoPEPS.math_label(raw"\mathit{M}^2(0,\pi)"),
         IsoPEPS.math_label(raw"\mathit{M}_{\mathrm{D}}^2(0,\pi)"),
     ]
+    @test !any(plot -> hasproperty(plot, :text) && any(note ->
+                  occursin("isoPEPS: solid", note) || occursin("DMRG: dashed", note),
+                  plot.text[]),
+               ax.scene.plots)
     @test all(label -> label isa typeof(IsoPEPS.math_label("")), legend_labels)
     @test count(plot -> plot isa Errorbars, ax.scene.plots) == 2
     line_series = filter(plot -> hasproperty(plot, :linestyle) && hasproperty(plot, :marker),
@@ -628,9 +788,7 @@ end
     styled_series = filter(ax.scene.plots) do plot
         hasproperty(plot, :marker) && hasproperty(plot, :markersize)
     end
-    @test any(plot -> plot.marker[] == :circle, styled_series)
-    @test any(plot -> plot.marker[] == :diamond, styled_series)
-    @test any(plot -> plot.marker[] == :rect, styled_series)
+    @test all(plot -> plot.marker[] == :rect, styled_series)
     @test !any(plot -> plot.marker[] == :xcross, styled_series)
     # phase text labels "Néel", "VBS", "Stripe" appear in the main axis
     phase_texts = [only(plot.text[]) for plot in ax.scene.plots
@@ -642,6 +800,39 @@ end
     @test all(p -> p.fontsize[] == IsoPEPS.PAPER_LEGEND_LABELSIZE, phase_text_plots)
     @test all(p -> p.color[] == to_color(:gray25), phase_text_plots)
     @test all(p -> p.font[] == :italic, phase_text_plots)
+    @test all(p -> p.align[] == (:center, :center), phase_text_plots)
+    @test all(p -> Tuple(p.offset[]) == (-0.75f0, 0.25f0, 0.0f0),
+              phase_text_plots)
+
+    dmrg_dashed_fig = plot_M2_comparison(sampling_file=sampling_file,
+                                         dmrg_file=dmrg_file;
+                                         show_dmrg=true)
+    dmrg_axes = filter(content -> content isa Axis, dmrg_dashed_fig.content)
+    dmrg_lines = filter(plot -> hasproperty(plot, :linestyle) && hasproperty(plot, :marker),
+                        dmrg_axes[1].scene.plots)
+    isopeps_lines = filter(plot -> plot.marker[] == :rect, dmrg_lines)
+    dmrg_reference_lines = filter(plot -> plot.marker[] == :circle, dmrg_lines)
+    @test length(isopeps_lines) == 3
+    @test length(dmrg_reference_lines) == 3
+    @test all(plot -> plot.linestyle[] == :solid, isopeps_lines)
+    @test all(plot -> plot.linestyle[] == :dash, dmrg_reference_lines)
+    @test [plot.color[] for plot in isopeps_lines] ==
+          to_color.([:blue, :orange, :seagreen])
+    @test [plot.color[] for plot in isopeps_lines] ==
+          [plot.color[] for plot in dmrg_reference_lines]
+
+    dmrg_legends = filter(content -> content isa Legend, dmrg_dashed_fig.content)
+    @test length(dmrg_legends) == 1
+    dmrg_observable_legend = only(dmrg_legends)
+    @test [entry.label[] for entry in dmrg_observable_legend.entrygroups[][1][2]] == [
+        IsoPEPS.math_label(raw"\mathit{M}^2(\pi,\pi)"),
+        IsoPEPS.math_label(raw"\mathit{M}^2(0,\pi)"),
+        IsoPEPS.math_label(raw"\mathit{M}_{\mathrm{D}}^2(0,\pi)"),
+    ]
+    @test !any(plot -> hasproperty(plot, :text) && any(note ->
+                  occursin("isoPEPS: solid", note) || occursin("DMRG: dashed", note),
+                  plot.text[]),
+               dmrg_axes[1].scene.plots)
 
     larger_marker_fig = plot_M2_comparison(sampling_file=sampling_file;
                                            markersize=6)
@@ -778,6 +969,44 @@ end
     @test scatter.strokewidth[] == 0
 end
 
+@testset "displacement-resolved structure factor convention" begin
+    q = (pi, pi / 2)
+    corr0 = [1.0 2.0; 3.0 4.0]
+    corr1 = [0.5 1.0; 1.5 2.0]
+    corr2 = [0.25 0.5; 0.75 1.0]
+
+    manual(distance_window) = begin
+        total = sum(corr0[p1, p2] * cos(q[2] * (p2 - p1))
+                    for p1 in 1:2, p2 in 1:2)
+        for (Δ, corr) in enumerate((corr1, corr2))
+            weight = distance_window === :bartlett ? 1 - Δ / 3 : 1
+            total += sum(2 * weight * corr[p1, p2] *
+                         cos(q[1] * Δ + q[2] * (p2 - p1))
+                         for p1 in 1:2, p2 in 1:2)
+        end
+        total / 2
+    end
+
+    @test IsoPEPS._displacement_structure_factor(corr0, [corr1, corr2], q) ≈
+          manual(:none)
+    @test IsoPEPS._displacement_structure_factor(
+        corr0, [corr1, corr2], q; distance_window=:bartlett) ≈ manual(:bartlett)
+
+    # Dimer structure factors use the same evaluator after connected
+    # (global-mean-subtracted) correlations have been assembled.
+    components = (; μ=zeros(2), corr0, corr_dc=[corr1, corr2],
+                  max_sep=2, n_pos=2)
+    @test IsoPEPS._evaluate_dimer_structure_factor(
+        components, q; mean_subtraction=:global,
+        distance_window=:bartlett) ≈ manual(:bartlett)
+
+    # The sampling M² convention divides a displacement-resolved spin S(q)
+    # by the effective site count, independently of how many finite-cylinder
+    # pairs were available to estimate each displacement correlation.
+    S = IsoPEPS._displacement_structure_factor(corr0, [corr1, corr2], q)
+    @test S / (2 * 5) ≈ manual(:none) / 10
+end
+
 @testset "plot_combined_structure_factors formats mathematical labels" begin
     data_file = tempname() * ".json"
     spin_matrices = [fill(0.1, 3, 3), fill(0.2, 3, 3)]
@@ -821,6 +1050,103 @@ end
     Makie.resize_to_layout!(fig)
     for (axis, colorbar) in zip((first(top_axes), first(bottom_axes)), colorbars)
         @test colorbar.height[] ≈ Makie.widths(axis.scene.viewport[])[2]
+    end
+end
+
+@testset "discrete cylinder-momentum structure factors" begin
+    # A periodic circumference of four sites permits four distinct transverse
+    # momenta; 2π is equivalent to the already included zero-momentum row.
+    qy_values = IsoPEPS._allowed_cylinder_qy(4)
+    @test qy_values == [0.0, Float64(π / 2), Float64(π), Float64(3π / 2)]
+    @test length(unique(qy_values)) == 4
+    @test !any(q -> q ≈ 2π, qy_values)
+
+    data_dir = mktempdir()
+    samples_file = joinpath(data_dir, "samples_heisenberg_J2=0.0.json")
+    X_samples = repeat([1.0, -1.0, 1.0, -1.0], 8)
+    Y_samples = repeat([1.0, 1.0, -1.0, -1.0], 8)
+    Z_samples = repeat([1.0, -1.0, -1.0, 1.0], 8)
+    save_results(samples_file;
+                 row=4,
+                 conv_step=0,
+                 X_samples=[X_samples],
+                 Y_samples=[Y_samples],
+                 Z_samples=[Z_samples])
+
+    qx_values = [0.0, Float64(π)]
+    output_file = joinpath(data_dir, "sf_discrete.json")
+    spin, dimer = save_combined_structure_factor_data(
+        output_file, data_dir, [0.0];
+        row=4,
+        qx_values=qx_values,
+        qy_values=qy_values,
+        max_separation_spin=2,
+        max_separation_dimer=2,
+        use_exact=false,
+        conv_step=0,
+        samples=length(X_samples),
+        samples_files=Dict(0.0 => samples_file))
+
+    @test size(only(spin)) == (2, 4)
+    @test size(only(dimer)) == (2, 4)
+    for (i, qx) in enumerate(qx_values), (j, qy) in enumerate(qy_values)
+        @test isapprox(only(spin)[i, j], spin_spin_structure_factor(
+            X_samples, Z_samples, Y_samples, 4, (qx, qy);
+            max_separation=2); atol=1e-12)
+        @test isapprox(only(dimer)[i, j], dimer_structure_factor(
+            X_samples, Z_samples, Y_samples, 4, (qx, qy);
+            max_separation=2,
+            mean_subtraction=:global,
+            distance_window=:bartlett); atol=1e-12)
+    end
+
+    saved = load_results(output_file)
+    @test saved["qx_values"] == qx_values
+    @test saved["qy_values"] == qy_values
+    @test saved["row"] == 4
+    @test saved["max_separation_spin"] == 2
+    @test saved["max_separation_dimer"] == 2
+    @test saved["dimer_orientation"] == "vertical"
+
+    plot_file = joinpath(data_dir, "sf_discrete_plot.json")
+    save_results(plot_file;
+                 J2_values=[0.0, 0.5, 0.6, 1.0],
+                 nq=length(qx_values),
+                 qx_values=qx_values,
+                 qy_values=qy_values,
+                 row=4,
+                 use_exact=false,
+                 max_separation_spin=2,
+                 max_separation_dimer=2,
+                 dimer_orientation="vertical",
+                 conv_step=0,
+                 samples=length(X_samples),
+                 spin_matrices=[collect(eachcol(only(spin))) for _ in 1:4],
+                 dimer_matrices=[collect(eachcol(only(dimer))) for _ in 1:4])
+    fig, _, _ = plot_combined_structure_factors(
+        "unused", Float64[]; data_file=plot_file, discrete_qy=true)
+
+    axes = filter(content -> content isa Axis, fig.content)
+    @test length(axes) == 8
+    @test all(axis -> axis.yticks[][1] == collect(1:4), axes)
+    @test all(axis -> axis.yticks[][2] == ["0", "π/2", "π", "3π/2"], axes)
+    top_axes = filter(ax -> only(ax.layoutobservables.gridcontent[].span.rows) == 1,
+                      axes)
+    bottom_axes = filter(ax -> only(ax.layoutobservables.gridcontent[].span.rows) == 2,
+                         axes)
+    @test first(top_axes).ylabel[] == IsoPEPS.QY_LABEL
+    @test first(bottom_axes).xlabel[] == IsoPEPS.QX_LABEL
+    @test first(bottom_axes).ylabel[] == IsoPEPS.QY_LABEL
+
+    colorbars = filter(content -> content isa Colorbar, fig.content)
+    @test [colorbar.label[] for colorbar in colorbars] == [
+        IsoPEPS.math_label(raw"\mathit{S}(\mathbf{q})"),
+        IsoPEPS.math_label(raw"\mathit{S}_{\mathrm{D}}(\mathbf{q})"),
+    ]
+    for row_axes in (top_axes, bottom_axes)
+        colorranges = [only(plot.colorrange[] for plot in axis.scene.plots
+                            if plot isa Makie.Heatmap) for axis in row_axes]
+        @test all(==(first(colorranges)), colorranges)
     end
 end
 

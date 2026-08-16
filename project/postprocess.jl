@@ -143,9 +143,23 @@ end
 function plot_m2_comparison()
     plot_M2_comparison(
         sampling_file="project/results/heisenberg/M2_sampling.json",
+        dmrg_file="project/results/reference/dmrg_sampling_matched_Ly4_D2_J2scan.json",
+        dmrg_Lx_key="Lx1",
+        show_dmrg=true,
         save_path="project/results/heisenberg/figures/M2_comparison.pdf",
         markersize=4,
         show_errorbars=false)
+end
+
+function plot_m2_comparison_errorbars()
+    plot_M2_comparison(
+        sampling_file="project/results/heisenberg/M2_sampling.json",
+        dmrg_file="project/results/reference/dmrg_sampling_matched_Ly4_D2_J2scan.json",
+        dmrg_Lx_key="Lx1",
+        show_dmrg=true,
+        save_path="project/results/heisenberg/figures/M2_comparison_errorbars.pdf",
+        markersize=4,
+        show_errorbars=true)
 end
 
 function plot_structure_factors_combined()
@@ -157,8 +171,43 @@ function plot_structure_factors_combined()
     fig
 end
 
+function save_structure_factors_combined_discrete_data()
+    data_dir = "project/results/heisenberg"
+    J2_values = [0.0, 0.5, 0.6, 1.0]
+    samples_files = Dict(
+        0.0 => joinpath(data_dir, "samples_heisenberg_J2=0.0.json"),
+        0.5 => joinpath(data_dir, "samples_heisenberg_J2=0.5.json"),
+        0.6 => joinpath(data_dir, "samples_heisenberg_J2=0.6.json"),
+        1.0 => joinpath(data_dir, "samples_heisenberg_J2=1.0.json"),
+    )
+    save_combined_structure_factor_data(
+        joinpath(data_dir, "sf_discrete.json"), data_dir, J2_values;
+        row=4,
+        nq=50,
+        qx_values=collect(range(0.0, 2Float64(π), length=50)),
+        qy_values=IsoPEPS._allowed_cylinder_qy(4),
+        max_separation_spin=10,
+        max_separation_dimer=20,
+        dimer_orientation=:vertical,
+        use_exact=false,
+        conv_step=0,
+        samples=100000,
+        samples_files=samples_files,
+    )
+end
+
+function plot_structure_factors_combined_discrete()
+    fig, _, _ = plot_combined_structure_factors(
+        "project/results/heisenberg", Float64[];
+        data_file="project/results/heisenberg/sf_discrete.json",
+        discrete_qy=true,
+        save_path="project/results/heisenberg/figures/structure_factors_combined_discrete.pdf",
+    )
+    fig
+end
+
 function plot_bond_energy_exact()
-    plot_bond_energy_pattern("project/results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.0_row=4_p=3_nqubits=3_2x2.json";
+    plot_bond_energy_pattern("project/results/heisenberg", [0.0, 0.5, 0.6, 1.0];
         use_exact=true,
         save_path="project/results/heisenberg/figures/bond_energy_exact.pdf")
 end
@@ -170,7 +219,8 @@ function plot_energy_vs_g_tfim()
         energy_source=:computed,
         conv_step=300,
         samples=3000000,
-        dmrg_file="project/results/reference/dmrg_bulk_tfim_Ly3_D2_gscan.json",
+        dmrg_file="project/results/reference/dmrg_bulk_tfim_Ly3_D32_gscan.json",
+        g_c=3.04438,
         save_path="project/results/tfim_abc/figures/tfim_energy_vs_g.pdf",
         markersize=6)
 end
@@ -183,9 +233,10 @@ function plot_energy_vs_J2_heisenberg()
         J1=1.0, row=4, p=3, nqubits=3,
         energy_source=:computed,
         dmrg_file=[
-            "project/results/reference/dmrg_bulk_heisenberg_j1j2_Ly4_D32_J2scan.json",
+            "project/results/idmrg_j1j2_D192_Ly4_J2scan_energyconv.json",
             "project/results/reference/dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json",
         ],
+        error_reference="DMRG D=192",
         save_path="project/results/heisenberg/figures/heisenberg_energy_vs_J2.pdf",
         markersize=6,
     )
@@ -200,18 +251,42 @@ function compute_variance_data()
         n_bootstrap=200,
         n_ci_bootstrap=5000,
         confidence_level=0.68,
-        save_path="project/results/heisenberg/heisenberg_variance_vs_samples.json",
+        save_path="project/results/heisenberg/figures/heisenberg_variance_vs_samples.json",
     )
 end
 
 function plot_variance_vs_samples_target()
     plot_variance_vs_samples(
-        "project/results/heisenberg/heisenberg_variance_vs_samples.json";
+        "project/results/heisenberg/figures/heisenberg_variance_vs_samples.json";
         fit_scaling=true,
         marker=:circle,
         markersize=4,
         figsize=PAPER_FIGSIZE,
         save_path="project/results/heisenberg/figures/heisenberg_variance_vs_samples_J2=0.5.pdf",
+    )
+end
+
+function compute_variance_data_tfim()
+    compute_variance_vs_samples(
+        "project/results/tfim_abc/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json",
+        [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 20000, 30000, 40000, 50000, 60000, 70000, 80000, 90000, 100000];
+        total_samples=nothing,
+        conv_step=100,
+        n_bootstrap=200,
+        n_ci_bootstrap=5000,
+        confidence_level=0.68,
+        save_path="project/results/tfim_abc/figures/tfim_variance_vs_samples.json",
+    )
+end
+
+function plot_variance_vs_samples_tfim_target()
+    plot_variance_vs_samples(
+        "project/results/tfim_abc/figures/tfim_variance_vs_samples.json";
+        fit_scaling=true,
+        marker=:circle,
+        markersize=4,
+        figsize=PAPER_FIGSIZE,
+        save_path="project/results/tfim_abc/figures/tfim_variance_vs_samples_g=3.0.pdf",
     )
 end
 
@@ -237,7 +312,7 @@ function plot_corr_length_vs_g()
         row=3, nqubits=3, p=3,
         dmrg_file="project/results/reference/dmrg_bulk_tfim_Ly3_D2_gscan.json",
         pepskit_file="project/results/reference/pepskit_results_D=2.json",
-        g_c=3.04,
+        g_c=3.04438,
         spectrum_krylovdim=200,
         spectrum_tol=1e-7,
         spectrum_maxiter=2000,
@@ -249,7 +324,7 @@ function plot_magnetization_vs_g_target()
         "project/results/tfim_abc",
         collect(0.0:0.25:5.0);
         J=1.0, row=3, p=3, nqubits=3,
-        conv_step=100, samples=4000000,
+        use_exact=true,
         save_path="project/results/tfim_abc/figures/magnetization_vs_g.pdf")
 end
 
@@ -296,12 +371,17 @@ end
 const TARGETS = Dict{String, Function}(
     "analyze-heisenberg"      => plot_analyze_heisenberg,
     "m2-comparison"           => plot_m2_comparison,
+    "m2-comparison-errorbars" => plot_m2_comparison_errorbars,
     "structure-factors"       => plot_structure_factors_combined,
+    "structure-factors-discrete-data" => save_structure_factors_combined_discrete_data,
+    "structure-factors-discrete" => plot_structure_factors_combined_discrete,
     "bond-energy-exact"       => plot_bond_energy_exact,
     "energy-vs-g-tfim"        => plot_energy_vs_g_tfim,
     "energy-vs-J2-heisenberg" => plot_energy_vs_J2_heisenberg,
     "variance-data"           => compute_variance_data,
     "variance-vs-samples"     => plot_variance_vs_samples_target,
+    "variance-data-tfim"      => compute_variance_data_tfim,
+    "variance-vs-samples-tfim" => plot_variance_vs_samples_tfim_target,
     "energy-vs-inv-samples"   => plot_energy_vs_inv_samples_target,
     "connected-corr-vs-g"     => plot_connected_corr_vs_g_target,
     "corr-length-vs-g"        => plot_corr_length_vs_g,

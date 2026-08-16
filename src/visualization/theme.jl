@@ -12,6 +12,13 @@ const PAPER_AXIS_LABELSIZE = 10
 const PAPER_TICKLABELSIZE = 9
 const PAPER_TITLESIZE = 11
 const PAPER_LEGEND_LABELSIZE = 8
+const PAPER_LARGE_AXIS_LABELSIZE = 12
+const PAPER_LARGE_TICKLABELSIZE = 11
+const PAPER_LARGE_LEGEND_LABELSIZE = 10
+const PAPER_LEGEND_ROWGAP = 2
+const PAPER_LEGEND_COLGAP = 4
+const PAPER_LEGEND_PATCHSIZE = (12, 10)
+const PAPER_LEGEND_PATCHLABELGAP = 2
 
 math_label(text::AbstractString) = Makie.LaTeXString(String(text))
 
@@ -56,7 +63,10 @@ function paper_theme()
         Legend = (
             framevisible = true, framewidth = 0.5,
             labelsize = PAPER_LEGEND_LABELSIZE, padding = (3, 3, 3, 3),
-            rowgap = 1,
+            rowgap = PAPER_LEGEND_ROWGAP,
+            colgap = PAPER_LEGEND_COLGAP,
+            patchsize = PAPER_LEGEND_PATCHSIZE,
+            patchlabelgap = PAPER_LEGEND_PATCHLABELGAP,
         ),
         Lines = (linewidth = 1.0, cycle = [:color]),
         Scatter = (markersize = 6, strokewidth = 0.5, cycle = [:color]),
@@ -91,11 +101,16 @@ function m2_phase_annotations(::Real)
     ]
 end
 
-function add_paper_legend!(ax::Axis; position=:rt, nbanks::Int=1)
+function add_paper_legend!(ax::Axis; position=:rt, nbanks::Int=1,
+                           labelsize::Real=PAPER_LEGEND_LABELSIZE)
     axislegend(ax;
                position=position,
                nbanks=nbanks,
-               labelsize=PAPER_LEGEND_LABELSIZE,
+               labelsize=labelsize,
+               rowgap=PAPER_LEGEND_ROWGAP,
+               colgap=PAPER_LEGEND_COLGAP,
+               patchsize=PAPER_LEGEND_PATCHSIZE,
+               patchlabelgap=PAPER_LEGEND_PATCHLABELGAP,
                padding=(1, 1, 1, 1),
                margin=(1, 1, 1, 1),
                framevisible=false)

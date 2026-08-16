@@ -444,13 +444,13 @@ function IsoPEPS.compute_structure_factor_dmrg(result, q::Tuple{Real,Real};
 end
 
 """
-    compute_M2_dmrg(result, q::Tuple{Real,Real}; bulk_fraction=0.5, max_separation=20)
+    compute_M2_dmrg(result, q::Tuple{Real,Real}; max_separation=20,
+                    reference_columns=1)
 
-Compute the squared magnetic order parameter M²(q) = (1/N_pairs) Σ_{i,j} ⟨S_i·S_j⟩ exp(iq·(r_i-r_j)).
-
-Only includes pairs with |Δx| ≤ `max_separation` columns, matching the
-truncation used by the IsoPEPS exact/sampling structure factor.
-Only the middle `bulk_fraction` of the cylinder is used (default 0.5).
+Compute the squared magnetic order parameter using the same displacement-
+resolved convention as IsoPEPS sampling. Correlations are measured from
+central reference columns and summed over |Δx| ≤ `max_separation`; the result
+is `S(q) / (Ly * (2 * max_separation + 1))`.
 
 Common q values:
 - (π, π): Neel antiferromagnetic order
@@ -458,46 +458,65 @@ Common q values:
 - (0, 0): Ferromagnetic order
 """
 function IsoPEPS.compute_M2_dmrg(result, q::Tuple{Real,Real};
-                                 bulk_fraction::Float64=0.5,
-                                 max_separation::Int=20)
-    psi = result.psi
-    Lx = result.Lx
-    Ly = result.Ly
-    N = Lx * Ly
+                                 max_separation::Int=20,
+                                 reference_columns::Int=1)
+    S = IsoPEPS.compute_sampling_structure_factor_dmrg(
+        result, q;
+        max_separation=max_separation,
+        reference_columns=reference_columns)
+    return S / (result.Ly * (2 * max_separation + 1))
+end
 
-    margin = round(Int, Lx * (1 - bulk_fraction) / 2)
-    col_lo = max(1, margin + 1)
-    col_hi = min(Lx, Lx - margin)
+"""Choose central reference columns with a complete ±cutoff neighbourhood."""
+function _sampling_reference_columns(Lx::Int, max_separation::Int,
+                                     reference_columns::Int)
+    max_separation >= 0 || throw(ArgumentError("max_separation must be nonnegative"))
+    reference_columns >= 1 || throw(ArgumentError("reference_columns must be positive"))
+    first_valid, last_valid = max_separation + 1, Lx - max_separation
+    n_valid = last_valid - first_valid + 1
+    n_valid >= reference_columns || throw(ArgumentError(
+        "Lx=$Lx is too short for max_separation=$max_separation and " *
+        "reference_columns=$reference_columns; need at least $(2 * max_separation + reference_columns) columns"))
+    first_ref = first_valid + fld(n_valid - reference_columns, 2)
+    return first_ref:(first_ref + reference_columns - 1)
+end
 
-    Cpm = correlation_matrix(psi, "S+", "S-"; ishermitian=false)
-    Cmp = correlation_matrix(psi, "S-", "S+"; ishermitian=false)
-    Czz = correlation_matrix(psi, "Sz", "Sz"; ishermitian=false)
-    SdotS = real.(Cpm .+ Cmp) ./ 2 .+ real.(Czz)
-
-    coords = site_to_2d(Lx, Ly)
-    qx, qy = q
-
-    bulk_sites = Int[]
-    for s in 1:N
-        col, _ = coords[s]
-        if col_lo <= col <= col_hi
-            push!(bulk_sites, s)
+function _spin_displacement_correlations(SdotS::AbstractMatrix{<:Real},
+                                         Lx::Int, Ly::Int;
+                                         max_separation::Int,
+                                         reference_columns::Int)
+    refs = _sampling_reference_columns(Lx, max_separation, reference_columns)
+    site(col, row) = (col - 1) * Ly + row
+    corr0 = zeros(Float64, Ly, Ly)
+    corr_dc = [zeros(Float64, Ly, Ly) for _ in 1:max_separation]
+    for p1 in 1:Ly, p2 in 1:Ly
+        corr0[p1, p2] = mean(SdotS[site(col, p1), site(col, p2)] for col in refs)
+        for Δ in 1:max_separation
+            corr_dc[Δ][p1, p2] = mean(
+                SdotS[site(col, p1), site(col + Δ, p2)] for col in refs)
         end
     end
+    return corr0, corr_dc
+end
 
-    Sq = 0.0
-    n_pairs = 0
-    for s1 in bulk_sites, s2 in bulk_sites
-        i1, j1 = coords[s1]
-        i2, j2 = coords[s2]
-        dx = i2 - i1
-        abs(dx) > max_separation && continue
-        dy = j2 - j1
-        Sq += SdotS[s1, s2] * cos(qx * dx + qy * dy)
-        n_pairs += 1
-    end
+"""
+    compute_sampling_structure_factor_dmrg(result, q; max_separation=20,
+                                            reference_columns=1)
 
-    return Sq / n_pairs
+Spin structure factor evaluated with the same physical-column cutoff and
+displacement weighting as `spin_spin_structure_factor` for sampling. Unlike
+`compute_structure_factor_dmrg`, this deliberately avoids an open-window
+pair-count normalisation.
+"""
+function IsoPEPS.compute_sampling_structure_factor_dmrg(result, q::Tuple{Real,Real};
+                                                         max_separation::Int=20,
+                                                         reference_columns::Int=1)
+    SdotS = IsoPEPS.compute_SdotS_matrix(result)
+    corr0, corr_dc = _spin_displacement_correlations(
+        SdotS, result.Lx, result.Ly;
+        max_separation=max_separation,
+        reference_columns=reference_columns)
+    return IsoPEPS._displacement_structure_factor(corr0, corr_dc, q)
 end
 
 """
@@ -835,6 +854,62 @@ function IsoPEPS.compute_dimer_structure_factor_dmrg(result, q::Tuple{Real,Real}
         SD += C_conn * cos(qx * dx + qy * dy)
     end
     return SD / n
+end
+
+"""
+    compute_sampling_dimer_structure_factor_dmrg(result, q;
+                                                  dimer_orientation=:vertical,
+                                                  max_separation=20)
+
+Connected dimer structure factor with the same physical-column cutoff,
+global-mean subtraction, and Bartlett window used by the IsoPEPS sampling
+order-parameter pipeline. This is the comparison observable; the older
+`compute_dimer_structure_factor_dmrg` remains an open-cylinder diagnostic.
+"""
+function IsoPEPS.compute_sampling_dimer_structure_factor_dmrg(
+    result, q::Tuple{Real,Real};
+    dimer_orientation::Symbol=:vertical,
+    max_separation::Int=20)
+    Lx, Ly = result.Lx, result.Ly
+    max_separation >= 0 || throw(ArgumentError("max_separation must be nonnegative"))
+    # Horizontal bonds are indexed by their left endpoint, requiring one
+    # additional site column to supply all 2r+1 bond-center positions.
+    support_cols = 2 * max_separation + 1 +
+                   (dimer_orientation === :horizontal ? 1 : 0)
+    support_cols <= Lx || throw(ArgumentError(
+        "Lx=$Lx is too short for a $(dimer_orientation) dimer cutoff of $max_separation"))
+    col_lo = 1 + fld(Lx - support_cols, 2)
+    col_hi = col_lo + support_cols - 1
+    bonds = _bond_list(Lx, Ly, dimer_orientation, col_lo, col_hi)
+    D_exp = _compute_dimer_expectations(result.psi, result.sites, Lx, Ly, bonds)
+    DD = _compute_dimer_dimer_matrix(result.psi, result.sites, bonds)
+    bond_index = Dict((col, row) => idx for (idx, (_, _, col, row)) in enumerate(bonds))
+    ref_col = col_lo + max_separation
+    μ_global = mean(D_exp)
+    corr0 = zeros(Float64, Ly, Ly)
+    corr_dc = [zeros(Float64, Ly, Ly) for _ in 1:max_separation]
+    for p1 in 1:Ly, p2 in 1:Ly
+        i0 = bond_index[(ref_col, p1)]
+        j0 = bond_index[(ref_col, p2)]
+        corr0[p1, p2] = DD[i0, j0] - μ_global^2
+        for Δ in 1:max_separation
+            j = bond_index[(ref_col + Δ, p2)]
+            corr_dc[Δ][p1, p2] = DD[i0, j] - μ_global^2
+        end
+    end
+    return IsoPEPS._displacement_structure_factor(corr0, corr_dc, q;
+                                                   distance_window=:bartlett)
+end
+
+"""Dimer order parameter matched to IsoPEPS sampling's `M_D² = S_D / N_eff`."""
+function IsoPEPS.compute_dimer_order_squared_dmrg(result, q::Tuple{Real,Real};
+                                                   dimer_orientation::Symbol=:vertical,
+                                                   max_separation::Int=20)
+    S = IsoPEPS.compute_sampling_dimer_structure_factor_dmrg(
+        result, q;
+        dimer_orientation=dimer_orientation,
+        max_separation=max_separation)
+    return S / (result.Ly * (2 * max_separation + 1))
 end
 
 # =============================================================================

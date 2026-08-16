@@ -217,6 +217,41 @@ function structure_factor(samples::AbstractVector{<:Real}, row::Int, q::Tuple{Re
 end
 
 """
+    _displacement_structure_factor(corr0, corr_dc, q; distance_window=:none)
+
+Evaluate the translation-invariant cylinder structure-factor convention from
+correlations resolved by non-negative physical column separation. `corr0` is
+the zero-separation correlation matrix and `corr_dc[Δ]` is the matrix at
+positive separation `Δ`. This is shared by sampled and finite-cylinder DMRG
+observables so that their Fourier phases and normalisation are identical.
+"""
+function _displacement_structure_factor(corr0::AbstractMatrix{<:Real},
+                                        corr_dc::AbstractVector{<:AbstractMatrix},
+                                        q::Tuple{Real,Real};
+                                        distance_window::Symbol=:none)
+    distance_window in (:none, :bartlett) ||
+        throw(ArgumentError("distance_window must be :none or :bartlett"))
+    n_pos = size(corr0, 1)
+    size(corr0, 2) == n_pos || throw(ArgumentError("corr0 must be square"))
+    qx, qy = Float64(q[1]), Float64(q[2])
+    S = 0.0
+    for p1 in 1:n_pos, p2 in 1:n_pos
+        S += cos(qy * (p2 - p1)) * corr0[p1, p2]
+    end
+    L_eff = Float64(length(corr_dc) + 1)
+    for Δc in eachindex(corr_dc)
+        corr = corr_dc[Δc]
+        size(corr) == size(corr0) ||
+            throw(ArgumentError("all displacement correlation matrices must match corr0"))
+        weight = distance_window === :bartlett ? 1.0 - Δc / L_eff : 1.0
+        for p1 in 1:n_pos, p2 in 1:n_pos
+            S += 2.0 * weight * cos(qx * Δc + qy * (p2 - p1)) * corr[p1, p2]
+        end
+    end
+    return S / n_pos
+end
+
+"""
     magnetic_order_squared(X_samples, Z_samples, Y_samples, row, q; max_separation=20)
 
 Full-spin magnetic order parameter squared M²(q) = (1/N²) Σ_{i,j} ⟨Sᵢ·Sⱼ⟩ e^{iq·(rᵢ-rⱼ)}.
@@ -505,7 +540,6 @@ function _evaluate_dimer_structure_factor(components, q::Tuple{Real,Real};
     distance_window in (:none, :bartlett) ||
         throw(ArgumentError("distance_window must be :none or :bartlett"))
 
-    qx, qy = Float64(q[1]), Float64(q[2])
     μ = components.μ
     corr0 = components.corr0
     corr_dc = components.corr_dc
@@ -516,23 +550,13 @@ function _evaluate_dimer_structure_factor(components, q::Tuple{Real,Real};
     disconnected(p1, p2) =
         mean_subtraction === :global ? μ_avg_sq : μ[p1] * μ[p2]
 
-    SD = 0.0
-    for p1 in 1:n_pos, p2 in 1:n_pos
-        Δp = p2 - p1
-        SD += cos(qy * Δp) * (corr0[p1, p2] - disconnected(p1, p2))
-    end
-
-    L_eff = Float64(max_sep + 1)
-    for Δc in 1:max_sep
-        weight = distance_window === :bartlett ? 1.0 - Δc / L_eff : 1.0
-        for p1 in 1:n_pos, p2 in 1:n_pos
-            Δp = p2 - p1
-            SD += 2.0 * weight * cos(qx * Δc + qy * Δp) *
-                  (corr_dc[Δc][p1, p2] - disconnected(p1, p2))
-        end
-    end
-
-    return SD / n_pos
+    connected0 = [corr0[p1, p2] - disconnected(p1, p2)
+                  for p1 in 1:n_pos, p2 in 1:n_pos]
+    connected_dc = [[corr[p1, p2] - disconnected(p1, p2)
+                     for p1 in 1:n_pos, p2 in 1:n_pos]
+                    for corr in corr_dc]
+    return _displacement_structure_factor(connected0, connected_dc, q;
+                                          distance_window=distance_window)
 end
 
 """

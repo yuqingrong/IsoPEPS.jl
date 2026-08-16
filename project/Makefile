@@ -25,11 +25,13 @@ AFIG  = $(ABC)/figures
 # Heisenberg circuit JSONs used as prerequisites
 H_J20  = $(HRES)/circuit_heisenberg_j1j2_J1=1.0_J2=0.0_row=4_p=3_nqubits=3_2x2.json
 H_J205 = $(HRES)/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json
+H_J206 = $(HRES)/circuit_heisenberg_j1j2_J1=1.0_J2=0.6_row=4_p=3_nqubits=3_2x2.json
 H_J21  = $(HRES)/circuit_heisenberg_j1j2_J1=1.0_J2=1.0_row=4_p=3_nqubits=3_2x2.json
 
 # Heisenberg sampling JSONs (inputs for structure-factors plot)
 H_SAMP_J20  = $(HRES)/samples_heisenberg_J2=0.0.json
 H_SAMP_J205 = $(HRES)/samples_heisenberg_J2=0.5.json
+H_SAMP_J206 = $(HRES)/samples_heisenberg_J2=0.6.json
 H_SAMP_J21  = $(HRES)/samples_heisenberg_J2=1.0.json
 
 # TFIM g=3 circuit JSON (under tfim_abc per the model->dir convention)
@@ -37,11 +39,18 @@ T_G3_ABC    = $(ABC)/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json
 
 # Heisenberg figure outputs
 M2_PDF         = $(HFIG)/M2_comparison.pdf
+M2_ERR_PDF     = $(HFIG)/M2_comparison_errorbars.pdf
 SF_PDF         = $(HFIG)/structure_factors_combined.pdf
+SF_DISCRETE_JSON = $(HRES)/sf_discrete.json
+SF_DISCRETE_PDF  = $(HFIG)/structure_factors_combined_discrete.pdf
 BE_EXACT_PDF   = $(HFIG)/bond_energy_exact.pdf
 H_E_PDF        = $(HFIG)/heisenberg_energy_vs_J2.pdf
 VAR_PDF        = $(HFIG)/heisenberg_variance_vs_samples_J2=0.5.pdf
 ANALYZE_STAMP  = $(HFIG)/.analyze-heisenberg.stamp
+
+# TFIM variance outputs
+VAR_TFIM_JSON  = $(AFIG)/tfim_variance_vs_samples.json
+VAR_TFIM_PDF   = $(AFIG)/tfim_variance_vs_samples_g=3.0.pdf
 
 # TFIM figure outputs
 TFIM_E_PDF     = $(AFIG)/tfim_energy_vs_g.pdf
@@ -58,7 +67,7 @@ BLOCK_PDF      = $(FIG)/circuit_block_3x5.pdf
 FULL_PDF       = $(FIG)/circuit_full_3x3x5.pdf
 
 # Data-only outputs
-VAR_JSON       = $(HRES)/heisenberg_variance_vs_samples.json
+VAR_JSON       = $(HFIG)/heisenberg_variance_vs_samples.json
 READOUT_JSON   = $(ABC)/readout_noise_energ_g=3.0.json
 
 .DEFAULT_GOAL := help
@@ -78,7 +87,8 @@ help:  ## list available targets
 	@echo "  clean-figures       delete generated PDFs"
 	@echo
 	@echo "Single-plot aliases (use 'make <alias>'):"
-	@echo "  m2-comparison           structure-factors       bond-energy-exact"
+	@echo "  m2-comparison           structure-factors       structure-factors-discrete"
+	@echo "  structure-factors-discrete-data                 bond-energy-exact"
 	@echo "  energy-vs-g-tfim        energy-vs-J2-heisenberg"
 	@echo "  variance-data           variance-vs-samples     energy-vs-inv-samples"
 	@echo "  connected-corr-vs-g     corr-length-vs-g        magnetization-vs-g"
@@ -90,6 +100,7 @@ help:  ## list available targets
 	@echo "  Heisenberg:"
 	@echo "    $(M2_PDF)"
 	@echo "    $(SF_PDF)"
+	@echo "    $(SF_DISCRETE_PDF)"
 	@echo "    $(BE_EXACT_PDF)"
 	@echo "    $(H_E_PDF)"
 	@echo "    $(VAR_PDF)"
@@ -126,10 +137,19 @@ $(AFIG):
 $(M2_PDF): $(HRES)/M2_sampling.json $(SC) | $(HFIG)
 	$(JL) $(SC) m2-comparison
 
+$(M2_ERR_PDF): $(HRES)/M2_sampling.json $(SC) | $(HFIG)
+	$(JL) $(SC) m2-comparison-errorbars
+
 $(SF_PDF): $(HRES)/sf.json $(H_SAMP_J20) $(H_SAMP_J205) $(H_SAMP_J21) $(SC) | $(HFIG)
 	$(JL) $(SC) structure-factors
 
-$(BE_EXACT_PDF): $(H_J20) $(SC) | $(HFIG)
+$(SF_DISCRETE_JSON): $(H_SAMP_J20) $(H_SAMP_J205) $(H_SAMP_J206) $(H_SAMP_J21) $(SC)
+	$(JL) $(SC) structure-factors-discrete-data
+
+$(SF_DISCRETE_PDF): $(SF_DISCRETE_JSON) $(SC) | $(HFIG)
+	$(JL) $(SC) structure-factors-discrete
+
+$(BE_EXACT_PDF): $(H_J20) $(H_J205) $(H_J206) $(H_J21) $(SC) | $(HFIG)
 	$(JL) $(SC) bond-energy-exact
 
 $(H_E_PDF): $(SC) | $(HFIG)
@@ -140,6 +160,12 @@ $(VAR_JSON): $(H_J205) $(SC)
 
 $(VAR_PDF): $(VAR_JSON) $(SC) | $(HFIG)
 	$(JL) $(SC) variance-vs-samples
+
+$(VAR_TFIM_JSON): $(T_G3_ABC) $(SC) | $(AFIG)
+	$(JL) $(SC) variance-data-tfim
+
+$(VAR_TFIM_PDF): $(VAR_TFIM_JSON) $(SC) | $(AFIG)
+	$(JL) $(SC) variance-vs-samples-tfim
 
 # analyze-heisenberg writes two PDFs in a single run; use a stamp file under HFIG.
 $(ANALYZE_STAMP): $(H_J205) $(SC) | $(HFIG)
@@ -192,7 +218,7 @@ correlation-plots: $(NNC_PDF) $(CORR_PDF) $(MAG_PDF)
 dynamics-plots: $(DYN_TFIM_PDF)
 circuit-plots: $(BLOCK_PDF) $(FULL_PDF)
 readout-plots: $(READOUT_E_PDF) $(READOUT_B_PDF)
-sf-plots: $(SF_PDF) $(M2_PDF) $(BE_EXACT_PDF)
+sf-plots: $(SF_PDF) $(SF_DISCRETE_PDF) $(M2_PDF) $(M2_ERR_PDF) $(BE_EXACT_PDF)
 variance-plots: $(VAR_PDF) $(INV_PDF)
 
 all-plots: energy-plots correlation-plots dynamics-plots circuit-plots readout-plots sf-plots variance-plots analysis-plots
@@ -202,12 +228,17 @@ all-plots: energy-plots correlation-plots dynamics-plots circuit-plots readout-p
 # ---------------------------------------------------------------------------
 
 m2-comparison: $(M2_PDF)
+m2-comparison-errorbars: $(M2_ERR_PDF)
 structure-factors: $(SF_PDF)
+structure-factors-discrete-data: $(SF_DISCRETE_JSON)
+structure-factors-discrete: $(SF_DISCRETE_PDF)
 bond-energy-exact: $(BE_EXACT_PDF)
 energy-vs-g-tfim: $(TFIM_E_PDF)
 energy-vs-J2-heisenberg: $(H_E_PDF)
 variance-data: $(VAR_JSON)
 variance-vs-samples: $(VAR_PDF)
+variance-data-tfim: $(VAR_TFIM_JSON)
+variance-vs-samples-tfim: $(VAR_TFIM_PDF)
 energy-vs-inv-samples: $(INV_PDF)
 connected-corr-vs-g: $(NNC_PDF)
 corr-length-vs-g: $(CORR_PDF)
@@ -223,7 +254,8 @@ clean-figures:
 	rm -f $(FIG)/*.pdf $(HFIG)/*.pdf $(AFIG)/*.pdf $(ANALYZE_STAMP)
 
 .PHONY: help all-plots energy-plots correlation-plots dynamics-plots circuit-plots readout-plots sf-plots variance-plots analysis-plots clean-figures analyze-heisenberg \
-        m2-comparison structure-factors bond-energy-exact \
+        m2-comparison structure-factors structure-factors-discrete-data structure-factors-discrete bond-energy-exact \
         energy-vs-g-tfim energy-vs-J2-heisenberg variance-data variance-vs-samples \
         energy-vs-inv-samples connected-corr-vs-g corr-length-vs-g magnetization-vs-g \
-        energy-dynamics-tfim circuit-block circuit-full readout-data readout-energy readout-bias
+        energy-dynamics-tfim circuit-block circuit-full readout-data readout-energy readout-bias \
+        variance-data-tfim variance-vs-samples-tfim

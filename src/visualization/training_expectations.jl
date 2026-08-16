@@ -34,6 +34,7 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
     end
 
     dmrg_ref = nothing
+    dmrg_label = nothing
     if !isnothing(dmrg_bulk_file) && isfile(dmrg_bulk_file)
         dmrg_data = open(dmrg_bulk_file, "r") do io
             JSON3.read(io, Dict)
@@ -59,6 +60,7 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
         if !isnothing(scan_target)
             idx = argmin(abs.(scan_vals .- scan_target))
             dmrg_ref = e_bulk[idx]
+            dmrg_label = "DMRG"
             if abs(scan_vals[idx] - scan_target) > 1e-6
                 @warn "$scan_param=$scan_target not found in DMRG bulk, using closest $scan_param=$(scan_vals[idx])"
             end
@@ -94,7 +96,6 @@ function plot_training_history(steps::AbstractVector, values::AbstractVector;
         end
 
         if !isnothing(dmrg_ref)
-            dmrg_label = "DMRG (4x1000 bulk)"
             hlines!(ax, [dmrg_ref], linestyle=:dash, color=:darkorange, label=dmrg_label)
         end
 

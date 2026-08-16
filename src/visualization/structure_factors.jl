@@ -1,5 +1,6 @@
 """
-    plot_dimer_structure_factor(filename; nq=50, dimer_orientation=:vertical,
+    plot_dimer_structure_factor(filename; nq=50, qx_values=nothing, qy_values=nothing,
+                                dimer_orientation=:vertical,
                                 max_separation=20, use_exact=true,
                                 conv_step=1000, samples=100000, save_path=nothing)
 
@@ -7,7 +8,8 @@ Brillouin-zone heatmap of the dimer static structure factor S_D(qx, qy).
 
 # Arguments
 - `filename`: Path to a saved optimization result JSON
-- `nq`: Number of q-points along each axis (total grid: nq × nq)
+- `nq`: Number of q-points along each axis when explicit momentum values are omitted
+- `qx_values`, `qy_values`: Optional explicit momentum coordinates for a rectangular grid
 - `dimer_orientation`: `:vertical` or `:horizontal`
 - `max_separation`: Max column separation in the structure factor sum
 - `use_exact`: If true, use exact transfer matrix; if false, use sampling
@@ -18,10 +20,13 @@ Brillouin-zone heatmap of the dimer static structure factor S_D(qx, qy).
 - `save_path`: Optional path to save the figure
 
 # Returns
-- `(fig, SD)` where `SD` is the nq × nq matrix of S_D values
+- `(fig, SD)` where `SD` has dimensions `length(qx_values) × length(qy_values)`
+  when explicit momentum values are given, and `nq × nq` otherwise
 """
 function plot_dimer_structure_factor(filename::String;
                                      nq::Int=50,
+                                     qx_values::Union{Nothing,AbstractVector{<:Real}}=nothing,
+                                     qy_values::Union{Nothing,AbstractVector{<:Real}}=nothing,
                                      dimer_orientation::Symbol=:vertical,
                                      max_separation::Int=20,
                                      use_exact::Bool=true,
@@ -45,12 +50,17 @@ function plot_dimer_structure_factor(filename::String;
         _p = 0; _nqubits = 0
     end
 
-    qvals = range(0.0, 2Float64(π), length=nq)
-    SD = zeros(nq, nq)
+    qx = isnothing(qx_values) ? collect(range(0.0, 2Float64(π), length=nq)) :
+         Float64.(qx_values)
+    qy = isnothing(qy_values) ? collect(range(0.0, 2Float64(π), length=nq)) :
+         Float64.(qy_values)
+    isempty(qx) && throw(ArgumentError("qx_values must not be empty"))
+    isempty(qy) && throw(ArgumentError("qy_values must not be empty"))
+    SD = zeros(length(qx), length(qy))
 
     method_str = use_exact ? "exact" : "sampling"
     println("=== Dimer Structure Factor S_D(q) [$method_str, $dimer_orientation] ===")
-    println("row=$_row, nqubits=$_nqubits, p=$_p, nq=$nq, max_sep=$max_separation")
+    println("row=$_row, nqubits=$_nqubits, p=$_p, nq=$(length(qx))×$(length(qy)), max_sep=$max_separation")
 
     if use_exact
         if is_2x2
@@ -177,15 +187,15 @@ function plot_dimer_structure_factor(filename::String;
             corr_cache[(κ1, pos1, κ2, pos2)] = corrs
             print("\r  (κ=$κ1,p=$pos1)→(κ=$κ2,p=$pos2)")
         end
-        println("\nFourier transforming over $nq × $nq q-grid...")
+        println("\nFourier transforming over $(length(qx)) × $(length(qy)) q-grid...")
 
         # Use max_separation as physical columns (not periods) for consistency with sampling
         max_period = max(1, max_separation ÷ N_uc)
         max_col_sep = max_period * N_uc + (N_uc - 1)
         L_eff = Float64(max_col_sep + 1)  # effective finite system length
         N_d = N_uc * _row
-        for (i, qx) in enumerate(qvals)
-            for (j, qy) in enumerate(qvals)
+        for (i, qx_value) in enumerate(qx)
+            for (j, qy_value) in enumerate(qy)
                 val = 0.0
                 for κ1 in 1:N_uc, pos1 in 1:_row, κ2 in 1:N_uc, pos2 in 1:_row
                     Δp = pos2 - pos1
@@ -199,9 +209,9 @@ function plot_dimer_structure_factor(filename::String;
                         w = 1.0 - abs(Δx) / L_eff
                         w <= 0.0 && continue
                         if Δx == 0
-                            val += w * cos(qy * Δp) * real(cval)
+                            val += w * cos(qy_value * Δp) * real(cval)
                         else
-                            val += 2.0 * w * cos(qx * Δx + qy * Δp) * real(cval)
+                            val += 2.0 * w * cos(qx_value * Δx + qy_value * Δp) * real(cval)
                         end
                     end
                 end
@@ -256,11 +266,11 @@ function plot_dimer_structure_factor(filename::String;
         components =
             _dimer_structure_factor_components(dimer_vals, max_separation)
 
-        println("Fourier transforming over $nq × $nq q-grid...")
-        for (i, qx) in enumerate(qvals)
-            for (j, qy) in enumerate(qvals)
+        println("Fourier transforming over $(length(qx)) × $(length(qy)) q-grid...")
+        for (i, qx_value) in enumerate(qx)
+            for (j, qy_value) in enumerate(qy)
                 SD[i, j] = _evaluate_dimer_structure_factor(
-                    components, (qx, qy);
+                    components, (qx_value, qy_value);
                     mean_subtraction=:global,
                     distance_window=:bartlett)
             end
@@ -278,7 +288,7 @@ function plot_dimer_structure_factor(filename::String;
               xticks=([0, π, 2π], ["0", "π", "2π"]),
               yticks=([0, π, 2π], ["0", "π", "2π"]))
 
-    hm = heatmap!(ax, qvals, qvals, SD, colormap=:viridis)
+    hm = heatmap!(ax, qx, qy, SD, colormap=:viridis)
     Colorbar(fig[1, 2], hm, label=math_label(raw"S_{\mathrm{D}}(q)"))
 
     if !isnothing(save_path)
@@ -291,14 +301,16 @@ function plot_dimer_structure_factor(filename::String;
 end
 
 """
-    plot_spin_structure_factor(filename; nq=50, max_separation=20, use_exact=true,
+    plot_spin_structure_factor(filename; nq=50, qx_values=nothing, qy_values=nothing,
+                               max_separation=20, use_exact=true,
                                conv_step=1000, samples=100000, save_path=nothing)
 
 Brillouin-zone heatmap of the spin-spin static structure factor S_SS(qx, qy).
 
 # Arguments
 - `filename`: Path to a saved optimization result JSON
-- `nq`: Number of q-points along each axis (total grid: nq × nq)
+- `nq`: Number of q-points along each axis when explicit momentum values are omitted
+- `qx_values`, `qy_values`: Optional explicit momentum coordinates for a rectangular grid
 - `max_separation`: Max column separation in the structure factor sum
 - `use_exact`: If true, use exact transfer matrix; if false, use sampling
 - `conv_step`: Thermalization steps for sampling (only when `use_exact=false`)
@@ -306,10 +318,13 @@ Brillouin-zone heatmap of the spin-spin static structure factor S_SS(qx, qy).
 - `save_path`: Optional path to save the figure
 
 # Returns
-- `(fig, SSS)` where `SSS` is the nq × nq matrix of S_SS values
+- `(fig, SSS)` where `SSS` has dimensions `length(qx_values) × length(qy_values)`
+  when explicit momentum values are given, and `nq × nq` otherwise
 """
 function plot_spin_structure_factor(filename::String;
                                     nq::Int=50,
+                                    qx_values::Union{Nothing,AbstractVector{<:Real}}=nothing,
+                                    qy_values::Union{Nothing,AbstractVector{<:Real}}=nothing,
                                     max_separation::Int=10,
                                     use_exact::Bool=true,
                                     conv_step::Int=1000,
@@ -334,12 +349,17 @@ function plot_spin_structure_factor(filename::String;
         _p = 0; _nqubits = 0
     end
 
-    qvals = range(0.0, 2Float64(π), length=nq)
-    SSS = zeros(nq, nq)
+    qx = isnothing(qx_values) ? collect(range(0.0, 2Float64(π), length=nq)) :
+         Float64.(qx_values)
+    qy = isnothing(qy_values) ? collect(range(0.0, 2Float64(π), length=nq)) :
+         Float64.(qy_values)
+    isempty(qx) && throw(ArgumentError("qx_values must not be empty"))
+    isempty(qy) && throw(ArgumentError("qy_values must not be empty"))
+    SSS = zeros(length(qx), length(qy))
 
     method_str = use_exact ? "exact" : "sampling"
     println("=== Spin Structure Factor S_SS(q) [$method_str] ===")
-    println("row=$_row, nqubits=$_nqubits, p=$_p, nq=$nq, max_sep=$max_separation")
+    println("row=$_row, nqubits=$_nqubits, p=$_p, nq=$(length(qx))×$(length(qy)), max_sep=$max_separation")
 
     if use_exact
         if is_2x2
@@ -352,12 +372,12 @@ function plot_spin_structure_factor(filename::String;
             op = TransferOperator(gates, _row, _nqubits)
         end
 
-        for (i, qx) in enumerate(qvals)
-            for (j, qy) in enumerate(qvals)
-                SSS[i, j] = spin_spin_structure_factor(op, (qx, qy);
+        for (i, qx_value) in enumerate(qx)
+            for (j, qy_value) in enumerate(qy)
+                SSS[i, j] = spin_spin_structure_factor(op, (qx_value, qy_value);
                                 max_separation=max_separation)
             end
-            print("\r  qx $i/$nq")
+            print("\r  qx $i/$(length(qx))")
         end
         println()
     else
@@ -376,12 +396,14 @@ function plot_spin_structure_factor(filename::String;
             Y_vec = _discard_burnin(Y_samples, _row, conv_step; requested_samples=samples)
         end
 
-        for (i, qx) in enumerate(qvals)
-            for (j, qy) in enumerate(qvals)
-                SSS[i, j] = spin_spin_structure_factor(X_vec, Z_vec, Y_vec, _row, (qx, qy);
-                                max_separation=max_separation)
+        corr0, corr_dc = _spin_structure_factor_components(
+            X_vec, Z_vec, Y_vec, _row, max_separation)
+        for (i, qx_value) in enumerate(qx)
+            for (j, qy_value) in enumerate(qy)
+                SSS[i, j] = _displacement_structure_factor(
+                    corr0, corr_dc, (qx_value, qy_value))
             end
-            print("\r  qx $i/$nq")
+            print("\r  qx $i/$(length(qx))")
         end
         println()
     end
@@ -397,7 +419,7 @@ function plot_spin_structure_factor(filename::String;
               xticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]),
               yticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]))
 
-    hm = heatmap!(ax, qvals, qvals, SSS, colormap=:viridis)
+    hm = heatmap!(ax, qx, qy, SSS, colormap=:viridis)
     Colorbar(fig[1, 2], hm, label=math_label(raw"S_{\mathrm{SS}}(q)"))
 
     if !isnothing(save_path)
@@ -407,6 +429,47 @@ function plot_spin_structure_factor(filename::String;
     end
 
     return (fig, SSS)
+end
+
+"""Return the distinct transverse momenta permitted by a periodic cylinder."""
+function _allowed_cylinder_qy(row::Int)
+    row > 0 || throw(ArgumentError("row must be positive"))
+    return Float64.(2π .* (0:(row - 1)) ./ row)
+end
+
+"""
+    _spin_structure_factor_components(X_samples, Z_samples, Y_samples, row, max_separation)
+
+Precompute the spin correlation matrices used by the translation-invariant
+sampling estimator.  The returned components can be Fourier transformed for
+many momenta without revisiting the measurement samples.
+"""
+function _spin_structure_factor_components(X_samples::AbstractVector{<:Real},
+                                           Z_samples::AbstractVector{<:Real},
+                                           Y_samples::AbstractVector{<:Real},
+                                           row::Int, max_separation::Int)
+    samples_by_basis = (X_samples, Y_samples, Z_samples)
+    ncols = minimum(_n_cols(samples, row) for samples in samples_by_basis)
+    ncols > 0 || throw(ArgumentError("samples must contain at least one complete column"))
+    max_sep = min(max_separation, ncols - 1)
+    corr0 = zeros(row, row)
+    corr_dc = [zeros(row, row) for _ in 1:max_sep]
+
+    for samples in samples_by_basis
+        for pos1 in 1:row, pos2 in 1:row
+            corr0[pos1, pos2] += mean(
+                samples[row * (col - 1) + pos1] * samples[row * (col - 1) + pos2]
+                for col in 1:ncols) / 4
+            for Δc in 1:max_sep
+                corr_dc[Δc][pos1, pos2] += mean(
+                    samples[row * (col - 1) + pos1] *
+                    samples[row * (col - 1 + Δc) + pos2]
+                    for col in 1:(ncols - Δc)) / 4
+            end
+        end
+    end
+
+    return (corr0, corr_dc)
 end
 
 """
@@ -423,7 +486,8 @@ recomputation.
 - `J2_values`: Vector of J2 coupling values (e.g., [0.0, 0.5, 1.0])
 - `J1`: J1 coupling (default 1.0)
 - `row`, `p`, `nqubits`: Circuit parameters for filename matching
-- `nq`: Number of q-points along each axis (grid: nq × nq)
+- `nq`: Number of q-points along each axis when explicit momentum values are omitted
+- `qx_values`, `qy_values`: Optional explicit momentum coordinates for a rectangular grid
 - `max_separation_spin`: Max column separation for spin structure factor
 - `max_separation_dimer`: Max column separation for dimer structure factor
 - `dimer_orientation`: `:vertical` or `:horizontal`
@@ -431,13 +495,15 @@ recomputation.
 - `conv_step`, `samples`: Sampling parameters (when `use_exact=false`)
 
 # Returns
-- `(spin_matrices, dimer_matrices)` — Vectors of nq×nq matrices
+- `(spin_matrices, dimer_matrices)` — Vectors of rectangular momentum-grid matrices
 """
 function save_combined_structure_factor_data(output_file::String,
         data_dir::String, J2_values::Vector{Float64};
         J1::Float64=1.0,
         row::Int=4, p::Int=3, nqubits::Int=3,
         nq::Int=50,
+        qx_values::Union{Nothing,AbstractVector{<:Real}}=nothing,
+        qy_values::Union{Nothing,AbstractVector{<:Real}}=nothing,
         max_separation_spin::Int=10,
         max_separation_dimer::Int=20,
         dimer_orientation::Symbol=:vertical,
@@ -446,7 +512,12 @@ function save_combined_structure_factor_data(output_file::String,
         samples::Int=100000,
         samples_files::Union{Nothing,Dict{Float64,String}}=nothing)
 
-    n = length(J2_values)
+    qx = isnothing(qx_values) ? collect(range(0.0, 2Float64(π), length=nq)) :
+         Float64.(qx_values)
+    qy = isnothing(qy_values) ? collect(range(0.0, 2Float64(π), length=nq)) :
+         Float64.(qy_values)
+    isempty(qx) && throw(ArgumentError("qx_values must not be empty"))
+    isempty(qy) && throw(ArgumentError("qy_values must not be empty"))
     spin_matrices = Matrix{Float64}[]
     dimer_matrices = Matrix{Float64}[]
     found_J2_values = Float64[]
@@ -487,14 +558,16 @@ function save_combined_structure_factor_data(output_file::String,
 
         println("\n--- Computing spin structure factor for J2=$val ---")
         _, SSS = plot_spin_structure_factor(filenames[idx];
-                    nq=nq, max_separation=max_separation_spin,
+                    nq=nq, qx_values=qx, qy_values=qy,
+                    max_separation=max_separation_spin,
                     use_exact=use_exact, conv_step=conv_step, samples=samples,
                     samples_file=sf)
         push!(spin_matrices, SSS)
 
         println("\n--- Computing dimer structure factor for J2=$val ---")
         _, SD = plot_dimer_structure_factor(filenames[idx];
-                    nq=nq, dimer_orientation=dimer_orientation,
+                    nq=nq, qx_values=qx, qy_values=qy,
+                    dimer_orientation=dimer_orientation,
                     max_separation=max_separation_dimer,
                     use_exact=use_exact, conv_step=conv_step, samples=samples,
                     samples_file=sf)
@@ -503,8 +576,16 @@ function save_combined_structure_factor_data(output_file::String,
 
     save_results(output_file;
         J2_values=found_J2_values,
-        nq=nq,
+        nq=length(qx),
+        qx_values=qx,
+        qy_values=qy,
+        row=row,
         use_exact=use_exact,
+        max_separation_spin=max_separation_spin,
+        max_separation_dimer=max_separation_dimer,
+        dimer_orientation=String(dimer_orientation),
+        conv_step=conv_step,
+        samples=samples,
         spin_matrices=[collect(eachcol(m)) for m in spin_matrices],
         dimer_matrices=[collect(eachcol(m)) for m in dimer_matrices])
     println("\nData saved to: $output_file")
@@ -525,6 +606,30 @@ function _align_colorbar_to_axis!(colorbar, axis)
         colorbar.height[] = Float64(Makie.widths(viewport)[2])
     end
     return colorbar
+end
+
+function _discrete_qy_labels(qy::AbstractVector{<:Real})
+    labels = String[]
+    for value in qy
+        scaled = round(Int, 2 * value / π)
+        if isapprox(value, scaled * π / 2; atol=1e-10)
+            push!(labels, get(Dict(0 => "0", 1 => "π/2", 2 => "π", 3 => "3π/2",
+                                   4 => "2π"), scaled, string(scaled, "π/2")))
+        else
+            push!(labels, string(round(value / π; digits=3), "π"))
+        end
+    end
+    return labels
+end
+
+function _show_discrete_qy_boundaries!(axis, qx::AbstractVector{<:Real}, nqy::Int)
+    xmin, xmax = extrema(qx)
+    for boundary in 1:(nqy - 1)
+        lines!(axis, [xmin, xmax], [boundary + 0.5, boundary + 0.5],
+               color=(:white, 0.55), linewidth=0.7)
+    end
+    ylims!(axis, 0.5, nqy + 0.5)
+    return axis
 end
 
 """
@@ -548,12 +653,14 @@ colorbars per row.
 - `data_file`: Optional path to a JSON produced by `save_combined_structure_factor_data`.
   When provided the matrices are loaded from disk and no computation is performed;
   `data_dir`, `J2_values`, and all method parameters are ignored.
+- `discrete_qy`: Render explicit transverse momenta as categorical rows.
 - `figsize`: `(width, height)` in points. Defaults to double-column APS width (510 pt)
   with height derived from the number of columns so each heatmap stays roughly square.
 - `save_path`: Optional path to save the figure
 
 # Returns
-- `(fig, spin_matrices, dimer_matrices)` where each `*_matrices` is a Vector of nq×nq matrices
+- `(fig, spin_matrices, dimer_matrices)` where each `*_matrices` is a Vector of
+  `length(qx_values) × length(qy_values)` matrices when a cached rectangular grid is used
 """
 function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Float64};
         J1::Float64=1.0,
@@ -566,10 +673,11 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
         conv_step::Int=1000,
         samples::Int=100000,
         data_file=nothing,
+        discrete_qy::Bool=false,
         figsize=nothing,
         save_path=nothing)
 
-    local spin_matrices, dimer_matrices
+    local spin_matrices, dimer_matrices, qx, qy
 
     if !isnothing(data_file)
         # --- Load pre-computed data ---
@@ -577,9 +685,15 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
         d = load_results(data_file)
         J2_values = Float64.(d["J2_values"])
         nq = Int(d["nq"])
+        qx = haskey(d, "qx_values") ? Float64.(d["qx_values"]) :
+             collect(range(0.0, 2Float64(π), length=nq))
+        qy = haskey(d, "qy_values") ? Float64.(d["qy_values"]) :
+             collect(range(0.0, 2Float64(π), length=nq))
         spin_matrices  = [Float64.(hcat(col...)) for col in d["spin_matrices"]]
         dimer_matrices = [Float64.(hcat(col...)) for col in d["dimer_matrices"]]
     else
+        qx = collect(range(0.0, 2Float64(π), length=nq))
+        qy = collect(range(0.0, 2Float64(π), length=nq))
         spin_matrices = Vector{Matrix{Float64}}(undef, length(J2_values))
         dimer_matrices = Vector{Matrix{Float64}}(undef, length(J2_values))
         filenames = Vector{String}(undef, length(J2_values))
@@ -629,7 +743,12 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
     dimer_min = minimum(minimum.(dimer_matrices))
     dimer_max = maximum(maximum.(dimer_matrices))
 
-    qvals = range(0.0, 2Float64(π), length=nq)
+    all(size(matrix) == (length(qx), length(qy)) for matrix in spin_matrices) ||
+        throw(ArgumentError("spin matrices do not match saved momentum coordinates"))
+    all(size(matrix) == (length(qx), length(qy)) for matrix in dimer_matrices) ||
+        throw(ArgumentError("dimer matrices do not match saved momentum coordinates"))
+    discrete_qy && length(qy) < 2 &&
+        throw(ArgumentError("discrete_qy requires at least two qy values"))
 
     # --- Build combined figure ---
     # Default: double-column APS width; height derived so each heatmap is square.
@@ -643,6 +762,10 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
     _figsize    = isnothing(figsize) ? (_default_w, _default_h) : figsize
     fig = Figure(size=_figsize)
 
+    y_coords = discrete_qy ? collect(1:length(qy)) : qy
+    y_ticks = discrete_qy ? (y_coords, _discrete_qy_labels(qy)) :
+              ([0, Float64(π), 2Float64(π)], ["0", "π", "2π"])
+
     local hm_spin, hm_dimer
     spin_axis = nothing
     dimer_axis = nothing
@@ -650,10 +773,10 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
     # Top row: spin structure factor S(q)
     for (j, J2) in enumerate(J2_values)
         ax = Axis(fig[1, j],
-                  aspect=DataAspect(),
+                  aspect=discrete_qy ? nothing : DataAspect(),
                   title=math_label("\\mathit{J}_2=$J2"),
                   xticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]),
-                  yticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]))
+                  yticks=y_ticks)
         if j == 1
             spin_axis = ax
             ax.ylabel = QY_LABEL
@@ -661,8 +784,9 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
             ax.yticklabelsvisible = false
         end
         ax.xticklabelsvisible = false
-        hm_spin = heatmap!(ax, qvals, qvals, spin_matrices[j],
+        hm_spin = heatmap!(ax, qx, y_coords, spin_matrices[j],
                            colormap=:viridis, colorrange=(spin_min, spin_max))
+        discrete_qy && _show_discrete_qy_boundaries!(ax, qx, length(qy))
     end
     spin_colorbar = Colorbar(fig[1, n + 1], hm_spin,
                              label=math_label(raw"\mathit{S}(\mathbf{q})"),
@@ -674,17 +798,18 @@ function plot_combined_structure_factors(data_dir::String, J2_values::Vector{Flo
     for (j, J2) in enumerate(J2_values)
         ax = Axis(fig[2, j],
                   xlabel=QX_LABEL,
-                  aspect=DataAspect(),
+                  aspect=discrete_qy ? nothing : DataAspect(),
                   xticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]),
-                  yticks=([0, Float64(π), 2Float64(π)], ["0", "π", "2π"]))
+                  yticks=y_ticks)
         if j == 1
             dimer_axis = ax
             ax.ylabel = QY_LABEL
         else
             ax.yticklabelsvisible = false
         end
-        hm_dimer = heatmap!(ax, qvals, qvals, dimer_matrices[j],
+        hm_dimer = heatmap!(ax, qx, y_coords, dimer_matrices[j],
                             colormap=:viridis, colorrange=(dimer_min, dimer_max))
+        discrete_qy && _show_discrete_qy_boundaries!(ax, qx, length(qy))
     end
     dimer_colorbar = Colorbar(fig[2, n + 1], hm_dimer,
                               label=math_label(raw"\mathit{S}_{\mathrm{D}}(\mathbf{q})"),
@@ -1094,14 +1219,15 @@ end
                              samples=nothing, samples_files=nothing,
                              max_cols=5, save_path=nothing)
 
-Plot saved sampling-based bond-energy patterns for several `J2` values in
+Plot exact or sampling-based bond-energy patterns for several `J2` values in
 horizontally arranged panels. Each panel is labelled with its `J2` value at
 the top. All panels use the fixed color scale `[-0.5, 0.5]` and share one
 vertical colorbar on the right.
 
-By default, sample files are inferred as
-`samples_heisenberg_J2=<value>.json` inside `results_dir`. Pass
-`samples_files=Dict(J2 => path, ...)` to override individual paths.
+For sampling, files are inferred as `samples_heisenberg_J2=<value>.json`
+inside `results_dir`; pass `samples_files=Dict(J2 => path, ...)` to override
+individual paths. For exact evaluation, the saved circuit-result filename is
+inferred from the standard Heisenberg naming convention.
 """
 function plot_bond_energy_pattern(results_dir::String,
                                   J2_values::AbstractVector{<:Real};
@@ -1112,31 +1238,40 @@ function plot_bond_energy_pattern(results_dir::String,
                                   figsize=nothing,
                                   save_path=nothing)
     isempty(J2_values) && throw(ArgumentError("J2_values must not be empty"))
-    use_exact && throw(ArgumentError(
-        "the multi-J2 bond pattern currently uses saved sampling data; set use_exact=false"))
-
     J2 = Float64.(J2_values)
     patterns = Dict{Float64,Dict{Symbol,Matrix{Float64}}}()
     rows = Int[]
 
     for value in J2
-        samples_file = String(if isnothing(samples_files)
-            joinpath(results_dir, "samples_heisenberg_J2=$(value).json")
+        if use_exact
+            exact_file = joinpath(results_dir,
+                "circuit_heisenberg_j1j2_J1=1.0_J2=$(value)_row=4_p=3_nqubits=3_2x2.json")
+            isfile(exact_file) || throw(ArgumentError(
+                "exact result file not found for J2=$value: $exact_file"))
+            println("=== Bond Energy Pattern [exact, J2=$value] ===")
+            _fig, bond_data = plot_bond_energy_pattern(exact_file;
+                                                        max_cols=max_cols,
+                                                        use_exact=true)
+            row = size(bond_data[:vertical], 1)
         else
-            get(samples_files, value) do
-                throw(ArgumentError("no samples file provided for J2=$value"))
-            end
-        end)
-        isfile(samples_file) || throw(ArgumentError(
-            "samples file not found for J2=$value: $samples_file"))
+            samples_file = String(if isnothing(samples_files)
+                joinpath(results_dir, "samples_heisenberg_J2=$(value).json")
+            else
+                get(samples_files, value) do
+                    throw(ArgumentError("no samples file provided for J2=$value"))
+                end
+            end)
+            isfile(samples_file) || throw(ArgumentError(
+                "samples file not found for J2=$value: $samples_file"))
 
-        println("=== Bond Energy Pattern [sampling, J2=$value] ===")
-        bond_data, row = _sampled_bond_energy_data(samples_file;
-                                                   max_cols=max_cols,
-                                                   samples=samples)
+            println("=== Bond Energy Pattern [sampling, J2=$value] ===")
+            bond_data, row = _sampled_bond_energy_data(samples_file;
+                                                       max_cols=max_cols,
+                                                       samples=samples)
+            println("  Loaded precomputed samples from: $samples_file")
+        end
         patterns[value] = bond_data
         push!(rows, row)
-        println("  Loaded precomputed samples from: $samples_file")
     end
 
     all(==(first(rows)), rows) || throw(ArgumentError(
@@ -1167,14 +1302,17 @@ function plot_bond_energy_pattern(results_dir::String,
             colsize!(fig.layout, panel, Fixed(panel_width))
         end
 
-        Colorbar(fig[1:2, length(J2) + 1];
-                 colormap=:RdBu,
-                 limits=colorrange,
-                 vertical=true,
-                 label=_BOND_ENERGY_LABEL,
-                 labelsize=_BOND_ENERGY_LABELSIZE,
-                 ticklabelsize=_BOND_COLORBAR_TICKLABELSIZE,
-                 width=_BOND_COLORBAR_WIDTH)
+        colorbar = Colorbar(fig[2, length(J2) + 1];
+                            colormap=:RdBu,
+                            limits=colorrange,
+                            vertical=true,
+                            height=(row - 1) * unit + 44,
+                            label=_BOND_ENERGY_LABEL,
+                            labelsize=_BOND_ENERGY_LABELSIZE,
+                            ticklabelsize=_BOND_COLORBAR_TICKLABELSIZE,
+                            width=_BOND_COLORBAR_WIDTH)
+        colorbar.tellheight[] = false
+        colorbar.valign[] = :bottom
         rowsize!(fig.layout, 1, Fixed(26))
         rowsize!(fig.layout, 2, Fixed(row * unit + 10))
         rowgap!(fig.layout, 2)

@@ -372,7 +372,7 @@ function _series_errors(circuit_series, reference_series)
         if isnan(ref_energy) || ref_energy == 0.0
             push!(errors, NaN)
         else
-            push!(errors, (energy - ref_energy) / abs(ref_energy))
+            push!(errors, abs(energy - ref_energy) / abs(ref_energy))
         end
         push!(vals, val)
     end
@@ -409,6 +409,7 @@ reference series can be overlaid with `circuit_series`, vector-valued
 - `dmrg_file`: Path, vector of paths, or specs `(file=..., label=...)` for DMRG references
 - `circuit_series`: Additional circuit specs, e.g. `(label="IsoPEPS χ=5", nqubits=5, suffixes=["_1x1_6w"])`
 - `energy_source`: `:computed` recomputes energies; Heisenberg uses exact contraction, while TFIM uses exact contraction when feasible and otherwise resamples from optimized parameters. `:resampled` always resamples from optimized parameters. `:saved` reads JSON `energy`
+- `g_c`: Optional TFIM critical field to mark with a vertical dashed line on the error plot
 - `save_path`: Path to save figure (optional)
 
 # Returns
@@ -439,6 +440,7 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
                                 include_default_circuit::Bool=true,
                                 energy_source::Symbol=:computed,
                                 error_reference=:all,
+                                g_c::Union{Real,Nothing}=nothing,
                                 figsize=nothing,
                                 markersize::Int=4,
                                 save_path::Union{String,Nothing}=nothing,
@@ -546,7 +548,7 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
     energies_ref = isnothing(primary_ref) ? fill(NaN, length(g_vals_found)) :
                    [_lookup_series_energy(primary_ref, val) for val in g_vals_found]
     errors = isnothing(primary_ref) ? fill(NaN, length(g_vals_found)) :
-             [(isnan(ref) || ref == 0.0) ? NaN : (energy - ref) / abs(ref) for (energy, ref) in zip(energies_exact, energies_ref)]
+             [(isnan(ref) || ref == 0.0) ? NaN : abs(energy - ref) / abs(ref) for (energy, ref) in zip(energies_exact, energies_ref)]
     energies_dmrg = isnothing(primary_dmrg_series) ? fill(NaN, length(g_vals_found)) :
                     [_lookup_series_energy(primary_dmrg_series, val) for val in g_vals_found]
 
@@ -596,16 +598,37 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
 
         for (idx, series) in enumerate(references)
             ref_color = colors[mod1(idx + length(circuits), length(colors))]
-            ref_style = startswith(series.label, "DMRG") ? :dot : :dash
+            is_dmrg = startswith(series.label, "DMRG")
+            ref_style = is_dmrg ? :dot : :dash
+            ref_marker = is_dmrg ? :rect : markers[mod1(idx + length(circuits), length(markers))]
+            ref_marker_size = is_dmrg ? 1.25 * markersize : markersize
+            ref_marker_attrs = is_dmrg ?
+                (; markercolor=:transparent, strokecolor=ref_color, strokewidth=1.2) :
+                NamedTuple()
             scatterlines!(ax1, series.scan_values, series.energies;
                           label=_energy_plot_label(series.label, is_heisenberg),
                           color=ref_color,
-                          marker=markers[mod1(idx + length(circuits), length(markers))],
-                          markersize=markersize,
-                          linestyle=ref_style)
+                          marker=ref_marker,
+                          markersize=ref_marker_size,
+                          linestyle=ref_style,
+                          ref_marker_attrs...)
         end
 
-        add_paper_legend!(ax1; position=:lb)
+        if is_heisenberg
+            energy_values = [Float64(value)
+                             for series in vcat(circuits, references)
+                             for value in series.energies if isfinite(value)]
+            if !isempty(energy_values)
+                emin, emax = extrema(energy_values)
+                energy_span = max(emax - emin,
+                                  0.02 * max(abs(emin), abs(emax)), eps())
+                ylims!(ax1, emin - 0.22 * energy_span,
+                       emax + 0.05 * energy_span)
+            end
+            add_paper_legend!(ax1; position=(0.18, 0.02), nbanks=1)
+        else
+            add_paper_legend!(ax1; position=:lb, nbanks=1)
+        end
 
         if !isnothing(save_path)
             mkpath(dirname(save_path))
@@ -631,11 +654,12 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
         ax2 = Axis(fig[1, 1];
                    xlabel      = xlabel_str,
                    ylabel      = math_label(
-                       raw"\frac{\mathit{E}_{\mathrm{IsoPEPS}}-\mathit{E}_{\mathrm{DMRG}}}{|\mathit{E}_{\mathrm{DMRG}}|}"),
+                       raw"\frac{|\mathit{E}_{\mathrm{isoPEPS}}-\mathit{E}_{\mathrm{DMRG}}|}{|\mathit{E}_{\mathrm{DMRG}}|}"),
                    xgridvisible = false,
                    ygridvisible = false)
 
         has_error = false
+        error_plot_values = Float64[]
 
         for (idx, (label, err)) in enumerate(sort(collect(errors_by_reference); by=first))
             mask = .!isnan.(err.errors)
@@ -645,12 +669,25 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
                           marker=markers[mod1(idx, length(markers))],
                           markersize=markersize,
                           linestyle=:solid)
+            append!(error_plot_values, Float64.(err.errors[mask]))
             has_error = true
         end
 
+        if !is_heisenberg && !isnothing(g_c)
+            vlines!(ax2, [Float64(g_c)];
+                    color=:gray40, linestyle=:dash, linewidth=1.0)
+        end
+
         if has_error
-            hlines!(ax2, [0.0]; color=:gray, linestyle=:dash, linewidth=0.5)
-            add_paper_legend!(ax2; position=:rb)
+            if is_heisenberg
+                emin, emax = extrema(error_plot_values)
+                error_span = max(emax - emin,
+                                 0.02 * max(abs(emin), abs(emax)), eps())
+                ylims!(ax2, emin - 0.22 * error_span,
+                       emax + 0.05 * error_span)
+                legend_banks = max(1, min(3, length(errors_by_reference)))
+                add_paper_legend!(ax2; position=(0.12, 0.04), nbanks=legend_banks)
+            end
         else
             text!(ax2, 0.5, 0.5; text="No reference data",
                   align=(:center, :center), space=:relative,
@@ -688,7 +725,7 @@ end
     plot_magnetization_vs_g(data_dir, g_values; kwargs...)
 
 Plot ⟨Z⟩ (longitudinal) and ⟨X⟩ (transverse) magnetisation per site vs
-transverse field g for the TFIM, using sampling data.
+transverse field g for the TFIM, using exact contraction or sampling data.
 
 In the ordered phase (g < g_c ≈ 3.04) ⟨Z⟩ > 0 and ⟨X⟩ is small;
 in the disordered phase (g > g_c) the roles reverse.
@@ -698,6 +735,8 @@ in the disordered phase (g > g_c) the roles reverse.
 - `g_values`: Vector of g values to scan
 - `J`: Coupling (default 1.0)
 - `row`, `p`, `nqubits`: Circuit parameters
+- `use_exact`: Compute expectations by exact contraction instead of sampling
+  (default `false`)
 - `conv_step`: Thermalization steps (default 100)
 - `samples`: Number of spin measurements per g (default 500_000)
 - `figsize`: Override figure size (default `PAPER_FIGSIZE`)
@@ -710,6 +749,7 @@ in the disordered phase (g > g_c) the roles reverse.
 function plot_magnetization_vs_g(data_dir::String, g_values::Vector{Float64};
                                   J::Float64=1.0,
                                   row::Int=3, p::Int=3, nqubits::Int=3,
+                                  use_exact::Bool=false,
                                   conv_step::Int=100,
                                   samples::Int=500_000,
                                   figsize=nothing,
@@ -720,7 +760,7 @@ function plot_magnetization_vs_g(data_dir::String, g_values::Vector{Float64};
     mX_vals  = Float64[]
     g_found  = Float64[]
 
-    println("=== plot_magnetization_vs_g ===")
+    println("=== plot_magnetization_vs_g ($(use_exact ? "exact" : "sampling")) ===")
 
     for g in sorted_g
         candidates = [
@@ -738,18 +778,41 @@ function plot_magnetization_vs_g(data_dir::String, g_values::Vector{Float64};
         end
 
         println("  g=$g  →  $(basename(filename))")
-        resample_result = resample_circuit(filename; conv_step=conv_step,
-                                           samples=samples, measure_y=false)
-        if isnothing(resample_result)
-            @warn "Resampling failed for g=$g, skipping"
-            continue
-        end
-        _rho, Z_all, X_all, _params, _gates = resample_result
-        Z_pool = _discard_burnin(Z_all, row, conv_step; requested_samples=samples)
-        X_pool = _discard_burnin(X_all, row, conv_step; requested_samples=samples)
+        local mZ, mX
+        if use_exact
+            result, input_args = load_result(filename)
+            params = result isa ExactOptimizationResult ? result.params : result.final_params
+            saved_p = Int(get(input_args, :p, p))
+            saved_row = Int(get(input_args, :row, row))
+            saved_nqubits = Int(get(input_args, :nqubits, nqubits))
+            share_params = Bool(get(input_args, :share_params, true))
+            structure = get(input_args, :structure, nothing)
+            active_nqubits = Int(get(input_args, :active_nqubits, saved_nqubits))
+            virtual_qubits = (saved_nqubits - 1) ÷ 2
+            gates = build_unitary_gate(
+                params, saved_p, saved_row, saved_nqubits;
+                share_params=share_params,
+                structure=structure,
+                active_nqubits=active_nqubits)
 
-        mZ = abs(expect(Z_pool, row))   # |⟨Z⟩| averaged over all sites
-        mX = abs(expect(X_pool, row))   # |⟨X⟩|
+            mZ = abs(real(compute_Z_expectation(
+                nothing, gates, saved_row, virtual_qubits)))
+            mX = abs(real(compute_X_expectation(
+                nothing, gates, saved_row, virtual_qubits)))
+        else
+            resample_result = resample_circuit(filename; conv_step=conv_step,
+                                               samples=samples, measure_y=false)
+            if isnothing(resample_result)
+                @warn "Resampling failed for g=$g, skipping"
+                continue
+            end
+            _rho, Z_all, X_all, _params, _gates = resample_result
+            Z_pool = _discard_burnin(Z_all, row, conv_step; requested_samples=samples)
+            X_pool = _discard_burnin(X_all, row, conv_step; requested_samples=samples)
+
+            mZ = abs(expect(Z_pool, row))   # |⟨Z⟩| averaged over all sites
+            mX = abs(expect(X_pool, row))   # |⟨X⟩|
+        end
 
         push!(mZ_vals, mZ)
         push!(mX_vals, mX)
@@ -766,16 +829,22 @@ function plot_magnetization_vs_g(data_dir::String, g_values::Vector{Float64};
 
         ax = Axis(fig[1, 1];
                   xlabel = FIELD_LABEL,
-                  ylabel = MAGNETISATION_LABEL)
+                  ylabel = MAGNETISATION_LABEL,
+                  xlabelsize = PAPER_LARGE_AXIS_LABELSIZE,
+                  ylabelsize = PAPER_LARGE_AXIS_LABELSIZE,
+                  xticklabelsize = PAPER_LARGE_TICKLABELSIZE,
+                  yticklabelsize = PAPER_LARGE_TICKLABELSIZE)
 
         scatterlines!(ax, g_found, mZ_vals;
                       color=:steelblue, marker=:circle,
-                      label=math_label(raw"|\langle \mathit{Z}\rangle|"))
+                      label=math_label(raw"|\langle\mathit{Z}\rangle|"))
         scatterlines!(ax, g_found, mX_vals;
                       color=:firebrick, marker=:diamond, linestyle=:dash,
-                      label=math_label(raw"|\langle \mathit{X}\rangle|"))
+                      label=math_label(raw"|\langle\mathit{X}\rangle|"))
 
-        add_paper_legend!(ax; position=:rt)
+        ylims!(ax, 0, 1.1)
+        add_paper_legend!(ax; position=(0.98, 0.78), nbanks=1,
+                          labelsize=PAPER_LARGE_LEGEND_LABELSIZE)
 
         if !isnothing(save_path)
             mkpath(dirname(save_path))
@@ -890,7 +959,11 @@ function plot_connected_corr_vs_g(data_dir::String, g_values::Vector{Float64};
         ax = Axis(fig[1, 1];
                   xlabel = FIELD_LABEL,
                   ylabel = math_label(raw"\mathit{C}(\mathit{r})"),
-                  yscale = log10)
+                  yscale = log10,
+                  xlabelsize = PAPER_LARGE_AXIS_LABELSIZE,
+                  ylabelsize = PAPER_LARGE_AXIS_LABELSIZE,
+                  xticklabelsize = PAPER_LARGE_TICKLABELSIZE,
+                  yticklabelsize = PAPER_LARGE_TICKLABELSIZE)
 
         scatterlines!(ax, g_found, C1_vals;
                       color=:steelblue, marker=:circle,
@@ -899,7 +972,8 @@ function plot_connected_corr_vs_g(data_dir::String, g_values::Vector{Float64};
                       color=:firebrick, marker=:diamond, linestyle=:dash,
                       label=math_label(raw"\mathit{C}(2)\ \mathrm{next-nearest}"))
 
-        add_paper_legend!(ax; position=:lt)
+        add_paper_legend!(ax; position=:rb, nbanks=1,
+                          labelsize=PAPER_LARGE_LEGEND_LABELSIZE)
 
         if !isnothing(save_path)
             mkpath(dirname(save_path))
@@ -928,7 +1002,7 @@ Plot correlation length ξ vs g for the TFIM from the transfer-matrix spectrum.
 - `connected`: Accepted for API compatibility; fitted correlations are no longer computed
 - `spectrum_krylovdim`, `spectrum_tol`, `spectrum_maxiter`, `spectrum_eager`: Krylov controls for `compute_transfer_spectrum`
 - `dmrg_file`, `pepskit_file`: Optional reference data files
-- `g_c`: Optional critical field value for annotation
+- `g_c`: Optional critical field marked by a gray dashed vertical line
 - `save_path`: Path to save figure (optional)
 """
 function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
@@ -1021,7 +1095,11 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
 
         ax = Axis(fig[1, 1],
                   xlabel=FIELD_LABEL,
-                  ylabel=CORRELATION_LENGTH_LABEL)
+                  ylabel=CORRELATION_LENGTH_LABEL,
+                  xlabelsize=PAPER_LARGE_AXIS_LABELSIZE,
+                  ylabelsize=PAPER_LARGE_AXIS_LABELSIZE,
+                  xticklabelsize=PAPER_LARGE_TICKLABELSIZE,
+                  yticklabelsize=PAPER_LARGE_TICKLABELSIZE)
 
         # Extract and plot correlation lengths from transfer matrix
         g_sorted = sort(collect(keys(correlation_data)))
@@ -1082,11 +1160,12 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
 
         # Mark critical point
         if g_c !== nothing
-            vlines!(ax, [g_c], color=:black, linestyle=:dot,
-                    label=rich("g", subscript("c"), " ≈ $g_c"))
+            vlines!(ax, [g_c];
+                    color=:gray40, linestyle=:dash, linewidth=1.0)
         end
 
-        add_paper_legend!(ax; position=:lt, nbanks=1)
+        add_paper_legend!(ax; position=:lt, nbanks=1,
+                          labelsize=PAPER_LARGE_LEGEND_LABELSIZE)
 
         if !isnothing(save_path)
             mkpath(dirname(save_path))
@@ -1499,7 +1578,11 @@ function plot_M2_vs_J2(data_dir::String, J2_values::Vector{Float64};
         @warn "DMRG file not found: $dmrg_file"
     end
 
-    Legend(fig[1, 2], ax)
+    Legend(fig[1, 2], ax;
+           rowgap=PAPER_LEGEND_ROWGAP,
+           colgap=PAPER_LEGEND_COLGAP,
+           patchsize=PAPER_LEGEND_PATCHSIZE,
+           patchlabelgap=PAPER_LEGEND_PATCHLABELGAP)
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))
@@ -1899,21 +1982,22 @@ function plot_M2_comparison(; exact_file::String="",
     # M_D² has no sampling standard error in the current data format.
     q_info = [
         (label_tex=raw"\mathit{M}^2(\pi,\pi)", std_key="M2_neel",      stderr_key="M2_neel_stderr",
-         dmrg_key="M2_neel_$dmrg_Lx_key", marker=:circle),
+         dmrg_key="M2_neel_$dmrg_Lx_key"),
         (label_tex=raw"\mathit{M}^2(0,\pi)", std_key="M2_stripe_0pi", stderr_key="M2_stripe_0pi_stderr",
-         dmrg_key="M2_0pi_$dmrg_Lx_key", marker=:diamond),
+         dmrg_key="M2_stripe_$dmrg_Lx_key"),
         (label_tex=raw"\mathit{M}_{\mathrm{D}}^2(0,\pi)", std_key="MD2_0pi", stderr_key=nothing,
-         dmrg_key=nothing, marker=:rect),
+         dmrg_key="D2_vertical_0pi_$dmrg_Lx_key"),
     ]
 
-    # Colors and markers distinguish the magnetic and dimer order parameters.
+    # Color identifies the order parameter; line and marker style distinguish
+    # isoPEPS estimates from their matched DMRG benchmarks.
     q_colors = [:blue, :orange, :seagreen]
     method_styles = [
-        (key="exact",    label="TN",    linestyle=:solid,
+        (key="exact",    label="isoPEPS exact", linestyle=:solid, marker=:rect,
          markersize=Float64(markersize), strokewidth=0.0),
-        (key="sampling", label="",      linestyle=:solid,
+        (key="sampling", label="isoPEPS",       linestyle=:solid, marker=:rect,
          markersize=Float64(markersize), strokewidth=0.0),
-        (key="dmrg",     label="DMRG",  linestyle=:solid,
+        (key="dmrg",     label="DMRG",          linestyle=:dash,  marker=:circle,
          markersize=Float64(dmrg_markersize), strokewidth=0.0),
     ]
     method_style_by_key = Dict(style.key => style for style in method_styles)
@@ -1983,7 +2067,7 @@ function plot_M2_comparison(; exact_file::String="",
             style = method_style_by_key["exact"]
             scatterlines!(ax, J2, M2; label=lbl, color=color,
                           linestyle=style.linestyle,
-                          marker_attrs((; style..., marker=qi.marker), color)...)
+                          marker_attrs(style, color)...)
             method_labelled["exact"] = true
             push!(plotted_series, ("exact", qi.std_key))
         end
@@ -2009,7 +2093,7 @@ function plot_M2_comparison(; exact_file::String="",
             style = method_style_by_key["sampling"]
             scatterlines!(ax, J2, M2; label=lbl, color=color,
                           linestyle=style.linestyle,
-                          marker_attrs((; style..., marker=qi.marker), color)...)
+                          marker_attrs(style, color)...)
             method_labelled["sampling"] = true
             push!(plotted_series, ("sampling", qi.std_key))
         end
@@ -2028,7 +2112,7 @@ function plot_M2_comparison(; exact_file::String="",
                 style = method_style_by_key["dmrg"]
                 scatterlines!(ax, J2, M2; label=lbl, color=color,
                               linestyle=style.linestyle,
-                              marker_attrs((; style..., marker=qi.marker), color)...)
+                              marker_attrs(style, color)...)
                 method_labelled["dmrg"] = true
                 push!(plotted_series, ("dmrg", qi.std_key))
             end
@@ -2036,7 +2120,7 @@ function plot_M2_comparison(; exact_file::String="",
     end
 
     ymax = max(0.28, 1.22 * max_M2_value)
-    ylims!(ax, 0, ymax)
+    ylims!(ax, 0.0, ymax)
 
     xmin = isempty(all_J2_values) ? 0.0 : min(0.0, minimum(all_J2_values))
     xmax = isempty(all_J2_values) ? 1.0 : max(1.0, maximum(all_J2_values))
@@ -2067,39 +2151,33 @@ function plot_M2_comparison(; exact_file::String="",
         text!(ax, cx, cy;
               text=ann.label,
               align=(:center, :center),
+              offset=(-0.75, 0.25),
               fontsize=PAPER_LEGEND_LABELSIZE,
               color=label_color,
               font=:italic)
     end
 
-    # Combined legend: one entry per (q-point, method) pair so color + style are visible together
-    all_elems  = []
-    all_labels = typeof(M2_LABEL)[]
+    # Keep the order-parameter and method encodings in separate legends.
+    observable_elems  = []
+    observable_labels = typeof(M2_LABEL)[]
 
     for (iq, qi) in enumerate(q_info)
-        color = q_colors[iq]
-        for style in method_styles
-            (style.key, qi.std_key) in plotted_series || continue
-            push!(all_elems, [
-                LineElement(color=color, linestyle=style.linestyle),
-                MarkerElement(color=color, marker=qi.marker,
-                              markersize=style.markersize,
-                              strokecolor=color, strokewidth=style.strokewidth),
-            ])
-            method_tex = isempty(style.label) ? "" : raw"\ \mathrm{" * style.label * "}"
-            label = math_label(qi.label_tex * method_tex)
-            push!(all_labels, label)
-        end
+        any((style.key, qi.std_key) in plotted_series for style in method_styles) || continue
+        push!(observable_elems, [LineElement(color=q_colors[iq], linestyle=:solid)])
+        push!(observable_labels, math_label(qi.label_tex))
     end
 
-    Legend(fig[1, 1], all_elems, all_labels;
-           tellwidth=false, tellheight=false,
-           halign=:left, valign=:bottom,
-           nbanks=1,
-           margin=(1, 1, 1, 1),
-           framevisible=false,
-           labelsize=PAPER_LEGEND_LABELSIZE,
-           padding=(1, 1, 1, 1))
+    axislegend(ax, observable_elems, observable_labels;
+               position=(0.02, 0.08),
+               nbanks=1,
+               margin=(1, 1, 1, 1),
+               framevisible=false,
+               labelsize=PAPER_LEGEND_LABELSIZE,
+               rowgap=PAPER_LEGEND_ROWGAP,
+               colgap=PAPER_LEGEND_COLGAP,
+               patchsize=PAPER_LEGEND_PATCHSIZE,
+               patchlabelgap=PAPER_LEGEND_PATCHLABELGAP,
+               padding=(1, 1, 1, 1))
 
     if !isnothing(save_path)
         mkpath(dirname(save_path))

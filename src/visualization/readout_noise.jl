@@ -100,7 +100,7 @@ function plot_readout_energy(
             linewidth=1.0,
             label="p=0 baseline",
         )
-        add_paper_legend!(energy_ax; position=:rb)
+        add_paper_legend!(energy_ax; position=:lt)
 
         if !isnothing(save_path)
             mkpath(dirname(abspath(save_path)))
@@ -157,7 +157,9 @@ function plot_readout_energy_bias(
             color=:firebrick,
             marker=:diamond,
             markersize=markersize,
+            label="Energy bias",
         )
+        add_paper_legend!(bias_ax; position=:lt)
 
         if !isnothing(save_path)
             mkpath(dirname(abspath(save_path)))

@@ -53,7 +53,7 @@ function plot_energy_dynamics_vs_g(data_dir::String, scan_values::Vector{Float64
     elseif parameter_source === :random
         (-1.5, 1.0)
     elseif model == "tfim"
-        (-5.0, -3.0)
+        (-4.5, -1.5)
     else
         nothing
     end
@@ -161,8 +161,10 @@ function plot_energy_dynamics_vs_g(data_dir::String, scan_values::Vector{Float64
     Legend(fig[1, 2], ax;
            merge        = true,
            labelsize    = PAPER_LEGEND_LABELSIZE,
-           rowgap       = 0,
-           patchsize    = (12, 8),
+           rowgap       = PAPER_LEGEND_ROWGAP,
+           colgap       = PAPER_LEGEND_COLGAP,
+           patchsize    = PAPER_LEGEND_PATCHSIZE,
+           patchlabelgap = PAPER_LEGEND_PATCHLABELGAP,
            padding      = (3, 3, 3, 3),
            framevisible = true,
            framewidth   = 0.5,
@@ -352,8 +354,10 @@ function plot_local_xz_dynamics_vs_g(data_dir::String, g_values::Vector{Float64}
     Legend(fig[:, 2], ax_x;
            merge=true,
            labelsize=PAPER_LEGEND_LABELSIZE,
-           rowgap=0,
-           patchsize=(12, 8),
+           rowgap=PAPER_LEGEND_ROWGAP,
+           colgap=PAPER_LEGEND_COLGAP,
+           patchsize=PAPER_LEGEND_PATCHSIZE,
+           patchlabelgap=PAPER_LEGEND_PATCHLABELGAP,
            padding=(3, 3, 3, 3),
            framevisible=true,
            framewidth=0.5,

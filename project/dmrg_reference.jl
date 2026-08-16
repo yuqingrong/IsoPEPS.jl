@@ -130,6 +130,82 @@ function compute_bulk_energy_density(Ly::Int, Lx1::Int, E1::Float64, Lx2::Int, E
 end
 
 """
+    _dmrg_spin_order_plot_style(result, qs; max_separation=20)
+
+Evaluate the DMRG spin structure factor and pair-averaged M² at several
+wavevectors using the same central window as `plot_dmrg_spin_structure_factor`.
+The spin correlation matrix is built once, then reused for every requested
+wavevector.
+"""
+function _dmrg_spin_order_plot_style(result, qs::AbstractVector{<:Tuple};
+                                     max_separation::Int=20)
+    Lx, Ly = result.Lx, result.Ly
+    N = Lx * Ly
+    center = div(Lx, 2)
+    col_lo = max(1, center - max_separation)
+    col_hi = min(Lx, center + max_separation)
+
+    SdotS = IsoPEPS.compute_SdotS_matrix(result)
+    coords = [(div(s - 1, Ly) + 1, mod(s - 1, Ly) + 1) for s in 1:N]
+    bulk_sites = [s for s in 1:N if col_lo <= coords[s][1] <= col_hi]
+
+    pair_dx = Int[]
+    pair_dy = Int[]
+    pair_SS = Float64[]
+    for s1 in bulk_sites, s2 in bulk_sites
+        x1, y1 = coords[s1]
+        x2, y2 = coords[s2]
+        dx = x2 - x1
+        abs(dx) > max_separation && continue
+        push!(pair_dx, dx)
+        push!(pair_dy, y2 - y1)
+        push!(pair_SS, SdotS[s1, s2])
+    end
+
+    n_ref = length(bulk_sites)
+    phase_sums = [sum(pair_SS .* cos.(q[1] .* pair_dx .+ q[2] .* pair_dy))
+                  for q in qs]
+    structure_factors = phase_sums ./ n_ref
+    # This is the same pair-average normalization as compute_M2_dmrg and the
+    # sampling magnetic_order_squared estimator.
+    order_parameters = phase_sums ./ length(pair_SS)
+    return (structure_factors=structure_factors,
+            order_parameters=order_parameters,
+            n_ref=n_ref,
+            n_pairs=length(pair_SS))
+end
+
+"""
+    _dmrg_dimer_order_plot_style(result, q; dimer_orientation, bulk_cols=20)
+
+Evaluate one dimer structure-factor point using the same global-mean
+subtraction as `plot_dmrg_dimer_structure_factor`. This preserves VBS bond
+modulation pinned by the open cylinder boundaries.
+"""
+function _dmrg_dimer_order_plot_style(result, q::Tuple{<:Real,<:Real};
+                                       dimer_orientation::Symbol,
+                                       bulk_cols::Int=20)
+    corr_data = compute_dimer_dimer_correlation_dmrg(
+        result; dimer_orientation=dimer_orientation, bulk_cols=bulk_cols)
+    bonds, D_exp, DD = corr_data.bonds, corr_data.dimer_expectations, corr_data.DD_matrix
+    n = length(bonds)
+    D_avg = mean(D_exp)
+
+    total = 0.0
+    for bi in 1:n, bj in 1:n
+        _, _, col_i, row_i = bonds[bi]
+        _, _, col_j, row_j = bonds[bj]
+        if dimer_orientation == :vertical
+            dx, dy = col_j - col_i, row_j - row_i
+        else
+            dx, dy = col_j - col_i, row_j - row_i
+        end
+        total += (DD[bi, bj] - D_avg^2) * cos(q[1] * dx + q[2] * dy)
+    end
+    return (structure_factor=total / n, n_bonds=n)
+end
+
+"""
     plot_dmrg_results(json_file::String; save_path=nothing)
 
 Plot DMRG results: energy, magnetization, and correlation length vs scan parameter.
@@ -205,19 +281,30 @@ end
                          scan_param=:J2, scan_values=0.0:0.1:1.0,
                          cutoff=1e-10, nsweeps=20,
                          noise=[1e-1, 1e-2, 1e-3, 1e-4, fill(0.0, 16)...],
+                         m2_max_separation=20,
+                         compute_dimer_order=true, dimer_bulk_cols=20,
                          output_file=nothing, state_dir="states",
                          model_params...)
 
 Run DMRG parameter scan with two system lengths to extract bulk energy density
 via finite-size subtraction.  Model-specific observables are computed automatically:
 
-- `"heisenberg_j1j2"`: M² order parameters (Néel, stripe, (0,π))
+- `"heisenberg_j1j2"`: sampling-matched M²(π,π), M²(0,π), and
+  vertical-dimer M_D²(0,π), all evaluated on `Lx1` only; `Lx2` is used
+  solely for the bulk-energy subtraction
 - `"tfim"`:            ⟨Sx⟩ and ⟨Sz⟩ magnetizations
 
 # Arguments
 - `model`: `"tfim"` or `"heisenberg_j1j2"`
 - `scan_param`: Symbol of the parameter to scan (e.g. `:J2` for J1-J2, `:g` for TFIM)
 - `scan_values`: Range of values for the scanned parameter
+- `m2_max_separation`: Half-width of the central reference region and
+  longitudinal cutoff used by the plot-style spin structure factor.
+- `compute_dimer_order`: Compute dimer structure factors using the same
+  global-mean subtraction as the DMRG dimer plot. This uses four-point MPS
+  contractions and can be expensive.
+- `dimer_bulk_cols`: Deprecated compatibility keyword. Dimer comparison order
+  uses the same `m2_max_separation` physical cutoff as sampling.
 - `model_params...`: Fixed model parameters (the scanned param is overridden each step)
 
 # Examples
@@ -231,6 +318,9 @@ function run_dmrg_bulk_scan(; model::String="heisenberg_j1j2",
                               scan_param::Symbol=:J2, scan_values=0.0:0.1:1.0,
                               cutoff::Float64=1e-10, nsweeps::Int=20,
                               noise=[1e-1, 1e-2, 1e-3, 1e-4, fill(0.0, 16)...],
+                              m2_max_separation::Int=20,
+                              compute_dimer_order::Bool=true,
+                              dimer_bulk_cols::Int=20,
                               output_file::Union{String,Nothing}=nothing,
                               state_dir::String="states",
                               model_params...)
@@ -254,7 +344,14 @@ function run_dmrg_bulk_scan(; model::String="heisenberg_j1j2",
             "scan_param"   => string(scan_param),
             "base_params"  => Dict(string(k) => v for (k,v) in base_params),
             "cutoff"       => cutoff,
-            "nsweeps"      => nsweeps
+            "nsweeps"      => nsweeps,
+            "comparison_observable" => is_j1j2 ? Dict(
+                "longitudinal_cutoff_columns" => m2_max_separation,
+                "effective_longitudinal_columns" => 2 * m2_max_separation + 1,
+                "reference_columns" => 1,
+                "spin_normalization" => "S(q) / (Ly * effective_longitudinal_columns)",
+                "dimer_mean_subtraction" => "global",
+                "dimer_distance_window" => "bartlett") : nothing
         ),
         "scan_values"          => scan_values,
         "Lx1_energies"         => Float64[],
@@ -271,6 +368,19 @@ function run_dmrg_bulk_scan(; model::String="heisenberg_j1j2",
         scan_results["Sx_Lx2"] = Float64[]
         scan_results["Sz_Lx1"] = Float64[]
         scan_results["Sz_Lx2"] = Float64[]
+    else
+        # Comparison observables are evaluated only on Lx1. Lx2 is retained
+        # exclusively for the bulk-energy subtraction.
+        for key in ("M2_neel_Lx1", "M2_stripe_Lx1",
+                    "S_SS_neel_Lx1", "S_SS_stripe_Lx1")
+            scan_results[key] = Float64[]
+        end
+
+        if compute_dimer_order
+            for key in ("D2_vertical_0pi_Lx1", "S_D_vertical_0pi_Lx1")
+                scan_results[key] = Float64[]
+            end
+        end
     end
 
     println("=" ^ 60)
@@ -327,6 +437,32 @@ function run_dmrg_bulk_scan(; model::String="heisenberg_j1j2",
             push!(scan_results["Sx_Lx2"], mag2.Sx)
             push!(scan_results["Sz_Lx1"], mag1.Sz)
             push!(scan_results["Sz_Lx2"], mag2.Sz)
+        else
+            qs = [(pi, pi), (0.0, pi)]
+            spin_data_1 = [compute_sampling_structure_factor_dmrg(
+                result1, q; max_separation=m2_max_separation) for q in qs]
+            N_eff = Ly * (2 * m2_max_separation + 1)
+            m2_data_1 = spin_data_1 ./ N_eff
+            s_neel_1, s_stripe_1 = spin_data_1
+            m2_neel_1, m2_stripe_1 = m2_data_1
+
+            push!(scan_results["M2_neel_Lx1"], m2_neel_1)
+            push!(scan_results["M2_stripe_Lx1"], m2_stripe_1)
+            push!(scan_results["S_SS_neel_Lx1"], s_neel_1)
+            push!(scan_results["S_SS_stripe_Lx1"], s_stripe_1)
+            println("  M²(π,π): Lx1=$m2_neel_1")
+            println("  M²(0,π) stripe: Lx1=$m2_stripe_1")
+
+            if compute_dimer_order
+                sd_vertical_1 = compute_sampling_dimer_structure_factor_dmrg(
+                    result1, (0.0, pi); dimer_orientation=:vertical,
+                    max_separation=m2_max_separation)
+                d2_vertical_1 = sd_vertical_1 / N_eff
+
+                push!(scan_results["D2_vertical_0pi_Lx1"], d2_vertical_1)
+                push!(scan_results["S_D_vertical_0pi_Lx1"], sd_vertical_1)
+                println("  D²ᵥ(0,π): Lx1=$d2_vertical_1")
+            end
         end
 
         mkpath(state_dir)
@@ -559,25 +695,12 @@ function plot_M2_vs_J2(json_file::String; Lx1::Int=100, Lx2::Int=200,
               ylabel="M²(q)",
               title="DMRG M²(q) vs J₂  (Ly=$Ly, D=$D)")
 
-    scatterlines!(ax, J2_vals, Float64.(data.M2_neel_Lx2),
-                  label="M²(π,π) Néel  Lx=$Lx2", color=:blue,
-                  marker=:circle, markersize=10, linewidth=2)
-    scatterlines!(ax, J2_vals, Float64.(data.M2_stripe_Lx2),
-                  label="M²(π,0) Stripe  Lx=$Lx2", color=:red,
-                  marker=:diamond, markersize=10, linewidth=2)
-    scatterlines!(ax, J2_vals, Float64.(data.M2_0pi_Lx2),
-                  label="M²(0,π) Stripe  Lx=$Lx2", color=:green,
-                  marker=:rect, markersize=10, linewidth=2)
-
     scatterlines!(ax, J2_vals, Float64.(data.M2_neel_Lx1),
                   label="M²(π,π) Néel  Lx=$Lx1", color=:blue,
-                  linestyle=:dash, marker=:utriangle, markersize=8, linewidth=1.5)
+                  marker=:circle, markersize=9, linewidth=2)
     scatterlines!(ax, J2_vals, Float64.(data.M2_stripe_Lx1),
-                  label="M²(π,0) Stripe  Lx=$Lx1", color=:red,
-                  linestyle=:dash, marker=:utriangle, markersize=8, linewidth=1.5)
-    scatterlines!(ax, J2_vals, Float64.(data.M2_0pi_Lx1),
-                  label="M²(0,π) Stripe  Lx=$Lx1", color=:green,
-                  linestyle=:dash, marker=:utriangle, markersize=8, linewidth=1.5)
+                  label="M²(0,π) Stripe  Lx=$Lx1", color=:red,
+                  marker=:diamond, markersize=9, linewidth=2)
 
     axislegend(ax, position=:rt)
 
@@ -604,11 +727,19 @@ display(fig)
 
 =#
 # ==================== Example usage ====================
-scan_results = run_dmrg_bulk_scan(
+run_dmrg_bulk_scan(
     model="heisenberg_j1j2",
-    Ly=4, Lx1=1000, Lx2=1200, D=32,
-    scan_param=:J2, scan_values=0.0:0.1:1.0,
-    J1=1.0
+    Ly=4,
+    Lx1=100,
+    Lx2=120,
+    D=2,
+    scan_param=:J2,
+    scan_values=[0.0:0.1:0.5; 0.51:0.01:0.59; 0.6:0.1:1.0],
+    J1=1.0,
+    m2_max_separation=20,
+    compute_dimer_order=true,
+    output_file="project/results/reference/dmrg_sampling_matched_Ly4_D32_J2scan.json",
+    state_dir="project/results/reference/states"
 )
 #=
 # TFIM
