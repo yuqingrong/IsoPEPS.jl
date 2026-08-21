@@ -726,21 +726,28 @@ fig = plot_bulk_convergence(conv; save_path="project/results/figures/bulk_conver
 display(fig)
 
 =#
-# ==================== Example usage ====================
-run_dmrg_bulk_scan(
-    model="heisenberg_j1j2",
-    Ly=4,
-    Lx1=100,
-    Lx2=120,
-    D=2,
-    scan_param=:J2,
-    scan_values=[0.0:0.1:0.5; 0.51:0.01:0.59; 0.6:0.1:1.0],
-    J1=1.0,
-    m2_max_separation=20,
-    compute_dimer_order=true,
-    output_file="project/results/reference/dmrg_sampling_matched_Ly4_D32_J2scan.json",
-    state_dir="project/results/reference/states"
-)
+"""Run the historical DMRG scan only after an explicit caller requests it."""
+function run_default_heisenberg_dmrg_scan(; output_file::AbstractString=joinpath(@__DIR__, "results", "reference", "dmrg_sampling_matched_Ly4_D32_J2scan.json"),
+                                             state_dir::AbstractString=joinpath(@__DIR__, "results", "reference", "states"))
+    return run_dmrg_bulk_scan(
+        model="heisenberg_j1j2",
+        Ly=4,
+        Lx1=100,
+        Lx2=120,
+        D=2,
+        scan_param=:J2,
+        scan_values=[0.0:0.1:0.5; 0.51:0.01:0.59; 0.6:0.1:1.0],
+        J1=1.0,
+        m2_max_separation=20,
+        compute_dimer_order=true,
+        output_file=output_file,
+        state_dir=state_dir,
+    )
+end
+
+if abspath(PROGRAM_FILE) == abspath(@__FILE__)
+    println(stderr, "This file defines DMRG reference helpers; call run_default_heisenberg_dmrg_scan(...) explicitly.")
+end
 #=
 # TFIM
 run_dmrg_bulk_scan(
