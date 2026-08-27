@@ -1,0 +1,8 @@
+schema_version = 1
+package_purpose = "Private local staging for future IsoPEPS Notes data release"
+code_license = "MIT"
+data_license = "CC-BY-4.0"
+source_results_root = "project/results (relative to the private source checkout)"
+paper_image_root = "arxiv_submit/image (relative to the manuscript checkout)"
+source_layout = "Source-file SHA-256 values are recorded in SOURCE-MANIFEST.sha256; local absolute paths are intentionally omitted."
+release_status = "not published; no DOI, Zenodo record, tag, or upload has been created"

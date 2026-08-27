@@ -1,0 +1,222 @@
+schema_version = 1
+manuscript = "IsoPEPS-Notes/arxiv_submit/main.tex (read only)"
+reproduce_command = "julia --project=. repro/reproduce.jl --data-dir /path/to/IsoPEPS-paper-data --output-dir /path/to/output --mode compute"
+archive_command = "julia --project=. repro/reproduce.jl --data-dir /path/to/IsoPEPS-paper-data --output-dir /path/to/output --mode archive"
+
+# Exact scan members used by the plotting targets below. These are separate
+# from the staging allowlist so `check.jl` can verify every declared numerical
+# input rather than accepting a broad result directory.
+[data_sets]
+tfim_g_scan = [
+    "results/tfim_abc/circuit_tfim_J=1.0_g=0.0_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=0.25_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=0.5_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=0.75_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=1.0_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=1.25_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=1.5_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=1.75_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=2.0_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=2.25_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=2.5_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=2.75_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=3.25_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=3.5_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=3.75_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=4.0_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=4.25_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=4.5_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=4.75_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=5.0_row=3_p=3_nqubits=3_1x1.json",
+]
+tfim_dynamics_scan = [
+    "results/tfim_abc/circuit_tfim_J=1.0_g=0.5_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=1.0_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=1.5_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=2.0_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=2.5_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=3.5_row=3_p=3_nqubits=3_1x1.json",
+    "results/tfim_abc/circuit_tfim_J=1.0_g=4.0_row=3_p=3_nqubits=3_1x1.json",
+]
+heisenberg_j2_scan = [
+    "results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.0_row=4_p=3_nqubits=3_2x2.json",
+    "results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.1_row=4_p=3_nqubits=3_2x2.json",
+    "results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.2_row=4_p=3_nqubits=3_2x2.json",
+    "results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.3_row=4_p=3_nqubits=3_2x2.json",
+    "results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.4_row=4_p=3_nqubits=3_2x2.json",
+    "results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json",
+    "results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.6_row=4_p=3_nqubits=3_2x2.json",
+    "results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.7_row=4_p=3_nqubits=3_2x2.json",
+    "results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.8_row=4_p=3_nqubits=3_2x2.json",
+    "results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.9_row=4_p=3_nqubits=3_2x2.json",
+    "results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=1.0_row=4_p=3_nqubits=3_2x2.json",
+]
+bond_energy_scan = [
+    "results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.0_row=4_p=3_nqubits=3_2x2.json",
+    "results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json",
+    "results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.6_row=4_p=3_nqubits=3_2x2.json",
+    "results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=1.0_row=4_p=3_nqubits=3_2x2.json",
+]
+
+[[figures]]
+manuscript_image = "M2_comparison-1.pdf"
+kind = "generated"
+plot_target = "m2-comparison"
+generated_output = "heisenberg/figures/M2_comparison.pdf"
+source_data = ["results/heisenberg/M2_sampling.json", "results/reference/dmrg_sampling_matched_Ly4_D2_J2scan.json"]
+baseline = "figures/published/M2_comparison-1.pdf"
+baseline_sha256 = "658099a1781ae9963157a2f7706c489985fbcacf59c18bdf66939c3f8f073539"
+
+[[figures]]
+manuscript_image = "NNconnected_corr_vs_g.pdf"
+kind = "generated"
+plot_target = "connected-corr-vs-g"
+generated_output = "tfim_abc/figures/NNconnected_corr_vs_g.pdf"
+source_data = ["results/tfim_abc/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json"]
+source_data_sets = ["tfim_g_scan"]
+baseline = "figures/published/NNconnected_corr_vs_g.pdf"
+baseline_sha256 = "cf359ad551d05302a7edbf4f65f9665832b1e092ada17385a2cf937ad98c8ee4"
+
+[[figures]]
+manuscript_image = "bond_energy_exact.pdf"
+kind = "generated"
+plot_target = "bond-energy-exact"
+generated_output = "heisenberg/figures/bond_energy_exact.pdf"
+source_data = ["results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json"]
+source_data_sets = ["bond_energy_scan"]
+baseline = "figures/published/bond_energy_exact.pdf"
+baseline_sha256 = "a6d978e5a20a20dec35a8699fc9a37a723420ff29ff6c151be82fa180f3c2965"
+
+[[figures]]
+manuscript_image = "circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2_training_history.pdf"
+kind = "generated"
+plot_target = "analyze-heisenberg"
+generated_output = "heisenberg/figures/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2_training_history.pdf"
+source_data = ["results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json", "results/reference/pepskit_results_D=2.json", "results/reference/dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json"]
+baseline = "figures/published/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2_training_history.pdf"
+baseline_sha256 = "80252f3dc84e8a7958567c4276066e0be5570039e5ea276d014a6ecc53994a5e"
+
+[[figures]]
+manuscript_image = "corr_length_vs_g_row=3.pdf"
+kind = "generated"
+plot_target = "corr-length-vs-g"
+generated_output = "tfim_abc/figures/corr_length_vs_g_row=3.pdf"
+source_data = ["results/tfim_abc/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json", "results/reference/dmrg_bulk_tfim_Ly3_D2_gscan.json", "results/reference/pepskit_results_D=2.json"]
+source_data_sets = ["tfim_g_scan"]
+baseline = "figures/published/corr_length_vs_g_row=3.pdf"
+baseline_sha256 = "d1e41cf4d3eee89db6c714ee395d6a6a05fd84a382b6ae83b305c49bbb5b259c"
+
+[[figures]]
+manuscript_image = "energy_dynamics_vs_g.pdf"
+kind = "generated"
+plot_target = "energy-dynamics-tfim"
+generated_output = "tfim_abc/figures/energy_dynamics_vs_g.pdf"
+source_data = ["results/tfim_abc/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json"]
+source_data_sets = ["tfim_dynamics_scan"]
+baseline = "figures/published/energy_dynamics_vs_g.pdf"
+baseline_sha256 = "f21a1087310734af95045e9aae003df0a61bf57032bc6aa218e7e766e8a7a77b"
+
+[[figures]]
+manuscript_image = "heisenberg_energy_vs_j2-2.pdf"
+kind = "generated"
+plot_target = "energy-vs-J2-heisenberg"
+generated_output = "heisenberg/figures/heisenberg_energy_vs_J2.pdf"
+source_data = ["results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json", "results/idmrg_j1j2_D192_Ly4_J2scan_energyconv.json", "results/reference/dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json"]
+source_data_sets = ["heisenberg_j2_scan"]
+baseline = "figures/published/heisenberg_energy_vs_j2-2.pdf"
+baseline_sha256 = "b2bb0e416eb3be1df454fe60d98780f404feb45efaa42cdd7bbdcd1cfaac6a1a"
+
+[[figures]]
+manuscript_image = "heisenberg_variance_vs_samples_J2=0.5.pdf"
+kind = "generated"
+plot_target = "variance-vs-samples"
+generated_output = "heisenberg/figures/heisenberg_variance_vs_samples_J2=0.5.pdf"
+source_data = ["results/heisenberg/figures/heisenberg_variance_vs_samples.json"]
+baseline = "figures/published/heisenberg_variance_vs_samples_J2=0.5.pdf"
+baseline_sha256 = "9a30c957b2f6259936e9454a627e66f12fe7917f845ad6e6699a0d54ab0ed3db"
+
+[[figures]]
+manuscript_image = "magnetization_vs_g-1.pdf"
+kind = "generated"
+plot_target = "magnetization-vs-g"
+generated_output = "tfim_abc/figures/magnetization_vs_g.pdf"
+source_data = ["results/tfim_abc/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json"]
+source_data_sets = ["tfim_g_scan"]
+baseline = "figures/published/magnetization_vs_g-1.pdf"
+baseline_sha256 = "47cea3b9a457cba6808fdcdee82b92cc3184d10b9c6c1da8a9515f975fa3c3a5"
+
+[[figures]]
+manuscript_image = "main_figure.png"
+kind = "supplied"
+plot_target = ""
+generated_output = ""
+source_data = []
+baseline = "figures/published/main_figure.png"
+baseline_sha256 = "e973d11395a56aed4eebd4ac50b48025c7212acf26419554a76845ea789cab6e"
+
+[[figures]]
+manuscript_image = "readout_noise_energ_error_g=3.0.pdf"
+kind = "generated"
+plot_target = "readout-bias"
+generated_output = "tfim_abc/figures/readout_noise_energ_error_g=3.0.pdf"
+source_data = ["results/tfim_abc/readout_noise_energ_g=3.0.json"]
+baseline = "figures/published/readout_noise_energ_error_g=3.0.pdf"
+baseline_sha256 = "6ed3318ac4a36447460b933cfbe28f508ebf9f89ed964174c2a15d5c6eaf65c8"
+
+[[figures]]
+manuscript_image = "readout_noise_energ_g=3.0.pdf"
+kind = "generated"
+plot_target = "readout-energy"
+generated_output = "tfim_abc/figures/readout_noise_energ_g=3.0.pdf"
+source_data = ["results/tfim_abc/readout_noise_energ_g=3.0.json"]
+baseline = "figures/published/readout_noise_energ_g=3.0.pdf"
+baseline_sha256 = "fc30bea6f62704e8b968f1f0ebbe7a47eb3969937b5adc10f981452956e82b95"
+
+[[figures]]
+manuscript_image = "spiral_equivalence.pdf"
+kind = "supplied"
+plot_target = ""
+generated_output = ""
+source_data = []
+baseline = "figures/published/spiral_equivalence.pdf"
+baseline_sha256 = "56e11ed8879916e118c23f900ef758a0dfe23b5d9f8f8a84e44af03e0f9d3495"
+
+[[figures]]
+manuscript_image = "structure_factors_combined.pdf"
+kind = "generated"
+plot_target = "structure-factors"
+generated_output = "heisenberg/figures/structure_factors_combined.pdf"
+source_data = ["results/heisenberg/sf.json"]
+baseline = "figures/published/structure_factors_combined.pdf"
+baseline_sha256 = "199509819616b1266b4a97dd0685d5dc8abd323ba750ac5ee8db2591fb73e267"
+
+[[figures]]
+manuscript_image = "tfim_energy_vs_g.pdf"
+kind = "generated"
+plot_target = "energy-vs-g-tfim"
+generated_output = "tfim_abc/figures/tfim_energy_vs_g.pdf"
+source_data = ["results/tfim_abc/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json", "results/reference/dmrg_bulk_tfim_Ly3_D32_gscan.json"]
+source_data_sets = ["tfim_g_scan"]
+baseline = "figures/published/tfim_energy_vs_g.pdf"
+baseline_sha256 = "ef67afe0a5431c37a8123baac2ee536abbf80e738a10360ee34f529f2710848c"
+
+[[figures]]
+manuscript_image = "tfim_energy_vs_g_error.pdf"
+kind = "generated"
+plot_target = "energy-vs-g-tfim"
+generated_output = "tfim_abc/figures/tfim_energy_vs_g_error.pdf"
+source_data = ["results/tfim_abc/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json", "results/reference/dmrg_bulk_tfim_Ly3_D32_gscan.json"]
+source_data_sets = ["tfim_g_scan"]
+baseline = "figures/published/tfim_energy_vs_g_error.pdf"
+baseline_sha256 = "440f910e53cd933dc525b6b9947229abda098e76d93e07005fff6b5f7e12bac5"
+
+[[figures]]
+manuscript_image = "tfim_variance_vs_samples_g=3.0.pdf"
+kind = "generated"
+plot_target = "variance-vs-samples-tfim"
+generated_output = "tfim_abc/figures/tfim_variance_vs_samples_g=3.0.pdf"
+source_data = ["results/tfim_abc/figures/tfim_variance_vs_samples.json"]
+baseline = "figures/published/tfim_variance_vs_samples_g=3.0.pdf"
+baseline_sha256 = "6bea24cf48bfb891d37e347a65c620e949eb303fb90f8096286a6c3361c6c06d"

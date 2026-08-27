@@ -282,9 +282,9 @@ end
     @test data[g].mX ≈ expected_mX
     legend = only(filter(content -> content isa Legend, fig.content))
     @test isnothing(legend.layoutobservables.gridcontent[])
-    @test legend.halign[] == :right
-    @test legend.valign[] == :top
-    @test legend.nbanks[] == 2
+    @test legend.halign[] == 0.98
+    @test legend.valign[] == 0.78
+    @test legend.nbanks[] == 1
     @test legend.labelsize[] == IsoPEPS.PAPER_LARGE_LEGEND_LABELSIZE
     ax = only(filter(content -> content isa Axis, fig.content))
     @test ax.finallimits[].widths[2] > max(expected_mZ, expected_mX)
@@ -556,11 +556,12 @@ end
         row=row, p=p, nqubits=nqubits, energy_source=:saved,
         dmrg_file=dmrg_file)
 
-    for fig in (fig_energy, fig_error)
+    expected_positions = ((0.18, 0.02), (0.12, 0.04))
+    for (fig, (halign, valign)) in zip((fig_energy, fig_error), expected_positions)
         legend = only(filter(content -> content isa Legend, fig.content))
         @test isnothing(legend.layoutobservables.gridcontent[])
-        @test legend.halign[] == 0.12
-        @test legend.valign[] == 0.04
+        @test legend.halign[] == halign
+        @test legend.valign[] == valign
     end
 end
 
@@ -768,7 +769,7 @@ end
     @test observable_legend.halign[] == 0.02
     @test observable_legend.valign[] == 0.08
     @test observable_legend.margin[] == (1, 1, 1, 1)
-    @test ax.finallimits[].origin[2] < 0
+    @test ax.finallimits[].origin[2] == 0
     g = observable_legend.entrygroups[][1]
     legend_labels = [e.label[] for e in g[2]]
     @test legend_labels == [
@@ -817,7 +818,7 @@ end
     @test all(plot -> plot.linestyle[] == :solid, isopeps_lines)
     @test all(plot -> plot.linestyle[] == :dash, dmrg_reference_lines)
     @test [plot.color[] for plot in isopeps_lines] ==
-          to_color.([:blue, :orange, :seagreen])
+          [:blue, :orange, :seagreen]
     @test [plot.color[] for plot in isopeps_lines] ==
           [plot.color[] for plot in dmrg_reference_lines]
 
@@ -1227,7 +1228,7 @@ end
     @test colorbar.ticklabelsize[] == IsoPEPS._BOND_COLORBAR_TICKLABELSIZE
     @test colorbar.width[] == IsoPEPS._BOND_COLORBAR_WIDTH
     @test colorbar.layoutobservables.gridcontent[].span.cols == 4:4
-    @test colorbar.layoutobservables.gridcontent[].span.rows == 1:2
+    @test colorbar.layoutobservables.gridcontent[].span.rows == 2:2
 end
 
 @testset "Sampled expectations match transfer matrix fixed point" begin
