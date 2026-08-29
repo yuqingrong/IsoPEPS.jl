@@ -10,6 +10,7 @@ const TEST_FILES = [
     "reference" => "reference.jl",
     "training" => "training.jl",
     "visualization" => "visualization.jl",
+    "reproducibility" => "reproducibility.jl",
 ]
 
 const REQUESTED_TESTS = isempty(ARGS) ? first.(TEST_FILES) : ARGS

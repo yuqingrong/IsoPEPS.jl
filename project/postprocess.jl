@@ -1,3 +1,5 @@
+include(joinpath(@__DIR__, "..", "repro", "results_layout.jl"))
+using .ResultsLayout: result_path
 using IsoPEPS
 using CairoMakie
 set_theme!(IsoPEPS.paper_theme())
@@ -16,7 +18,7 @@ Analyze a saved training result from JSON file.
 - `pepskit_results_file`: Path to pepskit results JSON file for reference energy (optional)
 - `dmrg_bulk_file`: Path to DMRG bulk model JSON file for reference energy (optional)
 """
-function analyze_result(filename::String; pepskit_results_file::Union{String,Nothing}=nothing, dmrg_bulk_file::Union{String,Nothing}=nothing, use_exact::Bool=true, figures_dir::Union{String,Nothing}=nothing)
+function analyze_result(filename::String; pepskit_results_file::Union{String,Nothing}=nothing, dmrg_bulk_file::Union{String,Nothing}=nothing, use_exact::Bool=true, figures_dir::Union{String,Nothing}=nothing, show_plots::Bool=true)
     result, input_args = load_result(filename)
     
     println("=== Training Result Analysis ===")
@@ -71,7 +73,7 @@ function analyze_result(filename::String; pepskit_results_file::Union{String,Not
         pepskit_results_file=pepskit_results_file,
         dmrg_bulk_file=dmrg_bulk_file
     )
-    display(fig)
+    show_plots && display(fig)
     
     # Plot expectation values (using exact contraction if parameters available)
     # Note: passing datafile=filename triggers expensive resampling with 1M samples
@@ -87,7 +89,7 @@ function analyze_result(filename::String; pepskit_results_file::Union{String,Not
                                       datafile=skip_resample ? nothing : filename,
                                       resample_conv_step=conv_step,
                                       resample_samples=samples)
-    display(fig_exp)
+    show_plots && display(fig_exp)
     
     
     # Save figures (defaults to project/results/figures; override via figures_dir kwarg)
@@ -101,7 +103,9 @@ function analyze_result(filename::String; pepskit_results_file::Union{String,Not
     
     # Save training history figure
     training_fig_path = joinpath(figures_dir, "$(base_name)_training_history.pdf")
-    save(training_fig_path, fig)
+    # The manuscript baseline was typeset at this PDF point scale. Keep it
+    # explicit so re-rendering preserves the published page dimensions.
+    save(training_fig_path, fig; pt_per_unit=1.125)
     println("\nSaved training history figure to: $training_fig_path")
     
     # Save expectation values figure
@@ -118,254 +122,267 @@ end
 #
 # Each plot/data block from the original top-level script is wrapped in a
 # no-arg function and registered in TARGETS. Invoke via Makefile or directly:
-#     julia --project=.. postprocess.jl <target>
+#     julia --project=. project/postprocess.jl <target>
 #
 # `save_M2_vs_J2` and `save_combined_structure_factor_data` are intentionally
 # omitted — their JSON outputs already exist on disk and are treated as static
 # inputs by the Makefile.
 # ============================================================================
 
-# Resolve CWD to repo root so the hardcoded "project/..." paths below work
-# regardless of where julia is invoked from.
+# Paths are explicit so that the plotting API can work with a local data
+# package. Defaults retain the original in-repository locations.
 const REPO_ROOT = abspath(joinpath(@__DIR__, ".."))
+const DEFAULT_RESULTS_ROOT = joinpath(REPO_ROOT, "project", "results")
 
-function plot_analyze_heisenberg()
-    J1=1.0;J2=0.5; row=4; nqubits=3; p=3; virtual_qubits=1; D=2
-    data_dir = joinpath(@__DIR__, "results/heisenberg")
-    datafile = joinpath(data_dir, "circuit_heisenberg_j1j2_J1=$(J1)_J2=$(J2)_row=$(row)_p=$(p)_nqubits=$(nqubits)_2x2.json")
-    referfile = joinpath(data_dir, "pepskit_results_D=$(D).json")
-    analyze_result(datafile;
-        pepskit_results_file=referfile,
-        dmrg_bulk_file="project/results/reference/dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json",
-        figures_dir=joinpath(@__DIR__, "results", "heisenberg", "figures"))
+_result_path(results_root::AbstractString, pieces...) = result_path(results_root, pieces...)
+function _output_path(output_dir::AbstractString, pieces...)
+    path = joinpath(output_dir, pieces...)
+    mkpath(dirname(path))
+    return path
 end
 
-function plot_m2_comparison()
+function plot_analyze_heisenberg(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
+    processed_data = _result_path(results_root, "heisenberg", "figures",
+        "circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2_training_history.json")
+    plot_training_history_from_processed_data(processed_data;
+        dmrg_bulk_file=_result_path(results_root, "reference", "dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json"),
+        save_path=_output_path(output_dir, "heisenberg", "figures",
+            "circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2_training_history.pdf"))
+end
+
+function plot_m2_comparison(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
     plot_M2_comparison(
-        sampling_file="project/results/heisenberg/M2_sampling.json",
-        dmrg_file="project/results/reference/dmrg_sampling_matched_Ly4_D2_J2scan.json",
-        dmrg_Lx_key="Lx1",
-        show_dmrg=true,
-        save_path="project/results/heisenberg/figures/M2_comparison.pdf",
-        markersize=4,
-        show_errorbars=false)
+        sampling_file=_result_path(results_root, "heisenberg", "M2_sampling.json"),
+        dmrg_file=_result_path(results_root, "reference", "dmrg_sampling_matched_Ly4_D2_J2scan.json"),
+        dmrg_Lx_key="Lx1", show_dmrg=true,
+        save_path=_output_path(output_dir, "heisenberg", "figures", "M2_comparison.pdf"),
+        markersize=4, show_errorbars=false)
 end
 
-function plot_m2_comparison_errorbars()
+function plot_m2_comparison_errorbars(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
     plot_M2_comparison(
-        sampling_file="project/results/heisenberg/M2_sampling.json",
-        dmrg_file="project/results/reference/dmrg_sampling_matched_Ly4_D2_J2scan.json",
-        dmrg_Lx_key="Lx1",
-        show_dmrg=true,
-        save_path="project/results/heisenberg/figures/M2_comparison_errorbars.pdf",
-        markersize=4,
-        show_errorbars=true)
+        sampling_file=_result_path(results_root, "heisenberg", "M2_sampling.json"),
+        dmrg_file=_result_path(results_root, "reference", "dmrg_sampling_matched_Ly4_D2_J2scan.json"),
+        dmrg_Lx_key="Lx1", show_dmrg=true,
+        save_path=_output_path(output_dir, "heisenberg", "figures", "M2_comparison_errorbars.pdf"),
+        markersize=4, show_errorbars=true)
 end
 
-function plot_structure_factors_combined()
+function plot_structure_factors_combined(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
     fig, _, _ = plot_combined_structure_factors(
-        "project/results/heisenberg", [0.0, 0.5, 0.6, 1.0];
-        data_file="project/results/heisenberg/sf.json",
-        save_path="project/results/heisenberg/figures/structure_factors_combined.pdf",
-    )
-    fig
+        _result_path(results_root, "heisenberg"), [0.0, 0.5, 0.6, 1.0];
+        data_file=_result_path(results_root, "heisenberg", "sf.json"),
+        save_path=_output_path(output_dir, "heisenberg", "figures", "structure_factors_combined.pdf"))
+    return fig
 end
 
-function save_structure_factors_combined_discrete_data()
-    data_dir = "project/results/heisenberg"
+function save_structure_factors_combined_discrete_data(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
+    data_dir = _result_path(results_root, "heisenberg")
     J2_values = [0.0, 0.5, 0.6, 1.0]
-    samples_files = Dict(
-        0.0 => joinpath(data_dir, "samples_heisenberg_J2=0.0.json"),
-        0.5 => joinpath(data_dir, "samples_heisenberg_J2=0.5.json"),
-        0.6 => joinpath(data_dir, "samples_heisenberg_J2=0.6.json"),
-        1.0 => joinpath(data_dir, "samples_heisenberg_J2=1.0.json"),
-    )
+    samples_files = Dict(value => joinpath(data_dir, "samples_heisenberg_J2=$(value).json") for value in J2_values)
     save_combined_structure_factor_data(
-        joinpath(data_dir, "sf_discrete.json"), data_dir, J2_values;
-        row=4,
-        nq=50,
-        qx_values=collect(range(0.0, 2Float64(π), length=50)),
-        qy_values=IsoPEPS._allowed_cylinder_qy(4),
-        max_separation_spin=10,
-        max_separation_dimer=20,
-        dimer_orientation=:vertical,
-        use_exact=false,
-        conv_step=0,
-        samples=100000,
-        samples_files=samples_files,
-    )
+        _output_path(output_dir, "heisenberg", "sf_discrete.json"), data_dir, J2_values;
+        row=4, nq=50, qx_values=collect(range(0.0, 2Float64(π), length=50)),
+        qy_values=IsoPEPS._allowed_cylinder_qy(4), max_separation_spin=10,
+        max_separation_dimer=20, dimer_orientation=:vertical, use_exact=false,
+        conv_step=0, samples=100000, samples_files=samples_files)
 end
 
-function plot_structure_factors_combined_discrete()
+function plot_structure_factors_combined_discrete(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
     fig, _, _ = plot_combined_structure_factors(
-        "project/results/heisenberg", Float64[];
-        data_file="project/results/heisenberg/sf_discrete.json",
-        discrete_qy=true,
-        save_path="project/results/heisenberg/figures/structure_factors_combined_discrete.pdf",
-    )
-    fig
+        _result_path(results_root, "heisenberg"), Float64[];
+        data_file=_output_path(output_dir, "heisenberg", "sf_discrete.json"), discrete_qy=true,
+        save_path=_output_path(output_dir, "heisenberg", "figures", "structure_factors_combined_discrete.pdf"))
+    return fig
 end
 
-function plot_bond_energy_exact()
-    plot_bond_energy_pattern("project/results/heisenberg", [0.0, 0.5, 0.6, 1.0];
-        use_exact=true,
-        save_path="project/results/heisenberg/figures/bond_energy_exact.pdf")
+function plot_bond_energy_exact(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
+    plot_bond_energy_pattern_from_processed_data(
+        _result_path(results_root, "heisenberg", "figures", "bond_energy_exact.json");
+        save_path=_output_path(output_dir, "heisenberg", "figures", "bond_energy_exact.pdf"))
 end
 
-function plot_energy_vs_g_tfim()
-    plot_energy_error_vs_g("project/results/tfim_abc", collect(0.0:0.25:5.0);
-        model="tfim",
-        J=1.0, row=3, p=3, nqubits=3,
-        energy_source=:computed,
-        conv_step=300,
-        samples=3000000,
-        dmrg_file="project/results/reference/dmrg_bulk_tfim_Ly3_D32_gscan.json",
-        g_c=3.04438,
-        save_path="project/results/tfim_abc/figures/tfim_energy_vs_g.pdf",
-        markersize=6)
+function compute_bond_energy_exact_data_target(; results_root::AbstractString=DEFAULT_RESULTS_ROOT,
+                                               output_dir::AbstractString=results_root)
+    compute_bond_energy_pattern_data(_result_path(results_root, "heisenberg"), [0.0, 0.5, 0.6, 1.0];
+        max_cols=5,
+        save_path=_output_path(output_dir, "heisenberg", "figures", "bond_energy_exact.json"))
 end
 
-function plot_energy_vs_J2_heisenberg()
-    plot_energy_error_vs_g(
-        "project/results/heisenberg",
-        collect(0.0:0.1:1.0);
-        model="heisenberg_j1j2",
+function compute_heisenberg_training_history_data_target(; results_root::AbstractString=DEFAULT_RESULTS_ROOT,
+                                                          output_dir::AbstractString=results_root)
+    result_file = _result_path(results_root, "heisenberg",
+        "circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json")
+    compute_training_history_data(result_file;
+        save_path=_output_path(output_dir, "heisenberg", "figures",
+            "circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2_training_history.json"))
+end
+
+function compute_energy_vs_g_tfim_data(; results_root::AbstractString=DEFAULT_RESULTS_ROOT,
+                                       output_dir::AbstractString=results_root)
+    figures_dir = _output_path(output_dir, "tfim_abc", "figures")
+    energy_data_file = joinpath(figures_dir, "tfim_energy_vs_g.json")
+    error_data_file = joinpath(figures_dir, "tfim_energy_vs_g_error.json")
+    dmrg_file = _result_path(results_root, "reference", "dmrg_bulk_tfim_Ly3_D32_gscan.json")
+    compute_tfim_energy_vs_g_data(
+        _result_path(results_root, "tfim_abc"), collect(0.0:0.25:5.0);
+        J=1.0, row=3, p=3, nqubits=3, conv_step=300, samples=3_000_000,
+        save_path=energy_data_file)
+    compute_tfim_energy_vs_g_error_data(
+        energy_data_file, dmrg_file; save_path=error_data_file, g_c=3.04438)
+end
+
+function plot_energy_vs_g_tfim(; results_root::AbstractString=DEFAULT_RESULTS_ROOT,
+                               output_dir::AbstractString=results_root)
+    figures_dir = _output_path(output_dir, "tfim_abc", "figures")
+    energy_data_file = _result_path(results_root, "tfim_abc", "figures", "tfim_energy_vs_g.json")
+    error_data_file = _result_path(results_root, "tfim_abc", "figures", "tfim_energy_vs_g_error.json")
+    dmrg_file = _result_path(results_root, "reference", "dmrg_bulk_tfim_Ly3_D32_gscan.json")
+    plot_tfim_energy_vs_g_from_processed_data(
+        energy_data_file, dmrg_file;
+        save_path=joinpath(figures_dir, "tfim_energy_vs_g.pdf"), markersize=6)
+    plot_tfim_energy_vs_g_error_from_processed_data(
+        error_data_file;
+        save_path=joinpath(figures_dir, "tfim_energy_vs_g_error.pdf"), markersize=6)
+end
+
+function compute_energy_vs_J2_heisenberg_data(; results_root::AbstractString=DEFAULT_RESULTS_ROOT,
+                                               output_dir::AbstractString=results_root)
+    compute_heisenberg_energy_vs_J2_data(
+        _result_path(results_root, "heisenberg"), collect(0.0:0.1:1.0);
         J1=1.0, row=4, p=3, nqubits=3,
-        energy_source=:computed,
-        dmrg_file=[
-            "project/results/idmrg_j1j2_D192_Ly4_J2scan_energyconv.json",
-            "project/results/reference/dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json",
-        ],
-        error_reference="DMRG D=192",
-        save_path="project/results/heisenberg/figures/heisenberg_energy_vs_J2.pdf",
-        markersize=6,
-    )
+        save_path=_output_path(output_dir, "heisenberg", "figures", "heisenberg_energy_vs_J2.json"))
 end
 
-function compute_variance_data()
+function plot_energy_vs_J2_heisenberg(; results_root::AbstractString=DEFAULT_RESULTS_ROOT,
+                                      output_dir::AbstractString=results_root)
+    plot_heisenberg_energy_vs_J2_from_processed_data(
+        _result_path(results_root, "heisenberg", "figures", "heisenberg_energy_vs_J2.json"),
+        [_result_path(results_root, "reference", "dmrg_j1j2_D192_Ly4_J2scan_energyconv.json"),
+         _result_path(results_root, "reference", "dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json")];
+        save_path=_output_path(output_dir, "heisenberg", "figures", "heisenberg_energy_vs_J2.pdf"), markersize=6)
+end
+
+function compute_variance_data(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
     compute_variance_vs_samples(
-        "project/results/heisenberg/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json",
+        _result_path(results_root, "heisenberg", "circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json"),
         [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 20000, 30000, 40000, 50000, 60000, 70000, 80000, 90000, 100000];
-        total_samples=nothing,
-        conv_step=100,
-        n_bootstrap=200,
-        n_ci_bootstrap=5000,
-        confidence_level=0.68,
-        save_path="project/results/heisenberg/figures/heisenberg_variance_vs_samples.json",
-    )
+        total_samples=nothing, conv_step=100, n_bootstrap=200, n_ci_bootstrap=5000, confidence_level=0.68,
+        save_path=_output_path(output_dir, "heisenberg", "figures", "heisenberg_variance_vs_samples.json"))
 end
 
-function plot_variance_vs_samples_target()
-    plot_variance_vs_samples(
-        "project/results/heisenberg/figures/heisenberg_variance_vs_samples.json";
-        fit_scaling=true,
-        marker=:circle,
-        markersize=4,
-        figsize=PAPER_FIGSIZE,
-        save_path="project/results/heisenberg/figures/heisenberg_variance_vs_samples_J2=0.5.pdf",
-    )
+function plot_variance_vs_samples_target(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
+    plot_variance_vs_samples(_result_path(results_root, "heisenberg", "figures", "heisenberg_variance_vs_samples.json");
+        fit_scaling=true, marker=:circle, markersize=4, figsize=PAPER_FIGSIZE,
+        save_path=_output_path(output_dir, "heisenberg", "figures", "heisenberg_variance_vs_samples_J2=0.5.pdf"))
 end
 
-function compute_variance_data_tfim()
+function compute_variance_data_tfim(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
     compute_variance_vs_samples(
-        "project/results/tfim_abc/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json",
+        _result_path(results_root, "tfim_abc", "circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x3.json"),
         [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 20000, 30000, 40000, 50000, 60000, 70000, 80000, 90000, 100000];
-        total_samples=nothing,
-        conv_step=100,
-        n_bootstrap=200,
-        n_ci_bootstrap=5000,
-        confidence_level=0.68,
-        save_path="project/results/tfim_abc/figures/tfim_variance_vs_samples.json",
-    )
+        total_samples=nothing, conv_step=100, n_bootstrap=200, n_ci_bootstrap=5000, confidence_level=0.68,
+        save_path=_output_path(output_dir, "tfim_abc", "figures", "tfim_variance_vs_samples.json"))
 end
 
-function plot_variance_vs_samples_tfim_target()
-    plot_variance_vs_samples(
-        "project/results/tfim_abc/figures/tfim_variance_vs_samples.json";
-        fit_scaling=true,
-        marker=:circle,
-        markersize=4,
-        figsize=PAPER_FIGSIZE,
-        save_path="project/results/tfim_abc/figures/tfim_variance_vs_samples_g=3.0.pdf",
-    )
+function plot_variance_vs_samples_tfim_target(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
+    plot_variance_vs_samples(_result_path(results_root, "tfim_abc", "figures", "tfim_variance_vs_samples.json");
+        fit_scaling=true, marker=:circle, markersize=4, figsize=PAPER_FIGSIZE,
+        save_path=_output_path(output_dir, "tfim_abc", "figures", "tfim_variance_vs_samples_g=3.0.pdf"))
 end
 
-function plot_energy_vs_inv_samples_target()
+function plot_energy_vs_inv_samples_target(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
     plot_energy_vs_inv_samples(
-        "project/results/tfim_abc/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json",
+        _result_path(results_root, "tfim_abc", "circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x3.json"),
         [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 20000, 30000, 40000, 50000, 60000, 70000, 80000, 90000, 100000];
         conv_step=100, n_bootstrap=200,
-        save_path="project/results/tfim_abc/figures/tfim_energy_vs_inv_samples_g=3.0.pdf")
+        save_path=_output_path(output_dir, "tfim_abc", "figures", "tfim_energy_vs_inv_samples_g=3.0.pdf"))
 end
 
-function plot_connected_corr_vs_g_target()
-    plot_connected_corr_vs_g(
-        "project/results/tfim_abc",
-        collect(0.0:0.25:5.0);
+function compute_tfim_observables_vs_g_data_target(; results_root::AbstractString=DEFAULT_RESULTS_ROOT,
+                                                   output_dir::AbstractString=results_root)
+    figures_dir = _output_path(output_dir, "tfim_abc", "figures")
+    compute_tfim_observables_vs_g_data(
+        _result_path(results_root, "tfim_abc"), collect(0.0:0.25:5.0);
         J=1.0, row=3, p=3, nqubits=3,
-        use_exact=true,
-        save_path="project/results/tfim_abc/figures/NNconnected_corr_vs_g.pdf")
+        connected_save_path=joinpath(figures_dir, "tfim_connected_correlation_vs_g.json"),
+        magnetization_save_path=joinpath(figures_dir, "tfim_magnetization_vs_g.json"))
 end
 
-function plot_corr_length_vs_g()
-    plot_correlation_vs_g("project/results/tfim_abc", collect(0.5:0.25:5.0);
+function plot_connected_corr_vs_g_target(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
+    plot_tfim_connected_correlation_from_processed_data(
+        _result_path(results_root, "tfim_abc", "figures", "tfim_connected_correlation_vs_g.json");
+        save_path=_output_path(output_dir, "tfim_abc", "figures", "NNconnected_corr_vs_g.pdf"))
+end
+
+function compute_corr_length_vs_g_data(; results_root::AbstractString=DEFAULT_RESULTS_ROOT,
+                                       output_dir::AbstractString=results_root)
+    figures_dir = _output_path(output_dir, "tfim_abc", "figures")
+    compute_tfim_correlation_length_vs_g_data(
+        _result_path(results_root, "tfim_abc"), collect(0.5:0.25:5.0);
         row=3, nqubits=3, p=3,
-        dmrg_file="project/results/reference/dmrg_bulk_tfim_Ly3_D2_gscan.json",
-        pepskit_file="project/results/reference/pepskit_results_D=2.json",
-        g_c=3.04438,
-        spectrum_krylovdim=200,
-        spectrum_tol=1e-7,
-        spectrum_maxiter=2000,
-        save_path="project/results/tfim_abc/figures/corr_length_vs_g_row=3.pdf")
+        spectrum_krylovdim=200, spectrum_tol=1e-7, spectrum_maxiter=2_000,
+        save_path=joinpath(figures_dir, "tfim_correlation_length_vs_g.json"))
 end
 
-function plot_magnetization_vs_g_target()
-    plot_magnetization_vs_g(
-        "project/results/tfim_abc",
-        collect(0.0:0.25:5.0);
-        J=1.0, row=3, p=3, nqubits=3,
-        use_exact=true,
-        save_path="project/results/tfim_abc/figures/magnetization_vs_g.pdf")
+function plot_corr_length_vs_g(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
+    figures_dir = _output_path(output_dir, "tfim_abc", "figures")
+    plot_tfim_correlation_length_from_processed_data(
+        _result_path(results_root, "tfim_abc", "figures", "tfim_correlation_length_vs_g.json"),
+        _result_path(results_root, "reference", "dmrg_bulk_tfim_Ly3_D2_gscan.json"),
+        _result_path(results_root, "reference", "pepskit_results_D=2.json");
+        critical_field=3.04438,
+        save_path=joinpath(figures_dir, "corr_length_vs_g_row=3.pdf"))
 end
 
-function plot_energy_dynamics_tfim()
-    plot_energy_dynamics_vs_g("project/results/tfim_abc", collect(0.5:0.5:4.0);
-        J=1.0, row=3, p=3, nqubits=3,
-        M=10000, shots=20, conv_step=0,
-        save_path="project/results/tfim_abc/figures/energy_dynamics_vs_g.pdf")
+function plot_magnetization_vs_g_target(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
+    plot_tfim_magnetization_from_processed_data(
+        _result_path(results_root, "tfim_abc", "figures", "tfim_magnetization_vs_g.json");
+        save_path=_output_path(output_dir, "tfim_abc", "figures", "magnetization_vs_g.pdf"))
 end
 
-function plot_circuit_block_target()
-    plot_circuit_block(3, 5; save_path="project/results/figures/circuit_block_3x5.pdf")
+function compute_energy_dynamics_tfim_data(; results_root::AbstractString=DEFAULT_RESULTS_ROOT,
+                                           output_dir::AbstractString=results_root)
+    figures_dir = _output_path(output_dir, "tfim_abc", "figures")
+    compute_tfim_energy_dynamics_data(
+        _result_path(results_root, "tfim_abc"), collect(0.5:0.5:4.0);
+        J=1.0, row=3, p=3, nqubits=3, M=10_000, shots=20, conv_step=0,
+        random_seed=123,
+        save_path=joinpath(figures_dir, "energy_dynamics_vs_g.json"))
 end
 
-function plot_channel_circuit_target()
-    plot_channel_circuit(3, 3, 5;
-        cycles=2,
-        expanded=false,
-        save_path="project/results/figures/circuit_full_3x3x5.pdf")
+function plot_energy_dynamics_tfim(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
+    figures_dir = _output_path(output_dir, "tfim_abc", "figures")
+    plot_tfim_energy_dynamics_from_processed_data(
+        _result_path(results_root, "tfim_abc", "figures", "energy_dynamics_vs_g.json"),
+        _result_path(results_root, "tfim_abc", "figures", "tfim_energy_vs_g.json");
+        save_path=joinpath(figures_dir, "energy_dynamics_vs_g.pdf"))
 end
 
-function compute_readout_data()
+function plot_circuit_block_target(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
+    plot_circuit_block(3, 5; save_path=_output_path(output_dir, "figures", "circuit_block_3x5.pdf"))
+end
+
+function plot_channel_circuit_target(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
+    plot_channel_circuit(3, 3, 5; cycles=2, expanded=false,
+        save_path=_output_path(output_dir, "figures", "circuit_full_3x3x5.pdf"))
+end
+
+function compute_readout_data(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
     compute_readout_energy_scan(
-        "project/results/tfim_abc/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json";
-        p_values=[0.0, 0.005, 0.01, 0.02, 0.05],
-        repeats=100,
-        seed=123,
-        save_path="project/results/tfim_abc/readout_noise_energ_g=3.0.json",
-    )
+        _result_path(results_root, "tfim_abc", "circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x3.json");
+        p_values=[0.0, 0.005, 0.01, 0.02, 0.05], repeats=100, seed=123,
+        save_path=_output_path(output_dir, "tfim_abc", "readout_noise_energ_g=3.0.json"))
 end
 
-function plot_readout_energy_target()
-    plot_readout_energy("project/results/tfim_abc/readout_noise_energ_g=3.0.json";
-        markersize=4,
-        save_path="project/results/tfim_abc/figures/readout_noise_energ_g=3.0.pdf")
+function plot_readout_energy_target(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
+    plot_readout_energy(_result_path(results_root, "tfim_abc", "readout_noise_energ_g=3.0.json");
+        markersize=4, save_path=_output_path(output_dir, "tfim_abc", "figures", "readout_noise_energ_g=3.0.pdf"))
 end
 
-function plot_readout_energy_bias_target()
-    plot_readout_energy_bias("project/results/tfim_abc/readout_noise_energ_g=3.0.json";
-        markersize=4,
-        save_path="project/results/tfim_abc/figures/readout_noise_energ_error_g=3.0.pdf")
+function plot_readout_energy_bias_target(; results_root::AbstractString=DEFAULT_RESULTS_ROOT, output_dir::AbstractString=results_root)
+    plot_readout_energy_bias(_result_path(results_root, "tfim_abc", "readout_noise_energ_g=3.0.json");
+        markersize=4, save_path=_output_path(output_dir, "tfim_abc", "figures", "readout_noise_energ_error_g=3.0.pdf"))
 end
 
 const TARGETS = Dict{String, Function}(
@@ -376,16 +393,23 @@ const TARGETS = Dict{String, Function}(
     "structure-factors-discrete-data" => save_structure_factors_combined_discrete_data,
     "structure-factors-discrete" => plot_structure_factors_combined_discrete,
     "bond-energy-exact"       => plot_bond_energy_exact,
+    "bond-energy-exact-data"  => compute_bond_energy_exact_data_target,
+    "heisenberg-training-history-data" => compute_heisenberg_training_history_data_target,
+    "energy-vs-g-tfim-data"   => compute_energy_vs_g_tfim_data,
     "energy-vs-g-tfim"        => plot_energy_vs_g_tfim,
+    "energy-vs-J2-heisenberg-data" => compute_energy_vs_J2_heisenberg_data,
     "energy-vs-J2-heisenberg" => plot_energy_vs_J2_heisenberg,
     "variance-data"           => compute_variance_data,
     "variance-vs-samples"     => plot_variance_vs_samples_target,
     "variance-data-tfim"      => compute_variance_data_tfim,
     "variance-vs-samples-tfim" => plot_variance_vs_samples_tfim_target,
     "energy-vs-inv-samples"   => plot_energy_vs_inv_samples_target,
+    "tfim-observables-vs-g-data" => compute_tfim_observables_vs_g_data_target,
     "connected-corr-vs-g"     => plot_connected_corr_vs_g_target,
+    "corr-length-vs-g-data"   => compute_corr_length_vs_g_data,
     "corr-length-vs-g"        => plot_corr_length_vs_g,
     "magnetization-vs-g"      => plot_magnetization_vs_g_target,
+    "energy-dynamics-tfim-data" => compute_energy_dynamics_tfim_data,
     "energy-dynamics-tfim"    => plot_energy_dynamics_tfim,
     "circuit-block"           => plot_circuit_block_target,
     "circuit-full"            => plot_channel_circuit_target,
@@ -395,24 +419,53 @@ const TARGETS = Dict{String, Function}(
 )
 
 function main(args::Vector{String})
-    if isempty(args)
-        println(stderr, "usage: julia --project=.. postprocess.jl <target>")
+    results_root = DEFAULT_RESULTS_ROOT
+    output_dir = DEFAULT_RESULTS_ROOT
+    target = nothing
+    i = 1
+    while i <= length(args)
+        arg = args[i]
+        if arg == "--results-root" || arg == "--output-dir"
+            i == length(args) && error("$arg requires a path")
+            value = abspath(args[i + 1])
+            if arg == "--results-root"
+                results_root = value
+            else
+                output_dir = value
+            end
+            i += 1
+        elseif startswith(arg, "--")
+            error("unknown option: $arg")
+        elseif isnothing(target)
+            target = arg
+        else
+            error("only one plot target may be supplied")
+        end
+        i += 1
+    end
+    if isnothing(target)
+        println(stderr, "usage: julia --project=. project/postprocess.jl [--results-root PATH] [--output-dir PATH] <target>")
         println(stderr, "available targets:")
         for k in sort(collect(keys(TARGETS)))
             println(stderr, "  ", k)
         end
         exit(1)
     end
-    target = args[1]
     if !haskey(TARGETS, target)
         println(stderr, "unknown target: ", target)
         println(stderr, "available: ", join(sort(collect(keys(TARGETS))), ", "))
         exit(1)
     end
-    cd(REPO_ROOT)
-    TARGETS[target]()
+    run_target(target; results_root=results_root, output_dir=output_dir)
 end
 
-if abspath(PROGRAM_FILE) == @__FILE__
+"""Run a named plotting target with explicit source and destination roots."""
+function run_target(target::AbstractString; results_root::AbstractString=DEFAULT_RESULTS_ROOT,
+                    output_dir::AbstractString=results_root)
+    haskey(TARGETS, target) || error("unknown target: $target")
+    return TARGETS[target](; results_root=abspath(results_root), output_dir=abspath(output_dir))
+end
+
+if abspath(PROGRAM_FILE) == abspath(@__FILE__)
     main(ARGS)
 end

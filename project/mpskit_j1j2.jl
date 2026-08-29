@@ -155,16 +155,19 @@ function run_idmrg_reference(;
     return output
 end
 
-# =============================================================================
-# Run the reference calculation
-# =============================================================================
+"""Run the historical iDMRG/VUMPS reference example only when explicitly called."""
+function run_default_idmrg_reference(; output_file::AbstractString=joinpath(@__DIR__, "results", "idmrg_reference_j1j2_Ly=4.json"))
+    return run_idmrg_reference(;
+        J1=1.0,
+        row=4,
+        unit_cell_cols=2,
+        J2_values=collect(0.0:0.1:0.1),
+        D_values=[2],
+        convergence_tol=1e-6,
+        output_file=output_file,
+    )
+end
 
-output = run_idmrg_reference(;
-    J1=1.0,
-    row=4,
-    unit_cell_cols=2,
-    J2_values=collect(0.0:0.1:0.1),
-    D_values=[2],
-    convergence_tol=1e-6,
-    output_file=joinpath(@__DIR__, "results", "idmrg_reference_j1j2_Ly=4.json")
-)
+if abspath(PROGRAM_FILE) == abspath(@__FILE__)
+    println(stderr, "This file defines iDMRG/VUMPS helpers; call run_default_idmrg_reference(...) explicitly.")
+end

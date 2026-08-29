@@ -3,9 +3,10 @@
 *.jl.mem
 /Manifest.toml
 /docs/Manifest.toml
+/project/Manifest.toml
 /docs/build/
+/docs/superpowers/
 
-Manifest.toml
 .vscode/
 .DS_Store
 
@@ -18,3 +19,6 @@ test/data
 *.pdf
 *.jls
 /states/
+/release-staging/
+/project/results/
+/reproduced-figures/

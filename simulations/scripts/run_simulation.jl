@@ -2,7 +2,7 @@
 Config-driven simulation runner for IsoPEPS.
 
 Usage:
-    julia --project=simulations simulations/scripts/run_simulation.jl configs/tfim_scan_g.toml
+    julia --project=. simulations/scripts/run_simulation.jl simulations/configs/tfim_scan_g.toml
 """
 
 using TOML
@@ -129,13 +129,17 @@ function run_simulation(config_path::String)
     println("\nAll simulations complete.")
 end
 
-# Entry point
-if !isempty(ARGS)
-    run_simulation(ARGS[1])
-else
-    println("Usage: julia --project=simulations simulations/scripts/run_simulation.jl <config.toml>")
-    println("Example: julia --project=simulations simulations/scripts/run_simulation.jl simulations/configs/tfim_scan_g.toml")
+function main(args::Vector{String})
+    if isempty(args)
+        println("Usage: julia --project=. simulations/scripts/run_simulation.jl <config.toml>")
+        println("Example: julia --project=. simulations/scripts/run_simulation.jl simulations/configs/tfim_scan_g.toml")
+    elseif length(args) == 1
+        run_simulation(args[1])
+    else
+        error("expected exactly one configuration path")
+    end
 end
 
-
-run_simulation("simulations/configs/heisenberg_j1j2_scan_J2.toml")
+if abspath(PROGRAM_FILE) == abspath(@__FILE__)
+    main(ARGS)
+end

@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use IsoPEPS.jl, please cite the associated paper and this version-specific software record."
+title: "IsoPEPS.jl"
+type: software
+authors:
+  - family-names: "Rong"
+    given-names: "Yuqing"
+license: MIT
+repository-code: "https://github.com/yuqingrong/IsoPEPS.jl"
+version: "1.0.0"
+abstract: "Julia tools for isometric projected entangled pair states on cylindrical geometries using a spiral ordering."

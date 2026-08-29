@@ -14,7 +14,9 @@ function _unit_cell_suffix(unit_cell::Symbol; share_params::Bool=true,
                            structure::Union{Symbol,String,Nothing}=nothing)
     if unit_cell === :single
         gate_structure = IsoPEPS._normalize_gate_structure(structure, share_params)
-        return gate_structure === :aaa ? "_1x1.json" : "_1x1_$(gate_structure).json"
+        gate_structure === :aaa && return "_1x1.json"
+        gate_structure === :abc && return "_1x3.json"
+        return "_1x1_$(gate_structure).json"
     end
     unit_cell === :two_by_two && return "_2x2.json"
     throw(ArgumentError("unit_cell must be :single or :two_by_two"))
@@ -268,45 +270,39 @@ function simulation(; model::String="tfim", scan_param::Symbol, scan_values::Vec
 end
 
 
-# ── Example: Heisenberg J1-J2 ──
-simulation(;
-    model="heisenberg_j1j2",
-    scan_param=:J2,
-    scan_values=[0.5],
-    J1=1.0,
-    row=6, p=3, nqubits=3,
-    maxiter=1000,
-    seed=123,
-    verbose=true,
-    output_dir=joinpath(@__DIR__, "results/heisenberg"),
-    conv_step=300,
-    samples=6000,
-    n_runs=10,
-    abstol=0.01,
-    unit_cell=:two_by_two,
-    warm_start=false,
-    resume_checkpoint=false,
-    post_select_exact=true,
-    post_select_n=20,
-)
-#=
-simulation(;
-    model="tfim",
-    scan_param=:g,
-    scan_values=[3.0],
-    J=1.0,
-    row=3, p=3, nqubits=3,
-    maxiter=2000,
-    seed=123,
-    verbose=true,
-    output_dir=joinpath(@__DIR__, "results_tfim_abc"),
-    structure=:abc,
-    conv_step=300,
-    samples=6000,
-    n_runs=10,
-    abstol=0.01,
-    unit_cell=:single,
-    post_select_exact=true,
-    post_select_n=10,
-)
-=#
+"""Run the previously inlined Heisenberg example only when explicitly requested."""
+function run_heisenberg_example(; output_dir::AbstractString=joinpath(@__DIR__, "results", "heisenberg"))
+    simulation(;
+        model="heisenberg_j1j2",
+        scan_param=:J2,
+        scan_values=[0.5],
+        J1=1.0,
+        row=6, p=3, nqubits=3,
+        maxiter=1000,
+        seed=123,
+        verbose=true,
+        output_dir=output_dir,
+        conv_step=300,
+        samples=6000,
+        n_runs=10,
+        abstol=0.01,
+        unit_cell=:two_by_two,
+        warm_start=false,
+        resume_checkpoint=false,
+        post_select_exact=true,
+        post_select_n=20,
+    )
+end
+
+function main(args::Vector{String})
+    if args == ["--example-heisenberg"]
+        run_heisenberg_example()
+    else
+        println(stderr, "usage: julia --project=. project/simulation.jl --example-heisenberg")
+        println(stderr, "This file defines simulation(...); it does not run an optimization on import.")
+    end
+end
+
+if abspath(PROGRAM_FILE) == abspath(@__FILE__)
+    main(ARGS)
+end

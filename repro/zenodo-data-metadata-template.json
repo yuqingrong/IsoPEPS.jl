@@ -1,0 +1,30 @@
+{
+  "metadata": {
+    "title": "Data for: Sampling isometric tensor network states with monitored quantum circuits",
+    "description": "Curated numerical data and manuscript figure baselines for the IsoPEPS study. The package separates raw circuit-sampling JSON inputs from processed figure data and independent reference scans. MANIFEST.sha256 verifies every staged file, and SOURCE-MANIFEST.sha256 records the source-file checksums used to build the package.",
+    "version": "1.0.0",
+    "upload_type": "dataset",
+    "access_right": "open",
+    "license": "cc-by-4.0",
+    "language": "eng",
+    "creators": [
+      {
+        "name": "Rong, Yuqing"
+      }
+    ],
+    "keywords": [
+      "tensor networks",
+      "projected entangled pair states",
+      "transverse-field Ising model",
+      "Heisenberg model",
+      "reproducible research"
+    ],
+    "related_identifiers": [
+      {
+        "identifier": "https://github.com/yuqingrong/IsoPEPS.jl",
+        "relation": "isSupplementTo",
+        "resource_type": "software"
+      }
+    ]
+  }
+}

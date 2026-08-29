@@ -1,0 +1,185 @@
+schema_version = 1
+package_name = "IsoPEPS Notes curated paper data"
+description = "Strict local allowlist for a future public data release."
+
+# These files and directories are intentionally never copied from an
+# allowlisted tree. Exploratory scans outside the listed trees are not copied
+# because they are not listed at all.
+exclude_globs = [
+    "**/.DS_Store",
+    "**/.checkpoint_*",
+    "reference/states/**",
+]
+
+[[directories]]
+source = "project/results/tfim_abc"
+destination = "results/tfim_abc/raw"
+purpose = "TFIM optimized circuit inputs used by manuscript figure workflows"
+include_files = [
+    "circuit_tfim_J=1.0_g=0.0_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=0.25_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=0.5_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=0.75_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=1.0_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=1.25_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=1.5_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=1.75_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=2.0_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=2.25_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=2.5_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=2.75_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=3.25_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=3.5_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=3.75_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=4.0_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=4.25_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=4.5_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=4.75_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=5.0_row=3_p=3_nqubits=3_1x3.json",
+]
+
+[[directories]]
+source = "project/results/tfim_abc/figures"
+destination = "results/tfim_abc/processed"
+purpose = "TFIM derived figure-ready data"
+include_files = [
+    "tfim_energy_vs_g.json",
+    "tfim_energy_vs_g_error.json",
+    "energy_dynamics_vs_g.json",
+    "tfim_correlation_length_vs_g.json",
+    "tfim_connected_correlation_vs_g.json",
+    "tfim_magnetization_vs_g.json",
+    "tfim_variance_vs_samples.json",
+]
+
+[[files]]
+source = "project/results/tfim_abc/readout_noise_energ_g=3.0.json"
+destination = "results/tfim_abc/processed/readout_noise_energ_g=3.0.json"
+purpose = "TFIM derived readout-noise scan"
+
+[[directories]]
+source = "project/results/heisenberg"
+destination = "results/heisenberg/raw"
+purpose = "J1-J2 optimized circuit inputs used by manuscript figure workflows"
+include_files = [
+    "circuit_heisenberg_j1j2_J1=1.0_J2=0.0_row=4_p=3_nqubits=3_2x2.json",
+    "circuit_heisenberg_j1j2_J1=1.0_J2=0.1_row=4_p=3_nqubits=3_2x2.json",
+    "circuit_heisenberg_j1j2_J1=1.0_J2=0.2_row=4_p=3_nqubits=3_2x2.json",
+    "circuit_heisenberg_j1j2_J1=1.0_J2=0.3_row=4_p=3_nqubits=3_2x2.json",
+    "circuit_heisenberg_j1j2_J1=1.0_J2=0.4_row=4_p=3_nqubits=3_2x2.json",
+    "circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2.json",
+    "circuit_heisenberg_j1j2_J1=1.0_J2=0.6_row=4_p=3_nqubits=3_2x2.json",
+    "circuit_heisenberg_j1j2_J1=1.0_J2=0.7_row=4_p=3_nqubits=3_2x2.json",
+    "circuit_heisenberg_j1j2_J1=1.0_J2=0.8_row=4_p=3_nqubits=3_2x2.json",
+    "circuit_heisenberg_j1j2_J1=1.0_J2=0.9_row=4_p=3_nqubits=3_2x2.json",
+    "circuit_heisenberg_j1j2_J1=1.0_J2=1.0_row=4_p=3_nqubits=3_2x2.json",
+]
+
+[[directories]]
+source = "project/results/heisenberg/figures"
+destination = "results/heisenberg/processed"
+purpose = "J1-J2 derived figure-ready data"
+include_files = [
+    "bond_energy_exact.json",
+    "circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2_training_history.json",
+    "heisenberg_energy_vs_J2.json",
+    "heisenberg_variance_vs_samples.json",
+]
+
+[[directories]]
+source = "project/results/heisenberg"
+destination = "results/heisenberg/processed"
+purpose = "J1-J2 derived sampling summaries"
+include_files = [
+    "M2_sampling.json",
+    "sf.json",
+]
+
+[[directories]]
+source = "project/results/reference"
+destination = "results/reference"
+purpose = "DMRG and PEPSKit reference data; local MPS/DMRG states are excluded"
+include_files = [
+    "dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json",
+    "dmrg_j1j2_D192_Ly4_J2scan_energyconv.json",
+    "dmrg_bulk_tfim_Ly3_D2_gscan.json",
+    "dmrg_bulk_tfim_Ly3_D32_gscan.json",
+    "dmrg_sampling_matched_Ly4_D2_J2scan.json",
+    "pepskit_results_D=2.json",
+]
+
+[[files]]
+source = "project/results/mpskit_results_Ly=3_D=32.json"
+destination = "results/mpskit_results_Ly=3_D=32.json"
+purpose = "VUMPS/MPSKit TFIM reference data"
+
+# Exact manuscript image baselines. The manuscript itself is read-only; this
+# tool copies only these figure assets into the staging package.
+[[paper_assets]]
+source = "M2_comparison-1.pdf"
+destination = "figures/published/M2_comparison-1.pdf"
+
+[[paper_assets]]
+source = "NNconnected_corr_vs_g.pdf"
+destination = "figures/published/NNconnected_corr_vs_g.pdf"
+
+[[paper_assets]]
+source = "bond_energy_exact.pdf"
+destination = "figures/published/bond_energy_exact.pdf"
+
+[[paper_assets]]
+source = "circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2_training_history.pdf"
+destination = "figures/published/circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2_training_history.pdf"
+
+[[paper_assets]]
+source = "corr_length_vs_g_row=3.pdf"
+destination = "figures/published/corr_length_vs_g_row=3.pdf"
+
+[[paper_assets]]
+source = "energy_dynamics_vs_g.pdf"
+destination = "figures/published/energy_dynamics_vs_g.pdf"
+
+[[paper_assets]]
+source = "heisenberg_energy_vs_j2-2.pdf"
+destination = "figures/published/heisenberg_energy_vs_j2-2.pdf"
+
+[[paper_assets]]
+source = "heisenberg_variance_vs_samples_J2=0.5.pdf"
+destination = "figures/published/heisenberg_variance_vs_samples_J2=0.5.pdf"
+
+[[paper_assets]]
+source = "magnetization_vs_g-1.pdf"
+destination = "figures/published/magnetization_vs_g-1.pdf"
+
+[[paper_assets]]
+source = "main_figure.png"
+destination = "figures/published/main_figure.png"
+
+[[paper_assets]]
+source = "readout_noise_energ_error_g=3.0.pdf"
+destination = "figures/published/readout_noise_energ_error_g=3.0.pdf"
+
+[[paper_assets]]
+source = "readout_noise_energ_g=3.0.pdf"
+destination = "figures/published/readout_noise_energ_g=3.0.pdf"
+
+[[paper_assets]]
+source = "spiral_equivalence.pdf"
+destination = "figures/published/spiral_equivalence.pdf"
+
+[[paper_assets]]
+source = "structure_factors_combined.pdf"
+destination = "figures/published/structure_factors_combined.pdf"
+
+[[paper_assets]]
+source = "tfim_energy_vs_g.pdf"
+destination = "figures/published/tfim_energy_vs_g.pdf"
+
+[[paper_assets]]
+source = "tfim_energy_vs_g_error.pdf"
+destination = "figures/published/tfim_energy_vs_g_error.pdf"
+
+[[paper_assets]]
+source = "tfim_variance_vs_samples_g=3.0.pdf"
+destination = "figures/published/tfim_variance_vs_samples_g=3.0.pdf"

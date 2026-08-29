@@ -1329,3 +1329,189 @@ function plot_bond_energy_pattern(results_dir::String,
 
     return fig, patterns
 end
+
+"""Convert a nested JSON array to a checked floating-point matrix."""
+function _processed_bond_energy_matrix(values, rows::Int, columns::Int, label::String)
+    values isa AbstractVector || throw(ArgumentError("$label must be a nested array"))
+    length(values) == rows || throw(ArgumentError(
+        "$label has $(length(values)) rows; expected $rows"))
+    matrix = Matrix{Float64}(undef, rows, columns)
+    for row in 1:rows
+        source_row = values[row]
+        source_row isa AbstractVector || throw(ArgumentError(
+            "$label row $row must be an array"))
+        length(source_row) == columns || throw(ArgumentError(
+            "$label row $row has $(length(source_row)) columns; expected $columns"))
+        for column in 1:columns
+            value = Float64(source_row[column])
+            isfinite(value) || throw(ArgumentError(
+                "$label[$row, $column] must be finite"))
+            matrix[row, column] = value
+        end
+    end
+    return matrix
+end
+
+"""Load and validate exact multi-panel bond-energy data saved as JSON."""
+function load_bond_energy_pattern_data(path::String)::Dict{String,Any}
+    isfile(path) || error("Processed bond-energy data file not found: $path")
+    source = open(path, "r") do io
+        JSON3.read(io, Dict)
+    end
+    Int(get(source, "schema_version", 0)) == 1 || throw(ArgumentError(
+        "unsupported bond-energy data schema in $path"))
+    get(source, "method", nothing) == "exact" || throw(ArgumentError(
+        "bond-energy data in $path must have method=\"exact\""))
+
+    row = Int(get(source, "row", 0))
+    max_cols = Int(get(source, "max_cols", 0))
+    row > 0 || throw(ArgumentError("bond-energy data in $path must have a positive row count"))
+    max_cols > 1 || throw(ArgumentError("bond-energy data in $path must have max_cols > 1"))
+
+    raw_entries = get(source, "entries", nothing)
+    raw_entries isa AbstractVector && !isempty(raw_entries) || throw(ArgumentError(
+        "bond-energy data in $path must contain a nonempty entries array"))
+
+    entries = Dict{String,Any}[]
+    for (index, raw_entry) in enumerate(raw_entries)
+        raw_entry isa AbstractDict || throw(ArgumentError(
+            "bond-energy entry $index in $path must be an object"))
+        j2 = Float64(get(raw_entry, "j2", NaN))
+        isfinite(j2) || throw(ArgumentError("bond-energy entry $index in $path has invalid j2"))
+        vertical = _processed_bond_energy_matrix(
+            get(raw_entry, "vertical", nothing), row, max_cols, "entries[$index].vertical")
+        horizontal = _processed_bond_energy_matrix(
+            get(raw_entry, "horizontal", nothing), row, max_cols - 1, "entries[$index].horizontal")
+        push!(entries, Dict("j2" => j2, "vertical" => vertical, "horizontal" => horizontal))
+    end
+
+    j2_values = Float64.(collect(get(source, "j2_values", Float64[])))
+    j2_values == [entry["j2"] for entry in entries] || throw(ArgumentError(
+        "bond-energy j2_values do not match entries in $path"))
+    return Dict(
+        "schema_version" => 1,
+        "method" => "exact",
+        "j2_values" => j2_values,
+        "row" => row,
+        "max_cols" => max_cols,
+        "entries" => entries,
+    )
+end
+
+"""
+    compute_bond_energy_pattern_data(results_dir, J2_values; max_cols=5, save_path=nothing)
+
+Compute the exact bond-energy patterns for a Heisenberg scan and optionally
+save the tiled values required to redraw the multi-panel figure.
+"""
+function compute_bond_energy_pattern_data(results_dir::String,
+                                          J2_values::AbstractVector{<:Real};
+                                          max_cols::Int=5,
+                                          save_path::Union{String,Nothing}=nothing)::Dict{String,Any}
+    isempty(J2_values) && throw(ArgumentError("J2_values must not be empty"))
+    max_cols > 1 || throw(ArgumentError("max_cols must be greater than one"))
+    values = Float64.(J2_values)
+    entries = Dict{String,Any}[]
+    row = nothing
+
+    for value in values
+        result_file = joinpath(results_dir,
+            "circuit_heisenberg_j1j2_J1=1.0_J2=$(value)_row=4_p=3_nqubits=3_2x2.json")
+        isfile(result_file) || throw(ArgumentError(
+            "exact result file not found for J2=$value: $result_file"))
+        println("=== Computing processed bond-energy data [exact, J2=$value] ===")
+        _figure, bond_data = plot_bond_energy_pattern(result_file;
+                                                        max_cols=max_cols,
+                                                        use_exact=true)
+        entry_row = size(bond_data[:vertical], 1)
+        isnothing(row) && (row = entry_row)
+        entry_row == row || throw(ArgumentError(
+            "bond-energy inputs must use a common row count"))
+        push!(entries, Dict(
+            "j2" => value,
+            "vertical" => [collect(view(bond_data[:vertical], index, :)) for index in 1:entry_row],
+            "horizontal" => [collect(view(bond_data[:horizontal], index, :)) for index in 1:entry_row],
+        ))
+    end
+
+    payload = Dict{String,Any}(
+        "schema_version" => 1,
+        "method" => "exact",
+        "j2_values" => values,
+        "row" => row,
+        "max_cols" => max_cols,
+        "entries" => entries,
+    )
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        open(save_path, "w") do io
+            JSON3.write(io, payload)
+        end
+        println("Processed bond-energy data saved to: $save_path")
+    end
+    return payload
+end
+
+"""
+    plot_bond_energy_pattern_from_processed_data(path; figsize=nothing, save_path=nothing)
+
+Draw the multi-panel exact bond-energy figure exclusively from processed JSON
+data, without loading or contracting a circuit result.
+"""
+function plot_bond_energy_pattern_from_processed_data(path::String;
+                                                       figsize=nothing,
+                                                       save_path::Union{String,Nothing}=nothing)::Figure
+    data = load_bond_energy_pattern_data(path)
+    entries = data["entries"]
+    row = Int(data["row"])
+    max_cols = Int(data["max_cols"])
+    colorrange = (-0.5, 0.5)
+
+    unit = 35
+    panel_width = max_cols * unit + 10
+    default_width = length(entries) * panel_width + 95
+    default_height = row * unit + 61
+    figure_size = isnothing(figsize) ? (default_width, default_height) : figsize
+
+    fig = with_theme(paper_theme()) do
+        figure = Figure(size=figure_size)
+        for (panel, entry) in enumerate(entries)
+            Label(figure[1, panel], math_label("\\mathit{J}_2=$(entry["j2"])");
+                  fontsize=_BOND_ENERGY_PANEL_LABELSIZE,
+                  font=PAPER_FONT,
+                  halign=:center,
+                  valign=:bottom,
+                  padding=(0, 0, 0, 0))
+            axis = Axis(figure[2, panel]; aspect=DataAspect())
+            pattern = Dict(:vertical => entry["vertical"], :horizontal => entry["horizontal"])
+            _draw_bond_energy_panel!(axis, pattern; colorrange=colorrange)
+            hidedecorations!(axis)
+            hidespines!(axis)
+            colsize!(figure.layout, panel, Fixed(panel_width))
+        end
+
+        colorbar = Colorbar(figure[2, length(entries) + 1];
+                            colormap=:RdBu,
+                            limits=colorrange,
+                            vertical=true,
+                            height=(row - 1) * unit + 44,
+                            label=_BOND_ENERGY_LABEL,
+                            labelsize=_BOND_ENERGY_LABELSIZE,
+                            ticklabelsize=_BOND_COLORBAR_TICKLABELSIZE,
+                            width=_BOND_COLORBAR_WIDTH)
+        colorbar.tellheight[] = false
+        colorbar.valign[] = :bottom
+        rowsize!(figure.layout, 1, Fixed(26))
+        rowsize!(figure.layout, 2, Fixed(row * unit + 10))
+        rowgap!(figure.layout, 2)
+        colgap!(figure.layout, 4)
+
+        if !isnothing(save_path)
+            mkpath(dirname(save_path))
+            save(save_path, figure)
+            println("Figure saved to: $save_path")
+        end
+        figure
+    end
+    return fig
+end
