@@ -1,6 +1,6 @@
 {
   "title": "IsoPEPS.jl",
-  "description": "Julia tools for isometric projected entangled pair states on cylinder geometries.",
+  "description": "Julia tools for isometric projected entangled pair states on cylindrical geometries using a spiral ordering.",
   "version": "1.0.0",
   "upload_type": "software",
   "access_right": "open",

@@ -8,4 +8,4 @@ authors:
 license: MIT
 repository-code: "https://github.com/yuqingrong/IsoPEPS.jl"
 version: "1.0.0"
-abstract: "Julia tools for isometric projected entangled pair states on cylinder geometries."
+abstract: "Julia tools for isometric projected entangled pair states on cylindrical geometries using a spiral ordering."

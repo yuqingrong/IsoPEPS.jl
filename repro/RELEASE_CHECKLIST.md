@@ -13,8 +13,8 @@ perform any public-release item until every author approves the release.
 - [ ] Review `.zenodo.json`, `CITATION.cff`, and
   `repro/zenodo-data-metadata-template.json`; add only DOI values that have
   been reserved or assigned for these exact records.
-- [ ] Confirm that the root manifest still matches the `1.0.0` release
-  candidate; update it only if the dependency resolution changes.
+- [ ] Confirm that the root `Project.toml` still matches the `1.0.0` release
+  candidate and that no root `Manifest.toml` is tracked.
 - [ ] Create a signed/reviewed Git tag and GitHub release only after approval.
 - [ ] Create versioned Zenodo records for the MIT-licensed code and the
   CC-BY-4.0 data package, as appropriate.
