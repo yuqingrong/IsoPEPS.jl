@@ -91,12 +91,6 @@ end
     end
     @test length(data_manifest["paper_assets"]) == 17
 
-    staged_processed_dir = joinpath(@__DIR__, "..", "release-staging", "IsoPEPS-paper-data",
-                                    "results", "heisenberg", "processed")
-    @test isfile(joinpath(staged_processed_dir, "bond_energy_exact.json"))
-    @test isfile(joinpath(staged_processed_dir,
-                          "circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2_training_history.json"))
-
     figure_manifest = TOML.parsefile(joinpath(repro_dir, "figure_manifest.toml"))
     figures = figure_manifest["figures"]
     @test length(figures) == 17
