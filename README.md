@@ -2,7 +2,9 @@
 
 [![Build Status](https://github.com/yuqingrong/IsoPEPS.jl/actions/workflows/CI.yml/badge.svg?branch=master)](https://github.com/yuqingrong/IsoPEPS.jl/actions/workflows/CI.yml?query=branch%3Amaster)
 
-IsoPEPS.jl implements isometric projected entangled pair states for cylinder geometries, with optimization, exact and sampled observables, and paper-figure post-processing.
+IsoPEPS.jl implements isometric projected entangled pair states on cylindrical
+geometries using a spiral ordering, with optimization, exact and sampled
+observables, and paper-figure post-processing.
 
 ## Install and test
 
