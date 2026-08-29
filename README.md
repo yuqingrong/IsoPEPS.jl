@@ -28,6 +28,9 @@ julia --project=. repro/stage_data.jl \
   --destination release-staging/IsoPEPS-paper-data
 ```
 
+The staged package separates saved circuit inputs in `raw/` from the canonical
+figure-ready summaries in `processed/`.
+
 Then redraw the paper figures from the canonical processed data:
 
 ```bash
