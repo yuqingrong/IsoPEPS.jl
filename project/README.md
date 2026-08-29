@@ -1,23 +1,25 @@
-# Research Scripts
+# Research scripts
 
-This directory contains research code and simulation scripts for the IsoPEPS package.
+This directory contains research simulation, reference, and post-processing
+scripts for IsoPEPS.
 
-## Setup
+## Environment
 
-This folder has its own Julia environment. To use it:
+Use the repository-root Julia environment for every script here. From the
+repository root:
 
-```julia
-cd("project")
-using Pkg
-Pkg.activate(".")
-Pkg.instantiate()  # First time only
-```
-
-Or from the command line:
 ```bash
-cd project
-julia --project=.
+julia --project=. project/simulation.jl
+julia --project=. project/postprocess.jl <target>
 ```
+
+For interactive work, start `julia --project=.` from the repository root and
+then include the desired script, for example
+`include("project/simulation.jl")`.
+
+`project/Project.toml` and `project/Manifest.toml` are retained only as legacy
+records of an earlier standalone research environment. Do not update or
+instantiate them for the current workflow.
 
 ## Contents
 
@@ -31,11 +33,7 @@ julia --project=.
 ## Usage
 
 ```julia
-# Activate the project environment
-using Pkg
-Pkg.activate("project")
-
-# Include and run
+# Start Julia from the repository root with `--project=.`; then include and run
 include("project/simulation.jl")
 
 # Or interactively use functions after including
@@ -50,8 +48,6 @@ simulation(J, g, row, p, nqubits; maxiter=1000)
 
 ## Output
 
-Simulation results are saved to a `data/` directory with naming convention:
-- `compile_energy_history_*.dat` - Energy convergence history
-- `compile_params_history_*.dat` - Parameter evolution
-- `compile_Z_list_list_*.dat` - Z measurement results
-- `compile_X_list_list_*.dat` - X measurement results
+Research outputs are local files under `project/results/`. They are not part
+of the Julia package or the committed source tree. Use the reproducibility
+workflow documented in the root README to create a curated paper-data package.

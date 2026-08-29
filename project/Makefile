@@ -35,7 +35,7 @@ H_SAMP_J206 = $(HRES)/samples_heisenberg_J2=0.6.json
 H_SAMP_J21  = $(HRES)/samples_heisenberg_J2=1.0.json
 
 # TFIM g=3 circuit JSON (under tfim_abc per the model->dir convention)
-T_G3_ABC    = $(ABC)/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json
+T_G3_ABC    = $(ABC)/circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x3.json
 
 # Heisenberg figure outputs
 M2_PDF         = $(HFIG)/M2_comparison.pdf
@@ -44,6 +44,7 @@ SF_PDF         = $(HFIG)/structure_factors_combined.pdf
 SF_DISCRETE_JSON = $(HRES)/sf_discrete.json
 SF_DISCRETE_PDF  = $(HFIG)/structure_factors_combined_discrete.pdf
 BE_EXACT_PDF   = $(HFIG)/bond_energy_exact.pdf
+H_E_JSON       = $(HFIG)/heisenberg_energy_vs_J2.json
 H_E_PDF        = $(HFIG)/heisenberg_energy_vs_J2.pdf
 VAR_PDF        = $(HFIG)/heisenberg_variance_vs_samples_J2=0.5.pdf
 ANALYZE_STAMP  = $(HFIG)/.analyze-heisenberg.stamp
@@ -53,11 +54,18 @@ VAR_TFIM_JSON  = $(AFIG)/tfim_variance_vs_samples.json
 VAR_TFIM_PDF   = $(AFIG)/tfim_variance_vs_samples_g=3.0.pdf
 
 # TFIM figure outputs
+TFIM_E_JSON    = $(AFIG)/tfim_energy_vs_g.json
+TFIM_E_ERR_JSON = $(AFIG)/tfim_energy_vs_g_error.json
 TFIM_E_PDF     = $(AFIG)/tfim_energy_vs_g.pdf
 INV_PDF        = $(AFIG)/tfim_energy_vs_inv_samples_g=3.0.pdf
+NNC_JSON       = $(AFIG)/tfim_connected_correlation_vs_g.json
 NNC_PDF        = $(AFIG)/NNconnected_corr_vs_g.pdf
+CORR_JSON       = $(AFIG)/tfim_correlation_length_vs_g.json
 CORR_PDF       = $(AFIG)/corr_length_vs_g_row=3.pdf
 MAG_PDF        = $(AFIG)/magnetization_vs_g.pdf
+MAG_JSON       = $(AFIG)/tfim_magnetization_vs_g.json
+OBSERVABLES_JSON_STAMP = $(AFIG)/.tfim_observables_vs_g.stamp
+DYN_TFIM_JSON  = $(AFIG)/energy_dynamics_vs_g.json
 DYN_TFIM_PDF   = $(AFIG)/energy_dynamics_vs_g.pdf
 READOUT_E_PDF  = $(AFIG)/readout_noise_energ_g=3.0.pdf
 READOUT_B_PDF  = $(AFIG)/readout_noise_energ_error_g=3.0.pdf
@@ -89,10 +97,10 @@ help:  ## list available targets
 	@echo "Single-plot aliases (use 'make <alias>'):"
 	@echo "  m2-comparison           structure-factors       structure-factors-discrete"
 	@echo "  structure-factors-discrete-data                 bond-energy-exact"
-	@echo "  energy-vs-g-tfim        energy-vs-J2-heisenberg"
+	@echo "  energy-vs-g-tfim-data   energy-vs-g-tfim        energy-vs-J2-heisenberg"
 	@echo "  variance-data           variance-vs-samples     energy-vs-inv-samples"
-	@echo "  connected-corr-vs-g     corr-length-vs-g        magnetization-vs-g"
-	@echo "  energy-dynamics-tfim"
+	@echo "  tfim-observables-vs-g-data  connected-corr-vs-g  corr-length-vs-g-data"
+	@echo "  energy-dynamics-tfim-data  energy-dynamics-tfim"
 	@echo "  circuit-block           circuit-full"
 	@echo "  readout-data            readout-energy          readout-bias"
 	@echo
@@ -152,7 +160,10 @@ $(SF_DISCRETE_PDF): $(SF_DISCRETE_JSON) $(SC) | $(HFIG)
 $(BE_EXACT_PDF): $(H_J20) $(H_J205) $(H_J206) $(H_J21) $(SC) | $(HFIG)
 	$(JL) $(SC) bond-energy-exact
 
-$(H_E_PDF): $(SC) | $(HFIG)
+$(H_E_JSON): $(SC) | $(HFIG)
+	$(JL) $(SC) energy-vs-J2-heisenberg-data
+
+$(H_E_PDF): $(H_E_JSON) $(SC) | $(HFIG)
 	$(JL) $(SC) energy-vs-J2-heisenberg
 
 $(VAR_JSON): $(H_J205) $(SC)
@@ -175,22 +186,41 @@ $(ANALYZE_STAMP): $(H_J205) $(SC) | $(HFIG)
 analyze-heisenberg analysis-plots: $(ANALYZE_STAMP)
 
 # TFIM
-$(TFIM_E_PDF): $(SC) | $(AFIG)
+$(TFIM_E_JSON) $(TFIM_E_ERR_JSON): $(SC) | $(AFIG)
+	$(JL) $(SC) energy-vs-g-tfim-data
+
+$(TFIM_E_PDF): $(TFIM_E_JSON) $(TFIM_E_ERR_JSON) $(SC) | $(AFIG)
 	$(JL) $(SC) energy-vs-g-tfim
 
 $(INV_PDF): $(T_G3_ABC) $(SC) | $(AFIG)
 	$(JL) $(SC) energy-vs-inv-samples
 
-$(NNC_PDF): $(SC) | $(AFIG)
+$(OBSERVABLES_JSON_STAMP): $(SC) | $(AFIG)
+	$(JL) $(SC) tfim-observables-vs-g-data
+	@touch $@
+
+$(NNC_JSON): $(OBSERVABLES_JSON_STAMP)
+	@test -f $@ || { rm -f $(OBSERVABLES_JSON_STAMP); $(MAKE) $(OBSERVABLES_JSON_STAMP); test -f $@; }
+
+$(MAG_JSON): $(OBSERVABLES_JSON_STAMP)
+	@test -f $@ || { rm -f $(OBSERVABLES_JSON_STAMP); $(MAKE) $(OBSERVABLES_JSON_STAMP); test -f $@; }
+
+$(NNC_PDF): $(NNC_JSON) $(SC) | $(AFIG)
 	$(JL) $(SC) connected-corr-vs-g
 
-$(CORR_PDF): $(SC) | $(AFIG)
+$(CORR_JSON): $(SC) | $(AFIG)
+	$(JL) $(SC) corr-length-vs-g-data
+
+$(CORR_PDF): $(CORR_JSON) $(SC) | $(AFIG)
 	$(JL) $(SC) corr-length-vs-g
 
-$(MAG_PDF): $(SC) | $(AFIG)
+$(MAG_PDF): $(MAG_JSON) $(SC) | $(AFIG)
 	$(JL) $(SC) magnetization-vs-g
 
-$(DYN_TFIM_PDF): $(SC) | $(AFIG)
+$(DYN_TFIM_JSON): $(SC) | $(AFIG)
+	$(JL) $(SC) energy-dynamics-tfim-data
+
+$(DYN_TFIM_PDF): $(DYN_TFIM_JSON) $(TFIM_E_JSON) $(SC) | $(AFIG)
 	$(JL) $(SC) energy-dynamics-tfim
 
 $(READOUT_JSON): $(T_G3_ABC) $(SC)
@@ -234,15 +264,20 @@ structure-factors-discrete-data: $(SF_DISCRETE_JSON)
 structure-factors-discrete: $(SF_DISCRETE_PDF)
 bond-energy-exact: $(BE_EXACT_PDF)
 energy-vs-g-tfim: $(TFIM_E_PDF)
+energy-vs-g-tfim-data: $(TFIM_E_JSON) $(TFIM_E_ERR_JSON)
+energy-vs-J2-heisenberg-data: $(H_E_JSON)
 energy-vs-J2-heisenberg: $(H_E_PDF)
 variance-data: $(VAR_JSON)
 variance-vs-samples: $(VAR_PDF)
 variance-data-tfim: $(VAR_TFIM_JSON)
 variance-vs-samples-tfim: $(VAR_TFIM_PDF)
 energy-vs-inv-samples: $(INV_PDF)
+tfim-observables-vs-g-data: $(NNC_JSON) $(MAG_JSON)
 connected-corr-vs-g: $(NNC_PDF)
+corr-length-vs-g-data: $(CORR_JSON)
 corr-length-vs-g: $(CORR_PDF)
 magnetization-vs-g: $(MAG_PDF)
+energy-dynamics-tfim-data: $(DYN_TFIM_JSON)
 energy-dynamics-tfim: $(DYN_TFIM_PDF)
 circuit-block: $(BLOCK_PDF)
 circuit-full: $(FULL_PDF)
@@ -255,7 +290,7 @@ clean-figures:
 
 .PHONY: help all-plots energy-plots correlation-plots dynamics-plots circuit-plots readout-plots sf-plots variance-plots analysis-plots clean-figures analyze-heisenberg \
         m2-comparison structure-factors structure-factors-discrete-data structure-factors-discrete bond-energy-exact \
-        energy-vs-g-tfim energy-vs-J2-heisenberg variance-data variance-vs-samples \
-        energy-vs-inv-samples connected-corr-vs-g corr-length-vs-g magnetization-vs-g \
-        energy-dynamics-tfim circuit-block circuit-full readout-data readout-energy readout-bias \
+        energy-vs-g-tfim-data energy-vs-g-tfim energy-vs-J2-heisenberg-data energy-vs-J2-heisenberg variance-data variance-vs-samples \
+        energy-vs-inv-samples tfim-observables-vs-g-data connected-corr-vs-g corr-length-vs-g-data corr-length-vs-g magnetization-vs-g \
+        energy-dynamics-tfim-data energy-dynamics-tfim circuit-block circuit-full readout-data readout-energy readout-bias \
         variance-data-tfim variance-vs-samples-tfim

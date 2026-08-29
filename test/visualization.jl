@@ -3,6 +3,7 @@ using IsoPEPS
 using Random
 using Statistics
 using Bootstrap
+using JSON3
 using CairoMakie: Axis, Colorbar, Errorbars, Figure, Label, Legend, Makie, Scatter, Theme, to_color, with_theme
 
 function write_test_tfim_circuit(path; g=2.0, row=3, p=3, nqubits=3, energy=0.0)
@@ -259,7 +260,7 @@ end
         :scan_param => "g")
     filename = joinpath(
         data_dir,
-        "circuit_tfim_J=1.0_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json")
+        "circuit_tfim_J=1.0_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x3.json")
     save_result(filename, result, input_args)
 
     fig, data = plot_magnetization_vs_g(
@@ -282,9 +283,11 @@ end
     @test data[g].mX ≈ expected_mX
     legend = only(filter(content -> content isa Legend, fig.content))
     @test isnothing(legend.layoutobservables.gridcontent[])
-    @test legend.halign[] == :right
-    @test legend.valign[] == :top
-    @test legend.nbanks[] == 2
+    # The manuscript places this legend at an explicit in-axis anchor.
+    # Makie represents that anchor numerically rather than as :right/:top.
+    @test legend.halign[] ≈ 0.98
+    @test legend.valign[] ≈ 0.78
+    @test legend.nbanks[] == 1
     @test legend.labelsize[] == IsoPEPS.PAPER_LARGE_LEGEND_LABELSIZE
     ax = only(filter(content -> content isa Axis, fig.content))
     @test ax.finallimits[].widths[2] > max(expected_mZ, expected_mX)
@@ -556,11 +559,12 @@ end
         row=row, p=p, nqubits=nqubits, energy_source=:saved,
         dmrg_file=dmrg_file)
 
-    for fig in (fig_energy, fig_error)
+    expected_positions = ((0.18, 0.02), (0.12, 0.04))
+    for (fig, (halign, valign)) in zip((fig_energy, fig_error), expected_positions)
         legend = only(filter(content -> content isa Legend, fig.content))
         @test isnothing(legend.layoutobservables.gridcontent[])
-        @test legend.halign[] == 0.12
-        @test legend.valign[] == 0.04
+        @test legend.halign[] ≈ halign
+        @test legend.valign[] ≈ valign
     end
 end
 
@@ -768,7 +772,7 @@ end
     @test observable_legend.halign[] == 0.02
     @test observable_legend.valign[] == 0.08
     @test observable_legend.margin[] == (1, 1, 1, 1)
-    @test ax.finallimits[].origin[2] < 0
+    @test ax.finallimits[].origin[2] ≈ 0.0
     g = observable_legend.entrygroups[][1]
     legend_labels = [e.label[] for e in g[2]]
     @test legend_labels == [
@@ -816,7 +820,7 @@ end
     @test length(dmrg_reference_lines) == 3
     @test all(plot -> plot.linestyle[] == :solid, isopeps_lines)
     @test all(plot -> plot.linestyle[] == :dash, dmrg_reference_lines)
-    @test [plot.color[] for plot in isopeps_lines] ==
+    @test to_color.([plot.color[] for plot in isopeps_lines]) ==
           to_color.([:blue, :orange, :seagreen])
     @test [plot.color[] for plot in isopeps_lines] ==
           [plot.color[] for plot in dmrg_reference_lines]
@@ -1227,7 +1231,64 @@ end
     @test colorbar.ticklabelsize[] == IsoPEPS._BOND_COLORBAR_TICKLABELSIZE
     @test colorbar.width[] == IsoPEPS._BOND_COLORBAR_WIDTH
     @test colorbar.layoutobservables.gridcontent[].span.cols == 4:4
-    @test colorbar.layoutobservables.gridcontent[].span.rows == 1:2
+    @test colorbar.layoutobservables.gridcontent[].span.rows == 2:2
+end
+
+@testset "processed bond-energy data draws without circuit results" begin
+    path = joinpath(mktempdir(), "bond_energy_exact.json")
+    open(path, "w") do io
+        JSON3.write(io, Dict(
+            "schema_version" => 1,
+            "method" => "exact",
+            "j2_values" => [0.0, 0.5],
+            "row" => 2,
+            "max_cols" => 3,
+            "entries" => [
+                Dict("j2" => 0.0,
+                     "vertical" => [[-0.25, -0.25, -0.25], [-0.25, -0.25, -0.25]],
+                     "horizontal" => [[-0.10, -0.10], [-0.10, -0.10]]),
+                Dict("j2" => 0.5,
+                     "vertical" => [[-0.40, -0.40, -0.40], [-0.40, -0.40, -0.40]],
+                     "horizontal" => [[0.15, 0.15], [0.15, 0.15]]),
+            ],
+        ))
+    end
+
+    fig = plot_bond_energy_pattern_from_processed_data(path)
+    @test fig isa Figure
+    @test length(filter(content -> content isa Axis, fig.content)) == 2
+end
+
+@testset "processed training history draws without resampling" begin
+    directory = mktempdir()
+    path = joinpath(directory, "training_history.json")
+    open(path, "w") do io
+        JSON3.write(io, Dict(
+            "schema_version" => 1,
+            "model" => "heisenberg_j1j2",
+            "J1" => 1.0,
+            "J2" => 0.5,
+            "row" => 4,
+            "p" => 3,
+            "nqubits" => 3,
+            "steps" => [1, 2, 3],
+            "energy_history" => [-0.10, -0.20, -0.30],
+            "exact_energy" => -0.35,
+        ))
+    end
+
+    fig = plot_training_history_from_processed_data(path)
+    @test fig isa Figure
+    @test only(filter(content -> content isa Axis, fig.content)).xlabel[] == "Optimization step"
+
+    # Regression: omitting the manuscript PDF point scale shrinks this plot
+    # from 276×192 pt to 184×128 pt, despite retaining identical data.
+    rendered = joinpath(directory, "training_history.pdf")
+    plot_training_history_from_processed_data(path; save_path=rendered)
+    page_info = read(`$(Sys.which("pdfinfo")) $rendered`, String)
+    dimensions = only(eachmatch(r"Page size:\s+(\d+) x (\d+) pts", page_info))
+    @test 275 <= parse(Int, dimensions.captures[1]) <= 277
+    @test 191 <= parse(Int, dimensions.captures[2]) <= 193
 end
 
 @testset "Sampled expectations match transfer matrix fixed point" begin

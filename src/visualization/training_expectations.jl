@@ -239,6 +239,140 @@ function plot_training_history(result::CircuitOptimizationResult;
         kwargs...)
 end
 
+"""Load and validate a processed training-history JSON data product."""
+function load_training_history_data(path::String)::Dict{String,Any}
+    isfile(path) || error("Processed training-history data file not found: $path")
+    source = open(path, "r") do io
+        JSON3.read(io, Dict)
+    end
+    Int(get(source, "schema_version", 0)) == 1 || throw(ArgumentError(
+        "unsupported training-history data schema in $path"))
+
+    model = String(get(source, "model", ""))
+    isempty(model) && throw(ArgumentError("training-history data in $path is missing model"))
+    J1 = Float64(get(source, "J1", NaN))
+    J2 = Float64(get(source, "J2", NaN))
+    isfinite(J1) && isfinite(J2) || throw(ArgumentError(
+        "training-history data in $path has invalid model couplings"))
+    row = Int(get(source, "row", 0))
+    p = Int(get(source, "p", 0))
+    nqubits = Int(get(source, "nqubits", 0))
+    row > 0 && p > 0 && nqubits > 0 || throw(ArgumentError(
+        "training-history data in $path must have positive row, p, and nqubits"))
+
+    raw_steps = get(source, "steps", nothing)
+    raw_history = get(source, "energy_history", nothing)
+    raw_steps isa AbstractVector && raw_history isa AbstractVector || throw(ArgumentError(
+        "training-history data in $path must contain steps and energy_history arrays"))
+    length(raw_steps) == length(raw_history) && !isempty(raw_steps) || throw(ArgumentError(
+        "training-history steps and energy_history must be nonempty and have equal length in $path"))
+    steps = Int.(collect(raw_steps))
+    all(>(0), steps) && all(diff(steps) .> 0) || throw(ArgumentError(
+        "training-history steps must be positive and strictly increasing in $path"))
+    energy_history = Float64.(collect(raw_history))
+    all(isfinite, energy_history) || throw(ArgumentError(
+        "training-history energy_history must be finite in $path"))
+    raw_exact = get(source, "exact_energy", nothing)
+    exact_energy = isnothing(raw_exact) ? nothing : Float64(raw_exact)
+    isnothing(exact_energy) || isfinite(exact_energy) || throw(ArgumentError(
+        "training-history exact_energy must be finite or null in $path"))
+
+    return Dict(
+        "schema_version" => 1,
+        "model" => model,
+        "J1" => J1,
+        "J2" => J2,
+        "row" => row,
+        "p" => p,
+        "nqubits" => nqubits,
+        "steps" => steps,
+        "energy_history" => energy_history,
+        "exact_energy" => exact_energy,
+    )
+end
+
+"""
+    compute_training_history_data(result_file; save_path=nothing)
+
+Extract the complete training-history series and exact final energy from a
+saved circuit optimization result for later non-interactive plotting.
+"""
+function compute_training_history_data(result_file::String;
+                                       save_path::Union{String,Nothing}=nothing)::Dict{String,Any}
+    result, input_args = load_result(result_file)
+    result isa CircuitOptimizationResult || throw(ArgumentError(
+        "training-history processing requires CircuitOptimizationResult data: $result_file"))
+    row = Int(get(input_args, :row, 0))
+    p = Int(get(input_args, :p, 0))
+    nqubits = Int(get(input_args, :nqubits, 0))
+    row > 0 && p > 0 && nqubits > 0 || throw(ArgumentError(
+        "result metadata in $result_file must have positive row, p, and nqubits"))
+    model = String(get(input_args, :model, "heisenberg_j1j2"))
+    J = Float64(get(input_args, :J, 1.0))
+    J1 = Float64(get(input_args, :J1, 1.0))
+    J2 = Float64(get(input_args, :J2, 0.0))
+    g_value = get(input_args, :g, nothing)
+    g = isnothing(g_value) ? nothing : Float64(g_value)
+    share_params = Bool(get(input_args, :share_params, true))
+    structure = get(input_args, :structure, nothing)
+    active_nqubits = get(input_args, :active_nqubits, nqubits)
+    unit_cell = get(input_args, :unit_cell, nothing)
+    exact_energy = _training_exact_energy(result;
+        row=row, p=p, nqubits=nqubits, model=model, J=J, g=g,
+        J1=J1, J2=J2, share_params=share_params, structure=structure,
+        active_nqubits=Int(active_nqubits), unit_cell=unit_cell)
+    energy_history = Float64.(result.energy_history)
+    isempty(energy_history) && throw(ArgumentError(
+        "result in $result_file has an empty energy history"))
+    payload = Dict{String,Any}(
+        "schema_version" => 1,
+        "model" => model,
+        "J1" => J1,
+        "J2" => J2,
+        "row" => row,
+        "p" => p,
+        "nqubits" => nqubits,
+        "steps" => collect(1:length(energy_history)),
+        "energy_history" => energy_history,
+        "exact_energy" => exact_energy,
+    )
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        open(save_path, "w") do io
+            JSON3.write(io, payload)
+        end
+        println("Processed training-history data saved to: $save_path")
+    end
+    return payload
+end
+
+"""
+    plot_training_history_from_processed_data(path; kwargs...)
+
+Draw a training-history figure from processed JSON data without loading a raw
+optimization result or resampling circuit measurements.
+"""
+function plot_training_history_from_processed_data(path::String;
+                                                    pepskit_results_file::Union{String,Nothing}=nothing,
+                                                    dmrg_bulk_file::Union{String,Nothing}=nothing,
+                                                    save_path::Union{String,Nothing}=nothing)::Figure
+    data = load_training_history_data(path)
+    fig = plot_training_history(data["steps"], data["energy_history"];
+        row=Int(data["row"]),
+        nqubits=Int(data["nqubits"]),
+        J2=Float64(data["J2"]),
+        exact_energy=data["exact_energy"],
+        pepskit_results_file=pepskit_results_file,
+        dmrg_bulk_file=dmrg_bulk_file,
+        save_path=nothing)
+    if !isnothing(save_path)
+        mkpath(dirname(save_path))
+        save(save_path, fig; pt_per_unit=1.125)
+        @info "Figure saved to $save_path"
+    end
+    return fig
+end
+
 function plot_training_history(result::Union{ExactOptimizationResult, ManifoldOptimizationResult};
                                p::Union{Int,Nothing}=nothing,
                                model::Union{String,AbstractModel}="tfim",

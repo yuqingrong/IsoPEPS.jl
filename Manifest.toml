@@ -1191,10 +1191,10 @@ uuid = "28f27b66-4bd8-47e7-9110-e2746eb8bed7"
 version = "2.0.0"
 
 [[deps.IsoPEPS]]
-deps = ["CMAEvolutionStrategy", "CairoMakie", "FFTW", "ITensorMPS", "ITensors", "JSON3", "KrylovKit", "LinearAlgebra", "Logging", "LsqFit", "MPSKit", "OMEinsum", "OMEinsumContractionOrders", "Optim", "Optimization", "OptimizationCMAEvolutionStrategy", "PEPSKit", "Random", "Serialization", "Statistics", "Yao", "YaoBlocks"]
+deps = ["Bootstrap", "CMAEvolutionStrategy", "CairoMakie", "FFTW", "ITensorMPS", "ITensors", "JSON3", "KrylovKit", "LinearAlgebra", "Logging", "LsqFit", "MPSKit", "OMEinsum", "OMEinsumContractionOrders", "Optim", "Optimization", "OptimizationCMAEvolutionStrategy", "PEPSKit", "Random", "Serialization", "Statistics", "Yao", "YaoBlocks"]
 path = "."
 uuid = "ba2a9c53-054a-4f79-8e7e-3842f08de153"
-version = "1.0.0-DEV"
+version = "1.0.0"
 
     [deps.IsoPEPS.extensions]
     DMRGReferenceExt = ["ITensors", "ITensorMPS"]

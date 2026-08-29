@@ -16,9 +16,13 @@ julia --project=. -e 'using Pkg; Pkg.instantiate()'
 julia --project=. -e 'using Pkg; Pkg.test()'
 ```
 
-The root `Manifest.toml` is tracked so the dependency set used for a future
-release is recorded. The package version remains `1.0.0-DEV` until author
-approval for a public release.
+The root `Manifest.toml` records the dependency resolution for the `1.0.0`
+release candidate. It becomes a public release only after final author
+approval, a reviewed merge to `master`, and a version tag.
+
+The `project/` directory contains research scripts, not a second supported
+environment. Its historical `Project.toml` and `Manifest.toml` remain only for
+legacy reference; run those scripts with the root environment.
 
 ## Local paper-data staging and figures
 
@@ -41,21 +45,44 @@ The staging tool copies only the allowlist in
 local states, and desktop metadata, and verifies source checksums before and
 after copying. It does not change the source results or create a Zenodo record.
 
-To restore the exact curated figure baselines, use the deterministic archive
-mode. To rerun the plotting targets from the staged raw results and precomputed
-intermediates, choose compute mode; it never launches an optimization, DMRG,
-or VUMPS calculation.
+Within the staged package only, `results/tfim_abc/` and `results/heisenberg/`
+separate saved `circuit_*.json` inputs in `raw/` from derived sampling
+summaries and figure-ready JSONs in `processed/`. `results/reference/` remains
+separate for independent DMRG, VUMPS, and iPEPS reference scans. The private
+`project/results/` source layout is not changed.
+
+The primary reproduction command is plot mode. It reads the canonical
+`processed/*.json` figure data in the staged package and writes the 17 paper
+figures directly to the requested output directory; it does not regenerate or
+copy processed JSON files. This is the command readers should use to redraw the
+paper figures. It never launches an optimization, DMRG, or VUMPS calculation.
 
 ```bash
 julia --project=. repro/reproduce.jl \
   --data-dir release-staging/IsoPEPS-paper-data \
-  --output-dir release-staging/reproduced-figures --mode archive
+  --output-dir reproduced-figures --mode plot
 
 julia --project=. repro/check.jl \
   --data-dir release-staging/IsoPEPS-paper-data \
   --tex /path/to/IsoPEPS-Notes/arxiv_submit/main.tex \
-  --rendered-dir release-staging/reproduced-figures --exact-baselines
+  --rendered-dir reproduced-figures
 ```
 
-See [REPRODUCIBILITY.md](REPRODUCIBILITY.md) for the complete local workflow
+Archive mode remains available to restore the exact curated PDF/PNG baselines
+byte-for-byte. Compute mode is a separate validation workflow: it recalculates
+declared data targets from raw inputs into `recomputed-data/` and does not
+replace the canonical processed data or write the paper figures.
+
+```bash
+julia --project=. repro/reproduce.jl \
+  --data-dir release-staging/IsoPEPS-paper-data \
+  --output-dir reproduced-figures --mode archive
+
+julia --project=. repro/check.jl \
+  --data-dir release-staging/IsoPEPS-paper-data \
+  --tex /path/to/IsoPEPS-Notes/arxiv_submit/main.tex \
+  --rendered-dir reproduced-figures --exact-baselines
+```
+
+See [the reproducibility guide](docs/reproducibility.md) for the complete local workflow
 and the deferred-public-release checklist.

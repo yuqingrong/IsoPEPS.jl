@@ -13,38 +13,55 @@ exclude_globs = [
 
 [[directories]]
 source = "project/results/tfim_abc"
-destination = "results/tfim_abc"
-purpose = "TFIM scan inputs and deterministic figure-ready intermediates used by manuscript figures"
+destination = "results/tfim_abc/raw"
+purpose = "TFIM optimized circuit inputs used by manuscript figure workflows"
 include_files = [
-    "circuit_tfim_J=1.0_g=0.0_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=0.25_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=0.5_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=0.75_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=1.0_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=1.25_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=1.5_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=1.75_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=2.0_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=2.25_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=2.5_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=2.75_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=3.25_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=3.5_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=3.75_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=4.0_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=4.25_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=4.5_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=4.75_row=3_p=3_nqubits=3_1x1.json",
-    "circuit_tfim_J=1.0_g=5.0_row=3_p=3_nqubits=3_1x1.json",
-    "figures/tfim_variance_vs_samples.json",
-    "readout_noise_energ_g=3.0.json",
+    "circuit_tfim_J=1.0_g=0.0_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=0.25_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=0.5_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=0.75_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=1.0_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=1.25_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=1.5_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=1.75_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=2.0_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=2.25_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=2.5_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=2.75_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=3.0_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=3.25_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=3.5_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=3.75_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=4.0_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=4.25_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=4.5_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=4.75_row=3_p=3_nqubits=3_1x3.json",
+    "circuit_tfim_J=1.0_g=5.0_row=3_p=3_nqubits=3_1x3.json",
 ]
 
 [[directories]]
+source = "project/results/tfim_abc/figures"
+destination = "results/tfim_abc/processed"
+purpose = "TFIM derived figure-ready data"
+include_files = [
+    "tfim_energy_vs_g.json",
+    "tfim_energy_vs_g_error.json",
+    "energy_dynamics_vs_g.json",
+    "tfim_correlation_length_vs_g.json",
+    "tfim_connected_correlation_vs_g.json",
+    "tfim_magnetization_vs_g.json",
+    "tfim_variance_vs_samples.json",
+]
+
+[[files]]
+source = "project/results/tfim_abc/readout_noise_energ_g=3.0.json"
+destination = "results/tfim_abc/processed/readout_noise_energ_g=3.0.json"
+purpose = "TFIM derived readout-noise scan"
+
+[[directories]]
 source = "project/results/heisenberg"
-destination = "results/heisenberg"
-purpose = "J1-J2 scan inputs and deterministic figure-ready intermediates used by manuscript figures"
+destination = "results/heisenberg/raw"
+purpose = "J1-J2 optimized circuit inputs used by manuscript figure workflows"
 include_files = [
     "circuit_heisenberg_j1j2_J1=1.0_J2=0.0_row=4_p=3_nqubits=3_2x2.json",
     "circuit_heisenberg_j1j2_J1=1.0_J2=0.1_row=4_p=3_nqubits=3_2x2.json",
@@ -57,9 +74,26 @@ include_files = [
     "circuit_heisenberg_j1j2_J1=1.0_J2=0.8_row=4_p=3_nqubits=3_2x2.json",
     "circuit_heisenberg_j1j2_J1=1.0_J2=0.9_row=4_p=3_nqubits=3_2x2.json",
     "circuit_heisenberg_j1j2_J1=1.0_J2=1.0_row=4_p=3_nqubits=3_2x2.json",
+]
+
+[[directories]]
+source = "project/results/heisenberg/figures"
+destination = "results/heisenberg/processed"
+purpose = "J1-J2 derived figure-ready data"
+include_files = [
+    "bond_energy_exact.json",
+    "circuit_heisenberg_j1j2_J1=1.0_J2=0.5_row=4_p=3_nqubits=3_2x2_training_history.json",
+    "heisenberg_energy_vs_J2.json",
+    "heisenberg_variance_vs_samples.json",
+]
+
+[[directories]]
+source = "project/results/heisenberg"
+destination = "results/heisenberg/processed"
+purpose = "J1-J2 derived sampling summaries"
+include_files = [
     "M2_sampling.json",
     "sf.json",
-    "figures/heisenberg_variance_vs_samples.json",
 ]
 
 [[directories]]
@@ -68,24 +102,12 @@ destination = "results/reference"
 purpose = "DMRG and PEPSKit reference data; local MPS/DMRG states are excluded"
 include_files = [
     "dmrg_bulk_heisenberg_j1j2_Ly4_D2_J2scan.json",
-    "dmrg_bulk_heisenberg_j1j2_Ly4_D32_J2scan.json",
+    "dmrg_j1j2_D192_Ly4_J2scan_energyconv.json",
     "dmrg_bulk_tfim_Ly3_D2_gscan.json",
     "dmrg_bulk_tfim_Ly3_D32_gscan.json",
-    "dmrg_bulk_tfim_Ly3_D4_gscan.json",
-    "dmrg_bulk_tfim_Ly4_D2_gscan.json",
     "dmrg_sampling_matched_Ly4_D2_J2scan.json",
     "pepskit_results_D=2.json",
 ]
-
-[[files]]
-source = "project/results/idmrg_j1j2_D192_Ly4_J2scan.json"
-destination = "results/idmrg_j1j2_D192_Ly4_J2scan.json"
-purpose = "iDMRG J1-J2 reference data"
-
-[[files]]
-source = "project/results/idmrg_j1j2_D192_Ly4_J2scan_energyconv.json"
-destination = "results/idmrg_j1j2_D192_Ly4_J2scan_energyconv.json"
-purpose = "iDMRG energy-convergence reference data"
 
 [[files]]
 source = "project/results/mpskit_results_Ly=3_D=32.json"

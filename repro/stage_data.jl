@@ -134,9 +134,13 @@ This directory is a private, local staging package for the IsoPEPS Notes
 paper. It was produced by `repro/stage_data.jl` from the strict allowlist in
 `data_manifest.toml`; it is not a public release or a Zenodo deposit.
 
-- `results/` contains raw optimization results, precomputed bootstrap and
-  variance intermediates, and the DMRG/VUMPS/PEPSKit references required by
-  the paper figures.
+- `results/tfim_abc/raw/` and `results/heisenberg/raw/` contain saved
+  optimized circuit inputs. Their sibling `processed/` directories contain
+  the canonical figure-ready and sampling-summary JSONs. Readers should use
+  these processed files with the default `repro/reproduce.jl --mode plot`
+  workflow. The raw circuit inputs are retained only for optional `--mode
+  compute` validation. `results/reference/` contains the DMRG/VUMPS/PEPSKit
+  references required by the paper figures.
 - `figures/published/` contains the exact figure files used by the manuscript.
 - `figure_manifest.toml` maps every manuscript figure to its inputs, command,
   and baseline checksum.

@@ -1,7 +1,8 @@
-# Deferred public-release checklist
+# Public-release checklist
 
-This checklist is intentionally deferred. Do not perform any item until every
-author approves the public release.
+The `1.0.0` release candidate includes `.zenodo.json` for the code record and
+`zenodo-data-metadata-template.json` for the curated data record. Do not
+perform any public-release item until every author approves the release.
 
 - [ ] Confirm final author approval for the code, curated data, figures, and
   citation information.
@@ -9,9 +10,11 @@ author approves the public release.
   version-specific known failures.
 - [ ] Rebuild the local staging package, verify `MANIFEST.sha256`, restore the
   archive figures, and cross-check the figure manifest against `main.tex`.
-- [ ] Review `CITATION.cff` and complete `repro/zenodo-metadata-template.json`.
-- [ ] Bump the package version from `1.0.0-DEV` and update the root manifest if
-  the dependency resolution changes.
+- [ ] Review `.zenodo.json`, `CITATION.cff`, and
+  `repro/zenodo-data-metadata-template.json`; add only DOI values that have
+  been reserved or assigned for these exact records.
+- [ ] Confirm that the root manifest still matches the `1.0.0` release
+  candidate; update it only if the dependency resolution changes.
 - [ ] Create a signed/reviewed Git tag and GitHub release only after approval.
 - [ ] Create versioned Zenodo records for the MIT-licensed code and the
   CC-BY-4.0 data package, as appropriate.

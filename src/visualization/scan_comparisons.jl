@@ -174,10 +174,16 @@ function _find_circuit_result_file(data_dir::String, val, spec::Dict{Symbol,Any}
         default_suffixes = if haskey(spec, :structure) || get(spec, :share_params, true) == false
             gate_structure = _normalize_gate_structure(get(spec, :structure, nothing),
                                                        Bool(get(spec, :share_params, true)))
-            primary = gate_structure === :aaa ? "_1x1" : "_1x1_$(gate_structure)"
+            primary = if gate_structure === :aaa
+                "_1x1"
+            elseif gate_structure === :abc
+                "_1x3"
+            else
+                "_1x1_$(gate_structure)"
+            end
             unique([primary, "_1x1", ""])
         else
-            ["_1x1", "_1x1_100*1000", "_1x1_6w", ""]
+            ["_1x1", "_1x3", "_1x1_100*1000", "_1x1_6w", ""]
         end
         suffixes = collect(get(spec, :suffixes, default_suffixes))
         candidates = String[]
@@ -428,6 +434,404 @@ fig, data = plot_energy_error_vs_g("project/results", [0.0, 0.1, 0.2, 0.5];
                                    dmrg_file="project/results/dmrg_j1j2_100x4.json")
 ```
 """
+function _processed_data_source_path(source::String, save_path::Union{String,Nothing})
+    isnothing(save_path) && return source
+    return replace(relpath(source, dirname(save_path)), '\\' => '/')
+end
+
+function _write_processed_tfim_data(path::String, payload::Dict{String,Any})
+    mkpath(dirname(path))
+    open(path, "w") do io
+        JSON3.write(io, payload)
+    end
+    return path
+end
+
+function _read_processed_tfim_data(path::String)
+    isfile(path) || error("Processed TFIM data file not found: $path")
+    return open(path, "r") do io
+        JSON3.read(io, Dict)
+    end
+end
+
+"""
+    compute_tfim_energy_vs_g_data(data_dir, scan_values; save_path=nothing, kwargs...)
+
+Evaluate the A-B-C TFIM circuit scan by exact tensor-network contraction and
+optionally write the isoPEPS-only values required for the energy panel. The
+result deliberately excludes DMRG values, which remain in their independent
+reference scan file.
+"""
+function compute_tfim_energy_vs_g_data(data_dir::String,
+                                        scan_values::AbstractVector{<:Real};
+                                        J::Real=1.0, row::Int=3, p::Int=3,
+                                        nqubits::Int=3, conv_step::Int=300,
+                                        samples::Int=3_000_000,
+                                        save_path::Union{String,Nothing}=nothing)
+    values = Float64.(scan_values)
+    circuit_spec = Dict{Symbol,Any}(
+        :label => "IsoPEPS",
+        :model => "tfim",
+        :J => Float64(J),
+        :row => row,
+        :p => p,
+        :nqubits => nqubits,
+        :share_params => false,
+        :structure => :abc,
+        :energy_source => :computed,
+    )
+    series = _load_circuit_energy_series(data_dir, values, circuit_spec, conv_step, samples)
+    isnothing(series) && error("No A-B-C TFIM circuit results found for the requested g scan")
+    length(series.scan_values) == length(values) || error(
+        "A-B-C TFIM scan is incomplete: expected $(length(values)) points, found $(length(series.scan_values))")
+
+    data = (
+        scan_values = Float64.(series.scan_values),
+        energies = Float64.(series.energies),
+        source_files = [_processed_data_source_path(file, save_path) for file in series.files],
+        coupling_J = Float64(J),
+        row = row,
+        p = p,
+        nqubits = nqubits,
+    )
+    if !isnothing(save_path)
+        payload = Dict{String,Any}(
+            "schema_version" => 1,
+            "model" => "tfim",
+            "unit_cell" => "abc",
+            "energy_evaluation" => "exact_tensor_network_contraction",
+            "coupling_J" => data.coupling_J,
+            "row" => data.row,
+            "p" => data.p,
+            "nqubits" => data.nqubits,
+            "scan_parameter" => "g",
+            "scan_values" => data.scan_values,
+            "energies" => data.energies,
+            "source_files" => data.source_files,
+        )
+        _write_processed_tfim_data(save_path, payload)
+        println("Processed TFIM energy data saved to: $save_path")
+    end
+    return data
+end
+
+"""Load isoPEPS-only processed data for the TFIM energy panel."""
+function load_tfim_energy_vs_g_data(path::String)
+    payload = _read_processed_tfim_data(path)
+    Int(_json_get_any(payload, ("schema_version",); default=0)) == 1 || error(
+        "Unsupported TFIM energy-data schema in $path")
+    String(_json_get_any(payload, ("model",); default="")) == "tfim" || error(
+        "Processed data in $path is not a TFIM energy scan")
+    scan_values = Float64.(collect(_json_get_any(payload, ("scan_values",))))
+    energies = Float64.(collect(_json_get_any(payload, ("energies",))))
+    source_files = String.(collect(_json_get_any(payload, ("source_files",))))
+    length(scan_values) == length(energies) == length(source_files) || error(
+        "TFIM energy data arrays have inconsistent lengths in $path")
+    return (
+        scan_values = scan_values,
+        energies = energies,
+        source_files = source_files,
+        coupling_J = Float64(_json_get_any(payload, ("coupling_J",); default=1.0)),
+        row = Int(_json_get_any(payload, ("row",); default=3)),
+        p = Int(_json_get_any(payload, ("p",); default=3)),
+        nqubits = Int(_json_get_any(payload, ("nqubits",); default=3)),
+    )
+end
+
+"""
+    compute_tfim_energy_vs_g_error_data(energy_data_file, dmrg_file; save_path=nothing)
+
+Compute the relative-error panel from the saved isoPEPS energy data and the
+separate DMRG reference scan. The output stores only relative errors and input
+provenance; it does not copy DMRG energies.
+"""
+function compute_tfim_energy_vs_g_error_data(energy_data_file::String, dmrg_file::String;
+                                              save_path::Union{String,Nothing}=nothing,
+                                              g_c::Real=3.04438)
+    energy_data = load_tfim_energy_vs_g_data(energy_data_file)
+    dmrg = _load_scan_energy_series(dmrg_file; fallback_label="DMRG", kind=:reference)
+    isnothing(dmrg) && error("Unable to load the DMRG reference scan: $dmrg_file")
+    dmrg_values = [_lookup_series_energy(dmrg, value) for value in energy_data.scan_values]
+    all(isfinite, dmrg_values) || error("DMRG reference scan is missing one or more TFIM g values")
+    relative_errors = abs.(energy_data.energies .- dmrg_values) ./ abs.(dmrg_values)
+    data = (
+        scan_values = energy_data.scan_values,
+        relative_errors = relative_errors,
+        source_energy_file = _processed_data_source_path(energy_data_file, save_path),
+        source_reference_file = _processed_data_source_path(dmrg_file, save_path),
+        reference_label = dmrg.label,
+        critical_field = Float64(g_c),
+    )
+    if !isnothing(save_path)
+        payload = Dict{String,Any}(
+            "schema_version" => 1,
+            "model" => "tfim",
+            "quantity" => "relative_energy_error",
+            "scan_parameter" => "g",
+            "scan_values" => data.scan_values,
+            "relative_errors" => data.relative_errors,
+            "source_energy_file" => data.source_energy_file,
+            "source_reference_file" => data.source_reference_file,
+            "reference_label" => data.reference_label,
+            "critical_field" => data.critical_field,
+        )
+        _write_processed_tfim_data(save_path, payload)
+        println("Processed TFIM energy-error data saved to: $save_path")
+    end
+    return data
+end
+
+"""Load processed relative errors for the TFIM energy-error panel."""
+function load_tfim_energy_vs_g_error_data(path::String)
+    payload = _read_processed_tfim_data(path)
+    Int(_json_get_any(payload, ("schema_version",); default=0)) == 1 || error(
+        "Unsupported TFIM energy-error schema in $path")
+    String(_json_get_any(payload, ("quantity",); default="")) == "relative_energy_error" || error(
+        "Processed data in $path is not a TFIM relative-error scan")
+    scan_values = Float64.(collect(_json_get_any(payload, ("scan_values",))))
+    relative_errors = Float64.(collect(_json_get_any(payload, ("relative_errors",))))
+    length(scan_values) == length(relative_errors) || error(
+        "TFIM relative-error arrays have inconsistent lengths in $path")
+    return (
+        scan_values = scan_values,
+        relative_errors = relative_errors,
+        source_energy_file = String(_json_get_any(payload, ("source_energy_file",))),
+        source_reference_file = String(_json_get_any(payload, ("source_reference_file",))),
+        reference_label = String(_json_get_any(payload, ("reference_label",); default="DMRG")),
+        critical_field = Float64(_json_get_any(payload, ("critical_field",); default=3.04438)),
+    )
+end
+
+function _write_processed_heisenberg_data(path::String, payload::Dict{String,Any})
+    mkpath(dirname(path))
+    open(path, "w") do io
+        JSON3.write(io, payload)
+    end
+    return path
+end
+
+function _read_processed_heisenberg_data(path::String)
+    isfile(path) || error("Processed Heisenberg data file not found: $path")
+    return open(path, "r") do io
+        JSON3.read(io, Dict)
+    end
+end
+
+"""
+    compute_heisenberg_energy_vs_J2_data(data_dir, scan_values; save_path=nothing, kwargs...)
+
+Evaluate the 2×2 Heisenberg J1-J2 circuit scan by exact tensor-network
+contraction and optionally write the IsoPEPS-only energy curve needed for the
+paper figure. Independent DMRG reference scans are intentionally not copied
+into this processed file.
+"""
+function compute_heisenberg_energy_vs_J2_data(
+        data_dir::String, scan_values::AbstractVector{<:Real};
+        J1::Real=1.0, row::Int=4, p::Int=3, nqubits::Int=3,
+        save_path::Union{String,Nothing}=nothing)
+    values = Float64.(scan_values)
+    circuit_spec = Dict{Symbol,Any}(
+        :label => "IsoPEPS",
+        :model => "heisenberg_j1j2",
+        :J1 => Float64(J1),
+        :row => row,
+        :p => p,
+        :nqubits => nqubits,
+        :energy_source => :computed,
+    )
+    series = _load_circuit_energy_series(data_dir, values, circuit_spec, 0, 0)
+    isnothing(series) && error("No 2×2 Heisenberg circuit results found for the requested J2 scan")
+    length(series.scan_values) == length(values) || error(
+        "Heisenberg J2 scan is incomplete: expected $(length(values)) points, found $(length(series.scan_values))")
+
+    data = (
+        scan_values = Float64.(series.scan_values),
+        energies = Float64.(series.energies),
+        source_files = [_processed_data_source_path(file, save_path) for file in series.files],
+        coupling_J1 = Float64(J1),
+        row = row,
+        p = p,
+        nqubits = nqubits,
+    )
+    if !isnothing(save_path)
+        payload = Dict{String,Any}(
+            "schema_version" => 1,
+            "model" => "heisenberg_j1j2",
+            "unit_cell" => "two_by_two",
+            "energy_evaluation" => "exact_tensor_network_contraction",
+            "coupling_J1" => data.coupling_J1,
+            "row" => data.row,
+            "p" => data.p,
+            "nqubits" => data.nqubits,
+            "scan_parameter" => "J2",
+            "scan_values" => data.scan_values,
+            "energies" => data.energies,
+            "source_files" => data.source_files,
+        )
+        _write_processed_heisenberg_data(save_path, payload)
+        println("Processed Heisenberg energy data saved to: $save_path")
+    end
+    return data
+end
+
+"""Load the IsoPEPS-only processed energy data for the Heisenberg J1-J2 panel."""
+function load_heisenberg_energy_vs_J2_data(path::String)
+    payload = _read_processed_heisenberg_data(path)
+    Int(_json_get_any(payload, ("schema_version",); default=0)) == 1 || error(
+        "Unsupported Heisenberg energy-data schema in $path")
+    String(_json_get_any(payload, ("model",); default="")) == "heisenberg_j1j2" || error(
+        "Processed data in $path is not a Heisenberg J1-J2 energy scan")
+    scan_values = Float64.(collect(_json_get_any(payload, ("scan_values",))))
+    energies = Float64.(collect(_json_get_any(payload, ("energies",))))
+    source_files = String.(collect(_json_get_any(payload, ("source_files",))))
+    length(scan_values) == length(energies) == length(source_files) || error(
+        "Heisenberg energy data arrays have inconsistent lengths in $path")
+    return (
+        scan_values = scan_values,
+        energies = energies,
+        source_files = source_files,
+        coupling_J1 = Float64(_json_get_any(payload, ("coupling_J1",); default=1.0)),
+        row = Int(_json_get_any(payload, ("row",); default=4)),
+        p = Int(_json_get_any(payload, ("p",); default=3)),
+        nqubits = Int(_json_get_any(payload, ("nqubits",); default=3)),
+    )
+end
+
+"""
+    plot_heisenberg_energy_vs_J2_from_processed_data(energy_data_file, reference_files; save_path=nothing)
+
+Draw the Heisenberg J1-J2 energy panel from processed IsoPEPS data and
+independent reference scans, without loading raw circuit results or running a
+tensor contraction.
+"""
+function plot_heisenberg_energy_vs_J2_from_processed_data(
+        energy_data_file::String, reference_files::AbstractVector{<:AbstractString};
+        figsize=nothing, markersize::Int=6, save_path::Union{String,Nothing}=nothing)
+    energy_data = load_heisenberg_energy_vs_J2_data(energy_data_file)
+    used_labels = Set(["IsoPEPS"])
+    references = NamedTuple[]
+    for file in reference_files
+        series = _load_scan_energy_series(file; fallback_label="DMRG", kind=:reference)
+        isnothing(series) && error("Unable to load Heisenberg reference scan: $file")
+        label = _unique_label(series.label, used_labels)
+        push!(references, (
+            label = label,
+            scan_values = series.scan_values,
+            energies = series.energies,
+            files = series.files,
+            kind = series.kind,
+        ))
+    end
+
+    fig = with_theme(paper_theme()) do
+        figure = Figure(size=isnothing(figsize) ? PAPER_FIGSIZE : figsize)
+        axis = Axis(figure[1, 1]; xlabel=J2_OVER_J1_LABEL, ylabel=ENERGY_PER_SITE_LABEL,
+                    xgridvisible=false, ygridvisible=false)
+        scatterlines!(axis, energy_data.scan_values, energy_data.energies;
+                      label="IsoPEPS", color=:steelblue, marker=:circle,
+                      markersize=markersize, linestyle=:solid)
+        colors = [:darkorange, :purple, :teal, :brown, :gray40, :dodgerblue4, :tomato3]
+        markers = [:rect, :diamond, :utriangle, :dtriangle, :cross, :xcross, :star5]
+        for (idx, series) in enumerate(references)
+            is_dmrg = startswith(series.label, "DMRG")
+            color = colors[mod1(idx, length(colors))]
+            marker = is_dmrg ? :rect : markers[mod1(idx, length(markers))]
+            marker_size = is_dmrg ? 1.25 * markersize : markersize
+            line_style = is_dmrg ? :dot : :dash
+            marker_attrs = is_dmrg ?
+                (; markercolor=:transparent, strokecolor=color, strokewidth=1.2) :
+                NamedTuple()
+            scatterlines!(axis, series.scan_values, series.energies;
+                          label=_energy_plot_label(series.label, true),
+                          color=color, marker=marker, markersize=marker_size,
+                          linestyle=line_style, marker_attrs...)
+        end
+        energy_values = [Float64(value) for value in energy_data.energies if isfinite(value)]
+        append!(energy_values, [Float64(value)
+                                for series in references for value in series.energies if isfinite(value)])
+        if !isempty(energy_values)
+            emin, emax = extrema(energy_values)
+            energy_span = max(emax - emin, 0.02 * max(abs(emin), abs(emax)), eps())
+            ylims!(axis, emin - 0.22 * energy_span, emax + 0.05 * energy_span)
+        end
+        add_paper_legend!(axis; position=(0.18, 0.02), nbanks=1)
+        if !isnothing(save_path)
+            mkpath(dirname(save_path))
+            save(save_path, figure)
+            println("Heisenberg energy figure saved to: $save_path")
+        end
+        figure
+    end
+    return fig
+end
+
+"""
+    plot_tfim_energy_vs_g_from_processed_data(energy_data_file, dmrg_file; save_path=nothing)
+
+Draw the TFIM energy panel from processed isoPEPS data and the independent
+DMRG reference scan, without loading raw circuit results or running a tensor
+contraction.
+"""
+function plot_tfim_energy_vs_g_from_processed_data(energy_data_file::String, dmrg_file::String;
+                                                    figsize=nothing, markersize::Int=6,
+                                                    save_path::Union{String,Nothing}=nothing)
+    energy_data = load_tfim_energy_vs_g_data(energy_data_file)
+    dmrg = _load_scan_energy_series(dmrg_file; fallback_label="DMRG", kind=:reference)
+    isnothing(dmrg) && error("Unable to load the DMRG reference scan: $dmrg_file")
+    dmrg_values = [_lookup_series_energy(dmrg, value) for value in energy_data.scan_values]
+    all(isfinite, dmrg_values) || error("DMRG reference scan is missing one or more TFIM g values")
+
+    fig = with_theme(paper_theme()) do
+        figure = Figure(size=isnothing(figsize) ? PAPER_FIGSIZE : figsize)
+        axis = Axis(figure[1, 1]; xlabel=FIELD_LABEL, ylabel=ENERGY_PER_SITE_LABEL,
+                    xgridvisible=false, ygridvisible=false)
+        scatterlines!(axis, energy_data.scan_values, energy_data.energies;
+                      label="IsoPEPS", color=:steelblue, marker=:circle,
+                      markersize=markersize, linestyle=:solid)
+        scatterlines!(axis, energy_data.scan_values, dmrg_values;
+                      label=_energy_plot_label(dmrg.label, false), color=:darkorange,
+                      marker=:rect, markersize=1.25 * markersize, linestyle=:dot,
+                      markercolor=:transparent, strokecolor=:darkorange, strokewidth=1.2)
+        add_paper_legend!(axis; position=:lb, nbanks=1)
+        if !isnothing(save_path)
+            mkpath(dirname(save_path))
+            save(save_path, figure)
+            println("Energy figure saved to: $save_path")
+        end
+        figure
+    end
+    return fig
+end
+
+"""
+    plot_tfim_energy_vs_g_error_from_processed_data(error_data_file; save_path=nothing)
+
+Draw the TFIM relative-error panel exclusively from its processed error data.
+"""
+function plot_tfim_energy_vs_g_error_from_processed_data(error_data_file::String;
+                                                          figsize=nothing, markersize::Int=6,
+                                                          save_path::Union{String,Nothing}=nothing)
+    error_data = load_tfim_energy_vs_g_error_data(error_data_file)
+    fig = with_theme(paper_theme()) do
+        figure = Figure(size=isnothing(figsize) ? PAPER_FIGSIZE : figsize)
+        axis = Axis(figure[1, 1];
+                    xlabel=FIELD_LABEL,
+                    ylabel=math_label(raw"\frac{|\mathit{E}_{\mathrm{isoPEPS}}-\mathit{E}_{\mathrm{DMRG}}|}{|\mathit{E}_{\mathrm{DMRG}}|}"),
+                    xgridvisible=false, ygridvisible=false)
+        scatterlines!(axis, error_data.scan_values, error_data.relative_errors;
+                      label=_energy_plot_label("IsoPEPS − $(error_data.reference_label)", false),
+                      color=:steelblue, marker=:circle, markersize=markersize, linestyle=:solid)
+        vlines!(axis, [error_data.critical_field]; color=:gray40, linestyle=:dash, linewidth=1.0)
+        if !isnothing(save_path)
+            mkpath(dirname(save_path))
+            save(save_path, figure)
+            println("Error figure saved to: $save_path")
+        end
+        figure
+    end
+    return fig
+end
+
 function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
                                 model::String="tfim",
                                 J=1.0, J1::Float64=1.0, row=3, nqubits=3, p=3,
@@ -722,6 +1126,222 @@ function plot_energy_error_vs_g(data_dir::String, scan_values::Vector{Float64};
 end
 
 """
+    compute_tfim_observables_vs_g_data(data_dir, scan_values; connected_save_path=nothing, magnetization_save_path=nothing, kwargs...)
+
+Evaluate the A-B-C TFIM connected-correlation and magnetization scans by exact
+contraction in one pass. The two saved JSON files remain figure-specific so
+each renderer needs only the data it displays.
+"""
+function compute_tfim_observables_vs_g_data(
+        data_dir::String, scan_values::AbstractVector{<:Real};
+        J::Real=1.0, row::Int=3, p::Int=3, nqubits::Int=3,
+        connected_save_path::Union{String,Nothing}=nothing,
+        magnetization_save_path::Union{String,Nothing}=nothing)
+    isnothing(connected_save_path) == isnothing(magnetization_save_path) || error(
+        "connected_save_path and magnetization_save_path must be specified together")
+    values = Float64.(scan_values)
+    circuit_spec = Dict{Symbol,Any}(
+        :model => "tfim", :J => Float64(J), :row => row, :p => p,
+        :nqubits => nqubits, :share_params => false, :structure => :abc,
+    )
+    nearest_neighbor = Float64[]
+    next_nearest_neighbor = Float64[]
+    magnetization_z = Float64[]
+    magnetization_x = Float64[]
+    source_files = String[]
+    for value in values
+        filename = _find_circuit_result_file(data_dir, value, circuit_spec)
+        isempty(filename) && error("No A-B-C TFIM circuit result found for g=$(value)")
+        result, input_args = load_result(filename)
+        params = result isa ExactOptimizationResult ? result.params : result.final_params
+        saved_p = Int(get(input_args, :p, p))
+        saved_row = Int(get(input_args, :row, row))
+        saved_nqubits = Int(get(input_args, :nqubits, nqubits))
+        gates = build_unitary_gate(
+            params, saved_p, saved_row, saved_nqubits;
+            share_params=Bool(get(input_args, :share_params, true)),
+            structure=get(input_args, :structure, nothing),
+            active_nqubits=Int(get(input_args, :active_nqubits, saved_nqubits)))
+        virtual_qubits = (saved_nqubits - 1) ÷ 2
+        connected_correlation = separation -> mean(
+            abs(correlation_function(gates, saved_row, virtual_qubits, :Z, separation;
+                                     connected=true, position=position)[separation])
+            for position in 1:saved_row)
+        push!(nearest_neighbor, connected_correlation(1))
+        push!(next_nearest_neighbor, connected_correlation(2))
+        push!(magnetization_z, abs(real(compute_Z_expectation(
+            nothing, gates, saved_row, virtual_qubits))))
+        push!(magnetization_x, abs(real(compute_X_expectation(
+            nothing, gates, saved_row, virtual_qubits))))
+        push!(source_files, filename)
+    end
+
+    connected_data = (
+        scan_values=values,
+        nearest_neighbor=nearest_neighbor,
+        next_nearest_neighbor=next_nearest_neighbor,
+        source_files=[_processed_data_source_path(file, connected_save_path) for file in source_files],
+        coupling_J=Float64(J), row=row, p=p, nqubits=nqubits,
+    )
+    magnetization_data = (
+        scan_values=values,
+        magnetization_z=magnetization_z,
+        magnetization_x=magnetization_x,
+        source_files=[_processed_data_source_path(file, magnetization_save_path) for file in source_files],
+        coupling_J=Float64(J), row=row, p=p, nqubits=nqubits,
+    )
+    if !isnothing(connected_save_path)
+        _write_processed_tfim_data(connected_save_path, Dict{String,Any}(
+            "schema_version" => 1,
+            "model" => "tfim",
+            "unit_cell" => "abc",
+            "quantity" => "connected_zz_correlation",
+            "scan_parameter" => "g",
+            "scan_values" => connected_data.scan_values,
+            "nearest_neighbor" => connected_data.nearest_neighbor,
+            "next_nearest_neighbor" => connected_data.next_nearest_neighbor,
+            "source_files" => connected_data.source_files,
+            "coupling_J" => connected_data.coupling_J,
+            "row" => connected_data.row,
+            "p" => connected_data.p,
+            "nqubits" => connected_data.nqubits,
+            "evaluation" => "exact_tensor_network_contraction",
+        ))
+        _write_processed_tfim_data(magnetization_save_path, Dict{String,Any}(
+            "schema_version" => 1,
+            "model" => "tfim",
+            "unit_cell" => "abc",
+            "quantity" => "absolute_magnetization",
+            "scan_parameter" => "g",
+            "scan_values" => magnetization_data.scan_values,
+            "magnetization_z" => magnetization_data.magnetization_z,
+            "magnetization_x" => magnetization_data.magnetization_x,
+            "source_files" => magnetization_data.source_files,
+            "coupling_J" => magnetization_data.coupling_J,
+            "row" => magnetization_data.row,
+            "p" => magnetization_data.p,
+            "nqubits" => magnetization_data.nqubits,
+            "evaluation" => "exact_tensor_network_contraction",
+        ))
+        println("Processed TFIM observable data saved to: $connected_save_path and $magnetization_save_path")
+    end
+    return (connected=connected_data, magnetization=magnetization_data)
+end
+
+function _load_tfim_processed_observable_data(path::String, quantity::String, value_keys)
+    payload = _read_processed_tfim_data(path)
+    Int(_json_get_any(payload, ("schema_version",); default=0)) == 1 || error(
+        "Unsupported processed TFIM observable schema in $path")
+    String(_json_get_any(payload, ("model",); default="")) == "tfim" || error(
+        "Processed data in $path is not a TFIM observable scan")
+    String(_json_get_any(payload, ("quantity",); default="")) == quantity || error(
+        "Processed data in $path has unexpected quantity")
+    scan_values = Float64.(collect(_json_get_any(payload, ("scan_values",))))
+    source_files = String.(collect(_json_get_any(payload, ("source_files",))))
+    values = [Float64.(collect(_json_get_any(payload, (key,)))) for key in value_keys]
+    all(length(series) == length(scan_values) for series in values) &&
+        length(source_files) == length(scan_values) || error(
+            "Processed TFIM observable arrays have inconsistent lengths in $path")
+    return scan_values, source_files, values, payload
+end
+
+"""Load processed nearest- and next-nearest connected TFIM correlations."""
+function load_tfim_connected_correlation_vs_g_data(path::String)
+    scan_values, source_files, values, payload = _load_tfim_processed_observable_data(
+        path, "connected_zz_correlation", ("nearest_neighbor", "next_nearest_neighbor"))
+    return (
+        scan_values=scan_values,
+        nearest_neighbor=values[1],
+        next_nearest_neighbor=values[2],
+        source_files=source_files,
+        coupling_J=Float64(_json_get_any(payload, ("coupling_J",); default=1.0)),
+        row=Int(_json_get_any(payload, ("row",); default=3)),
+        p=Int(_json_get_any(payload, ("p",); default=3)),
+        nqubits=Int(_json_get_any(payload, ("nqubits",); default=3)),
+    )
+end
+
+"""Load processed absolute longitudinal and transverse TFIM magnetizations."""
+function load_tfim_magnetization_vs_g_data(path::String)
+    scan_values, source_files, values, payload = _load_tfim_processed_observable_data(
+        path, "absolute_magnetization", ("magnetization_z", "magnetization_x"))
+    return (
+        scan_values=scan_values,
+        magnetization_z=values[1],
+        magnetization_x=values[2],
+        source_files=source_files,
+        coupling_J=Float64(_json_get_any(payload, ("coupling_J",); default=1.0)),
+        row=Int(_json_get_any(payload, ("row",); default=3)),
+        p=Int(_json_get_any(payload, ("p",); default=3)),
+        nqubits=Int(_json_get_any(payload, ("nqubits",); default=3)),
+    )
+end
+
+"""Draw connected TFIM correlations exclusively from processed data."""
+function plot_tfim_connected_correlation_from_processed_data(
+        data_file::String; figsize=nothing, save_path::Union{String,Nothing}=nothing)
+    data = load_tfim_connected_correlation_vs_g_data(data_file)
+    figure = with_theme(paper_theme()) do
+        figure = Figure(size=isnothing(figsize) ? PAPER_FIGSIZE : figsize)
+        axis = Axis(figure[1, 1];
+                    xlabel=FIELD_LABEL,
+                    ylabel=math_label(raw"\mathit{C}(\mathit{r})"),
+                    yscale=log10,
+                    xlabelsize=PAPER_LARGE_AXIS_LABELSIZE,
+                    ylabelsize=PAPER_LARGE_AXIS_LABELSIZE,
+                    xticklabelsize=PAPER_LARGE_TICKLABELSIZE,
+                    yticklabelsize=PAPER_LARGE_TICKLABELSIZE)
+        scatterlines!(axis, data.scan_values, data.nearest_neighbor;
+                      color=:steelblue, marker=:circle,
+                      label=math_label(raw"\mathit{C}(1)\ \mathrm{nearest}"))
+        scatterlines!(axis, data.scan_values, data.next_nearest_neighbor;
+                      color=:firebrick, marker=:diamond, linestyle=:dash,
+                      label=math_label(raw"\mathit{C}(2)\ \mathrm{next-nearest}"))
+        add_paper_legend!(axis; position=:rb, nbanks=1,
+                          labelsize=PAPER_LARGE_LEGEND_LABELSIZE)
+        if !isnothing(save_path)
+            mkpath(dirname(save_path))
+            save(save_path, figure)
+            println("Connected-correlation figure saved to: $save_path")
+        end
+        figure
+    end
+    return figure
+end
+
+"""Draw absolute TFIM magnetizations exclusively from processed data."""
+function plot_tfim_magnetization_from_processed_data(
+        data_file::String; figsize=nothing, save_path::Union{String,Nothing}=nothing)
+    data = load_tfim_magnetization_vs_g_data(data_file)
+    figure = with_theme(paper_theme()) do
+        figure = Figure(size=isnothing(figsize) ? PAPER_FIGSIZE : figsize)
+        axis = Axis(figure[1, 1];
+                    xlabel=FIELD_LABEL,
+                    ylabel=MAGNETISATION_LABEL,
+                    xlabelsize=PAPER_LARGE_AXIS_LABELSIZE,
+                    ylabelsize=PAPER_LARGE_AXIS_LABELSIZE,
+                    xticklabelsize=PAPER_LARGE_TICKLABELSIZE,
+                    yticklabelsize=PAPER_LARGE_TICKLABELSIZE)
+        scatterlines!(axis, data.scan_values, data.magnetization_z;
+                      color=:steelblue, marker=:circle,
+                      label=math_label(raw"|\langle\mathit{Z}\rangle|"))
+        scatterlines!(axis, data.scan_values, data.magnetization_x;
+                      color=:firebrick, marker=:diamond, linestyle=:dash,
+                      label=math_label(raw"|\langle\mathit{X}\rangle|"))
+        ylims!(axis, 0, 1.1)
+        add_paper_legend!(axis; position=(0.98, 0.78), nbanks=1,
+                          labelsize=PAPER_LARGE_LEGEND_LABELSIZE)
+        if !isnothing(save_path)
+            mkpath(dirname(save_path))
+            save(save_path, figure)
+            println("Magnetization figure saved to: $save_path")
+        end
+        figure
+    end
+    return figure
+end
+
+"""
     plot_magnetization_vs_g(data_dir, g_values; kwargs...)
 
 Plot ⟨Z⟩ (longitudinal) and ⟨X⟩ (transverse) magnetisation per site vs
@@ -765,6 +1385,7 @@ function plot_magnetization_vs_g(data_dir::String, g_values::Vector{Float64};
     for g in sorted_g
         candidates = [
             joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json"),
+            joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x3.json"),
             joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
             joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
         ]
@@ -902,6 +1523,7 @@ function plot_connected_corr_vs_g(data_dir::String, g_values::Vector{Float64};
     for g in sorted_g
         candidates = [
             joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x1.json"),
+            joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)_1x3.json"),
             joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
             joinpath(data_dir, "circuit_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits).json"),
         ]
@@ -989,6 +1611,172 @@ function plot_connected_corr_vs_g(data_dir::String, g_values::Vector{Float64};
 end
 
 """
+    compute_tfim_correlation_length_vs_g_data(data_dir, scan_values; save_path=nothing, kwargs...)
+
+Evaluate the A-B-C TFIM correlation-length scan from transfer-matrix spectra
+and optionally save the isoPEPS-only values. DMRG and PEPSKit reference curves
+remain in their independent processed scans.
+"""
+function compute_tfim_correlation_length_vs_g_data(
+        data_dir::String, scan_values::AbstractVector{<:Real};
+        J::Real=1.0, row::Int=3, p::Int=3, nqubits::Int=3,
+        spectrum_krylovdim::Int=200, spectrum_tol::Real=1e-7,
+        spectrum_maxiter::Int=2_000, spectrum_eager::Bool=false,
+        save_path::Union{String,Nothing}=nothing)
+    values = Float64.(scan_values)
+    circuit_spec = Dict{Symbol,Any}(
+        :model => "tfim", :J => Float64(J), :row => row, :p => p,
+        :nqubits => nqubits, :share_params => false, :structure => :abc,
+    )
+    correlation_lengths = Float64[]
+    spectral_gaps = Float64[]
+    source_files = String[]
+    for value in values
+        filename = _find_circuit_result_file(data_dir, value, circuit_spec)
+        isempty(filename) && error("No A-B-C TFIM circuit result found for g=$(value)")
+        result, input_args = load_result(filename)
+        gates = build_unitary_gate(result.final_params, p, row, nqubits;
+                                   share_params=get(input_args, :share_params, true),
+                                   structure=get(input_args, :structure, nothing))
+        _, gap, _, _ = compute_transfer_spectrum(
+            gates, row, nqubits;
+            matrix_free=:always, krylovdim=spectrum_krylovdim,
+            tol=Float64(spectrum_tol), maxiter=spectrum_maxiter,
+            eager=spectrum_eager,
+        )
+        gap > 0 && isfinite(gap) || error("Invalid transfer-matrix gap at g=$(value): $(gap)")
+        push!(spectral_gaps, Float64(gap))
+        push!(correlation_lengths, 1.0 / Float64(gap))
+        push!(source_files, _processed_data_source_path(filename, save_path))
+    end
+
+    data = (
+        scan_values = values,
+        correlation_lengths = correlation_lengths,
+        spectral_gaps = spectral_gaps,
+        source_files = source_files,
+        coupling_J = Float64(J), row = row, p = p, nqubits = nqubits,
+        spectrum_krylovdim = spectrum_krylovdim,
+        spectrum_tol = Float64(spectrum_tol),
+        spectrum_maxiter = spectrum_maxiter, spectrum_eager = spectrum_eager,
+    )
+    if !isnothing(save_path)
+        payload = Dict{String,Any}(
+            "schema_version" => 1,
+            "model" => "tfim",
+            "unit_cell" => "abc",
+            "quantity" => "transfer_matrix_correlation_length",
+            "scan_parameter" => "g",
+            "scan_values" => data.scan_values,
+            "correlation_lengths" => data.correlation_lengths,
+            "spectral_gaps" => data.spectral_gaps,
+            "source_files" => data.source_files,
+            "coupling_J" => data.coupling_J,
+            "row" => data.row,
+            "p" => data.p,
+            "nqubits" => data.nqubits,
+            "spectrum_krylovdim" => data.spectrum_krylovdim,
+            "spectrum_tol" => data.spectrum_tol,
+            "spectrum_maxiter" => data.spectrum_maxiter,
+            "spectrum_eager" => data.spectrum_eager,
+        )
+        _write_processed_tfim_data(save_path, payload)
+        println("Processed TFIM correlation-length data saved to: $save_path")
+    end
+    return data
+end
+
+"""Load isoPEPS-only processed TFIM correlation-length data."""
+function load_tfim_correlation_length_vs_g_data(path::String)
+    payload = _read_processed_tfim_data(path)
+    Int(_json_get_any(payload, ("schema_version",); default=0)) == 1 || error(
+        "Unsupported TFIM correlation-length schema in $path")
+    String(_json_get_any(payload, ("model",); default="")) == "tfim" || error(
+        "Processed data in $path is not a TFIM correlation-length scan")
+    String(_json_get_any(payload, ("quantity",); default="")) == "transfer_matrix_correlation_length" || error(
+        "Processed data in $path is not transfer-matrix correlation-length data")
+    scan_values = Float64.(collect(_json_get_any(payload, ("scan_values",))))
+    correlation_lengths = Float64.(collect(_json_get_any(payload, ("correlation_lengths",))))
+    spectral_gaps = Float64.(collect(_json_get_any(payload, ("spectral_gaps",))))
+    source_files = String.(collect(_json_get_any(payload, ("source_files",))))
+    length(scan_values) == length(correlation_lengths) == length(spectral_gaps) == length(source_files) || error(
+        "TFIM correlation-length data arrays have inconsistent lengths in $path")
+    all(isfinite, correlation_lengths) || error("TFIM correlation-length data contain non-finite values in $path")
+    return (
+        scan_values = scan_values,
+        correlation_lengths = correlation_lengths,
+        spectral_gaps = spectral_gaps,
+        source_files = source_files,
+        coupling_J = Float64(_json_get_any(payload, ("coupling_J",); default=1.0)),
+        row = Int(_json_get_any(payload, ("row",); default=3)),
+        p = Int(_json_get_any(payload, ("p",); default=3)),
+        nqubits = Int(_json_get_any(payload, ("nqubits",); default=3)),
+        spectrum_krylovdim = Int(_json_get_any(payload, ("spectrum_krylovdim",); default=200)),
+        spectrum_tol = Float64(_json_get_any(payload, ("spectrum_tol",); default=1e-7)),
+        spectrum_maxiter = Int(_json_get_any(payload, ("spectrum_maxiter",); default=2_000)),
+        spectrum_eager = Bool(_json_get_any(payload, ("spectrum_eager",); default=false)),
+    )
+end
+
+function _load_correlation_length_reference(file::String, scan_keys)
+    isfile(file) || error("Correlation-length reference file not found: $file")
+    data = _read_processed_tfim_data(file)
+    scan_values = Float64.(collect(_json_get_any(data, scan_keys)))
+    correlation_lengths = collect(_json_get_any(data, ("correlation_lengths",)))
+    length(scan_values) == length(correlation_lengths) || error(
+        "Correlation-length reference arrays have inconsistent lengths in $file")
+    valid = [index for index in eachindex(scan_values)
+             if !isnothing(correlation_lengths[index]) &&
+                isfinite(Float64(correlation_lengths[index])) &&
+                Float64(correlation_lengths[index]) < 1e5]
+    return (scan_values=scan_values[valid],
+            correlation_lengths=Float64.(correlation_lengths[valid]))
+end
+
+"""
+    plot_tfim_correlation_length_from_processed_data(correlation_data_file, dmrg_file, pepskit_file; save_path=nothing)
+
+Draw the TFIM correlation-length panel from processed isoPEPS values and the
+independent DMRG and PEPSKit reference scans, without loading raw circuits or
+evaluating a transfer-matrix spectrum.
+"""
+function plot_tfim_correlation_length_from_processed_data(
+        correlation_data_file::String, dmrg_file::String, pepskit_file::String;
+        critical_field::Union{Real,Nothing}=3.04438,
+        save_path::Union{String,Nothing}=nothing)
+    correlation_data = load_tfim_correlation_length_vs_g_data(correlation_data_file)
+    dmrg = _load_correlation_length_reference(dmrg_file, ("scan_values", "g_values"))
+    pepskit = _load_correlation_length_reference(pepskit_file, ("g_values", "scan_values"))
+    fig = with_theme(paper_theme()) do
+        figure = Figure(size=PAPER_FIGSIZE)
+        axis = Axis(figure[1, 1];
+                    xlabel=FIELD_LABEL,
+                    ylabel=CORRELATION_LENGTH_LABEL,
+                    xlabelsize=PAPER_LARGE_AXIS_LABELSIZE,
+                    ylabelsize=PAPER_LARGE_AXIS_LABELSIZE,
+                    xticklabelsize=PAPER_LARGE_TICKLABELSIZE,
+                    yticklabelsize=PAPER_LARGE_TICKLABELSIZE)
+        scatterlines!(axis, correlation_data.scan_values, correlation_data.correlation_lengths;
+                      color=:steelblue, marker=:circle, label="IsoPEPS")
+        scatterlines!(axis, dmrg.scan_values, dmrg.correlation_lengths;
+                      color=:firebrick, linestyle=:dash, marker=:diamond, label="DMRG")
+        scatterlines!(axis, pepskit.scan_values, pepskit.correlation_lengths;
+                      color=:seagreen, linestyle=:dashdot, marker=:utriangle, label="iPEPS")
+        !isnothing(critical_field) && vlines!(axis, [critical_field];
+                                               color=:gray40, linestyle=:dash, linewidth=1.0)
+        add_paper_legend!(axis; position=:lt, nbanks=1,
+                          labelsize=PAPER_LARGE_LEGEND_LABELSIZE)
+        if !isnothing(save_path)
+            mkpath(dirname(save_path))
+            save(save_path, figure)
+            println("Correlation-length figure saved to: $save_path")
+        end
+        figure
+    end
+    return fig
+end
+
+"""
     plot_correlation_vs_g(data_dir, g_values; kwargs...)
 
 Plot correlation length ξ vs g for the TFIM from the transfer-matrix spectrum.
@@ -1030,7 +1818,7 @@ function plot_correlation_vs_g(data_dir::String, g_values::Vector{Float64};
 
     for (idx, g) in enumerate(g_values)
         candidates = String[]
-        for suffix in ("_1x1", "_1x1_100*1000", "_1x1_6w", "")
+        for suffix in ("_1x1", "_1x3", "_1x1_100*1000", "_1x1_6w", "")
             push!(candidates,
                   joinpath(data_dir, "circuit_tfim_J=$(J)_g=$(g)_row=$(row)_p=$(p)_nqubits=$(nqubits)$(suffix).json"))
         end

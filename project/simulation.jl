@@ -14,7 +14,9 @@ function _unit_cell_suffix(unit_cell::Symbol; share_params::Bool=true,
                            structure::Union{Symbol,String,Nothing}=nothing)
     if unit_cell === :single
         gate_structure = IsoPEPS._normalize_gate_structure(structure, share_params)
-        return gate_structure === :aaa ? "_1x1.json" : "_1x1_$(gate_structure).json"
+        gate_structure === :aaa && return "_1x1.json"
+        gate_structure === :abc && return "_1x3.json"
+        return "_1x1_$(gate_structure).json"
     end
     unit_cell === :two_by_two && return "_2x2.json"
     throw(ArgumentError("unit_cell must be :single or :two_by_two"))
