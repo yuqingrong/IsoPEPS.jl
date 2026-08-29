@@ -8,7 +8,7 @@ and paper-figure post-processing.
 
 ## Local setup
 
-Use the tracked root environment for every package, test, and reproducibility
+Use the root package environment for every package, test, and reproducibility
 command. Julia 1.10 or later is required by `Project.toml`.
 
 ```bash
@@ -16,9 +16,11 @@ julia --project=. -e 'using Pkg; Pkg.instantiate()'
 julia --project=. -e 'using Pkg; Pkg.test()'
 ```
 
-The root `Manifest.toml` records the dependency resolution for the `1.0.0`
-release candidate. It becomes a public release only after final author
-approval, a reviewed merge to `master`, and a version tag.
+The root package intentionally does not track a `Manifest.toml`: CI supports
+Julia 1.10, 1.11, and pre-release Julia, so each supported version resolves
+the compatible dependency set declared in `Project.toml`. It becomes a public
+release only after final author approval, a reviewed merge to `master`, and a
+version tag.
 
 The `project/` directory contains research scripts, not a second supported
 environment. Its historical `Project.toml` and `Manifest.toml` remain only for

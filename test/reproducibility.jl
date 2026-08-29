@@ -14,6 +14,17 @@ end
 @testset "release-readiness reproducibility tools" begin
     repro_dir = joinpath(@__DIR__, "..", "repro")
 
+    @testset "package environment remains Julia-version compatible" begin
+        repository_root = joinpath(@__DIR__, "..")
+        tracked_manifest = success(pipeline(
+            `git -C $repository_root ls-files --error-unmatch Manifest.toml`,
+            stdout = devnull,
+            stderr = devnull,
+        ))
+        @test !tracked_manifest
+        @test occursin("/Manifest.toml", read(joinpath(repository_root, ".gitignore"), String))
+    end
+
     @testset "release metadata is ready for archival" begin
         project = TOML.parsefile(joinpath(@__DIR__, "..", "Project.toml"))
         release_version = project["version"]

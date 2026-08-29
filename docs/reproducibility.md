@@ -6,15 +6,16 @@ Zenodo draft, DOI, upload, or manuscript edit is part of this workflow.
 
 ## Code environment
 
-Run all commands from the repository root with the tracked root environment:
+Run all commands from the repository root with the root package environment:
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
 julia --project=. -e 'using Pkg; Pkg.test()'
 ```
 
-`Project.toml` and `CITATION.cff` declare version `1.0.0`. `Manifest.toml`
-records the dependency resolution used for this local preparation.
+`Project.toml` and `CITATION.cff` declare version `1.0.0`. The root package
+does not track a `Manifest.toml`, so CI can resolve dependencies compatible
+with Julia 1.10, 1.11, and pre-release Julia.
 
 ## Curated private data package
 
