@@ -19,3 +19,5 @@ test/data
 *.jls
 /states/
 /release-staging/
+/project/results/
+/reproduced-figures/
